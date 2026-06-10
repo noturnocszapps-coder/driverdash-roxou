@@ -268,12 +268,12 @@ ALTER TABLE IF EXISTS public.profiles ENABLE ROW LEVEL SECURITY;
       <AnimatePresence>
         {isMobileMenuOpen && (
           <motion.div
-            initial={{ opacity: 0, height: 0 }}
-            animate={{ opacity: 1, height: 'auto' }}
-            exit={{ opacity: 0, height: 0 }}
-            className="md:hidden fixed top-[69px] left-0 right-0 bg-[#0a061b]/95 backdrop-blur-xl border-b border-purple-950/40 p-6 z-20 overflow-hidden shadow-2xl"
+            initial={{ opacity: 0, y: -10 }}
+            animate={{ opacity: 1, y: 0 }}
+            exit={{ opacity: 0, y: -10 }}
+            className="md:hidden fixed top-[69px] bottom-0 left-0 right-0 h-[calc(100vh-69px)] h-[calc(100dvh-69px)] bg-[#0a061b]/95 backdrop-blur-xl border-b border-purple-950/40 p-6 z-20 flex flex-col shadow-2xl"
           >
-            <nav className="space-y-1 mb-6">
+            <nav className="space-y-1 mb-6 flex-1 overflow-y-auto pr-1">
               {allowedNavigations.map((item) => {
                 const Icon = item.icon;
                 const isActive = location.pathname === item.path;
@@ -291,7 +291,7 @@ ALTER TABLE IF EXISTS public.profiles ENABLE ROW LEVEL SECURITY;
               })}
             </nav>
 
-            <div className="border-t border-purple-950/30 pt-4 flex items-center justify-between">
+            <div className="border-t border-purple-950/30 pt-4 mt-auto flex items-center justify-between shrink-0">
               {profile && (
                 <div className="flex items-center gap-2">
                   <img 
