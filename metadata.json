@@ -1,0 +1,10 @@
+{
+  "name": "DriverDash Roxou",
+  "description": "Premium driver dashboard for rideshare drivers featuring financial management, vehicle tracking, and administrative capabilities.",
+  "requestFramePermissions": [
+    "geolocation"
+  ],
+  "majorCapabilities": [
+    "MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"
+  ]
+}

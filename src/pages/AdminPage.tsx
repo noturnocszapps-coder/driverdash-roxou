@@ -1,0 +1,1785 @@
+import React, { useState } from 'react';
+import { useApp } from '../context/AppContext';
+import { useDemand } from '../modules/demand/demand.hooks';
+import { 
+  Users, Layers, Megaphone, Plus, ToggleLeft, ToggleRight, 
+  Clock, AlertTriangle, ShieldAlert, Sparkles, MapPin, Gauge,
+  Coins, Check, X, Shield, Star, Ban, Power, LayoutDashboard,
+  Settings, Lightbulb, Search, Filter, Calendar, UserCheck,
+  Eye, Activity, Database, AlertCircle, RefreshCw
+} from 'lucide-react';
+import { motion, AnimatePresence } from 'motion/react';
+import { UserPlan, UserRole } from '../types';
+import { roxouIntegrationService } from '../modules/demand/roxouIntegration.service';
+import { useObservability } from '../modules/observability/observability.hooks';
+
+export const AdminPage: React.FC = () => {
+  const { 
+    peakRules, addPeakRule, togglePeakRule, 
+    passengerReports, dbStatus, earnings, expenses,
+    users, subscriptions, payments,
+    updateUserPlan, updateSubscriptionStatus, toggleUserRole, toggleBlockUser, toggleBetaTester,
+    approvePayment, rejectPayment
+  } = useApp();
+
+  // Selected Admin Menu
+  const [activeTab, setActiveTab] = useState<'dashboard' | 'users' | 'subscriptions' | 'occurrences' | 'intelligence' | 'configs' | 'observability'>('dashboard');
+
+  // Observability Telemetry Context
+  const { 
+    logs: obsLogs, 
+    audits: obsAudits, 
+    health: obsHealth, 
+    loading: obsLoading, 
+    refreshLogs, 
+    refreshAudits, 
+    refreshHealth, 
+    clearLocalLogs 
+  } = useObservability();
+
+  // Observability Filter States
+  const [obsLevelFilter, setObsLevelFilter] = useState<'all' | 'info' | 'warn' | 'error' | 'critical'>('all');
+  const [obsCategoryFilter, setObsCategoryFilter] = useState<'all' | 'auth' | 'gps' | 'sync' | 'supabase' | 'admin' | 'payment' | 'demand' | 'system'>('all');
+  const [obsPeriodFilter, setObsPeriodFilter] = useState<'24h' | '3d' | '7d' | 'all'>('all');
+
+  // Gestão de Usuários Filter State
+  const [searchTerm, setSearchTerm] = useState('');
+  const [planFilter, setPlanFilter] = useState<'all' | 'free' | 'pro' | 'pro_plus'>('all');
+  const [statusFilter, setStatusFilter] = useState<'all' | 'active' | 'blocked'>('all');
+  const [roleFilter, setRoleFilter] = useState<'all' | 'driver' | 'admin'>('all');
+
+  // New rule form state (Inteligência Roxou)
+  const [title, setTitle] = useState('');
+  const [region, setRegion] = useState('');
+  const [startTime, setStartTime] = useState('17:00');
+  const [endTime, setEndTime] = useState('19:00');
+  const [demandLevel, setDemandLevel] = useState<'low' | 'medium' | 'high' | 'extreme'>('high');
+  const [selectedDays, setSelectedDays] = useState<string[]>(['1', '2', '3', '4', '5']); // Seg-Sex
+  const [success, setSuccess] = useState(false);
+
+  // --- ROXOU INTELIGÊNCIA DEMAND CONTEXT AND SUBTABS ---
+  const { 
+    demandSignals, heatmapZones, addDemandSignal, deleteDemandSignal, toggleDemandSignal, updateHeatmapZone, refetchDemand
+  } = useDemand();
+  const [intelSubTab, setIntelSubTab] = useState<'peak_rules' | 'demand_signals' | 'heatmap_zones' | 'roxou_integration'>('peak_rules');
+
+  // Core Roxou integration state
+  const [roxouStatus, setRoxouStatus] = useState(roxouIntegrationService.getIntegrationStatus());
+  const [previewSignals, setPreviewSignals] = useState<any[]>([]);
+  const [showPreview, setShowPreview] = useState(false);
+  const [integrationSuccessMsg, setIntegrationSuccessMsg] = useState('');
+
+  const refreshRoxouStatus = () => {
+    setRoxouStatus(roxouIntegrationService.getIntegrationStatus());
+  };
+
+  // Sinais de Demanda form states
+  const [sigTitle, setSigTitle] = useState('');
+  const [sigRegion, setSigRegion] = useState('Centro');
+  const [sigWeight, setSigWeight] = useState(1.5);
+  const [sigType, setSigType] = useState('event');
+  const [sigSuccess, setSigSuccess] = useState(false);
+
+  // Region coordinates for auto-binding
+  const REG_COORDS: Record<string, { lat: number; lng: number }> = {
+    'Centro': { lat: -22.1225, lng: -51.3883 },
+    'Rodoviária': { lat: -22.1158, lng: -51.3853 },
+    'Aeroporto': { lat: -22.1764, lng: -51.4239 },
+    'Prudenshopping': { lat: -22.1147, lng: -51.4068 },
+    'UNOESTE': { lat: -22.1192, lng: -51.4428 },
+    'Toledo': { lat: -22.1256, lng: -51.3992 },
+    'UNESP': { lat: -22.1206, lng: -51.4092 },
+    'Parque do Povo': { lat: -22.1264, lng: -51.4022 },
+    'Matarazzo': { lat: -22.1144, lng: -51.3811 },
+    'Expo Prudente': { lat: -22.1642, lng: -51.3482 }
+  };
+
+  const handleAddSignal = async (e: React.FormEvent) => {
+    e.preventDefault();
+    if (!sigTitle.trim()) {
+      alert('Por favor, informe o título do sinal temporal!');
+      return;
+    }
+    const coords = REG_COORDS[sigRegion] || { lat: -22.1225, lng: -51.3883 };
+    await addDemandSignal({
+      title: sigTitle,
+      region: sigRegion,
+      latitude: coords.lat,
+      longitude: coords.lng,
+      signal_type: sigType,
+      weight: sigWeight
+    });
+    setSigTitle('');
+    setSigSuccess(true);
+    setTimeout(() => setSigSuccess(false), 3000);
+  };
+
+  // Formatter helpers
+  const formatDate = (dateStr?: string) => {
+    if (!dateStr) return 'Nunca logou';
+    try {
+      const d = new Date(dateStr);
+      return d.toLocaleDateString('pt-BR', { 
+        day: '2-digit', 
+        month: '2-digit', 
+        year: 'numeric',
+        hour: '2-digit',
+        minute: '2-digit'
+      });
+    } catch {
+      return dateStr;
+    }
+  };
+
+  const getSubStatusLabel = (userId: string) => {
+    const sub = subscriptions.find(s => s.user_id === userId);
+    if (!sub) return { label: 'Inativo', css: 'text-slate-500 bg-slate-950/10' };
+    if (sub.status === 'active') return { label: 'Ativo', css: 'text-emerald-400 bg-emerald-950/30 border border-emerald-800/30' };
+    if (sub.status === 'pending') return { label: 'Pendente', css: 'text-amber-400 bg-amber-950/30 border border-amber-800/30' };
+    return { label: 'Desativado', css: 'text-rose-400 bg-rose-950/30 border border-rose-800/20' };
+  };
+
+  const handleDayToggle = (day: string) => {
+    if (selectedDays.includes(day)) {
+      setSelectedDays(selectedDays.filter(d => d !== day));
+    } else {
+      setSelectedDays([...selectedDays, day]);
+    }
+  };
+
+  const handleAddRule = async (e: React.FormEvent) => {
+    e.preventDefault();
+    if (!title || !region) {
+      alert('Preencha título e região!');
+      return;
+    }
+
+    try {
+      await addPeakRule({
+        title,
+        region,
+        start_time: startTime,
+        end_time: endTime,
+        days_of_week: selectedDays,
+        demand_level: demandLevel,
+        source_type: 'admin',
+        is_active: true
+      });
+
+      setTitle('');
+      setRegion('');
+      setStartTime('17:00');
+      setEndTime('19:00');
+      setDemandLevel('high');
+      setSelectedDays(['1', '2', '3', '4', '5']);
+      
+      setSuccess(true);
+      setTimeout(() => setSuccess(false), 3000);
+    } catch (err) {
+      console.error(err);
+    }
+  };
+
+  // COMMERCIAL KPI CALCULATIONS
+  const totalProfilesCount = users.length;
+  const activeProfilesCount = users.filter(u => !u.is_blocked).length;
+  const paidProfilesCount = users.filter(u => u.plan === 'pro' || u.plan === 'pro_plus').length;
+  
+  const conversionRate = totalProfilesCount > 0 
+    ? ((paidProfilesCount / totalProfilesCount) * 100).toFixed(1) 
+    : '0';
+
+  const estimatedMonthlyRevenue = users.reduce((sum, u) => {
+    if (u.plan === 'pro') return sum + 29.90;
+    if (u.plan === 'pro_plus') return sum + 49.90;
+    return sum;
+  }, 0);
+
+  const pendingPaymentsList = payments.filter(p => p.status === 'pending');
+
+  // Filtering users using search and select filters
+  const filteredUsers = users.filter(item => {
+    const matchesSearch = item.name.toLowerCase().includes(searchTerm.toLowerCase()) || 
+                          item.email.toLowerCase().includes(searchTerm.toLowerCase());
+    
+    const matchesPlan = planFilter === 'all' ? true : item.plan === planFilter;
+    
+    const matchesStatus = statusFilter === 'all' ? true : 
+                          statusFilter === 'blocked' ? item.is_blocked : !item.is_blocked;
+    
+    const matchesRole = roleFilter === 'all' ? true : item.role === roleFilter;
+
+    return matchesSearch && matchesPlan && matchesStatus && matchesRole;
+  });
+
+  return (
+    <div className="space-y-6">
+      
+      {/* Title banner */}
+      <div className="border-b border-purple-950/20 pb-4 flex flex-col md:flex-row md:items-center justify-between gap-4">
+        <div>
+          <h2 className="text-xl font-bold text-white tracking-wide">Painel de Administração Roxou</h2>
+          <p className="text-xs text-purple-300/50 mt-1">
+            Gestão operacional completa, controle de assinaturas recorrentes, ocorrências e regras inteligentes de picos de tarifas.
+          </p>
+        </div>
+      </div>
+
+      {/* NEW DISTINCT ADMIN MENUS SPLIT NAVIGATION */}
+      <div className="flex flex-wrap gap-1.5 p-1 bg-[#0a051d] rounded-2xl border border-purple-950/20 text-xs font-mono max-w-fit">
+        <button
+          onClick={() => setActiveTab('dashboard')}
+          className={`px-4 py-2 rounded-xl font-medium transition-all cursor-pointer flex items-center gap-1.5 ${
+            activeTab === 'dashboard' ? 'bg-purple-900/40 text-purple-200' : 'text-slate-400 hover:text-slate-200'
+          }`}
+        >
+          <LayoutDashboard className="w-3.5 h-3.5" /> Dashboard
+        </button>
+        <button
+          onClick={() => setActiveTab('users')}
+          className={`px-4 py-2 rounded-xl font-medium transition-all cursor-pointer flex items-center gap-1.5 ${
+            activeTab === 'users' ? 'bg-purple-900/40 text-purple-200' : 'text-slate-400 hover:text-slate-200'
+          }`}
+        >
+          <Users className="w-3.5 h-3.5" /> Usuários ({users.length})
+        </button>
+        <button
+          onClick={() => setActiveTab('subscriptions')}
+          className={`px-4 py-2 rounded-xl font-medium transition-all cursor-pointer flex items-center gap-1.5 ${
+            activeTab === 'subscriptions' ? 'bg-purple-900/40 text-purple-200' : 'text-slate-400 hover:text-slate-200'
+          }`}
+        >
+          <Sparkles className="w-3.5 h-3.5" /> Assinaturas
+        </button>
+        <button
+          onClick={() => setActiveTab('occurrences')}
+          className={`px-4 py-2 rounded-xl font-medium transition-all cursor-pointer flex items-center gap-1.5 ${
+            activeTab === 'occurrences' ? 'bg-[#ff0055]/10 text-rose-400 hover:text-rose-200' : 'text-slate-400 hover:text-slate-200'
+          }`}
+        >
+          <Megaphone className="w-3.5 h-3.5" /> Ocorrências ({passengerReports.length})
+        </button>
+        <button
+          onClick={() => setActiveTab('intelligence')}
+          className={`px-4 py-2 rounded-xl font-medium transition-all cursor-pointer flex items-center gap-1.5 ${
+            activeTab === 'intelligence' ? 'bg-purple-900/40 text-purple-200' : 'text-slate-400 hover:text-slate-200'
+          }`}
+        >
+          <Lightbulb className="w-3.5 h-3.5" /> Inteligência Roxou ({peakRules.length})
+        </button>
+        <button
+          onClick={() => setActiveTab('configs')}
+          className={`px-4 py-2 rounded-xl font-medium transition-all cursor-pointer flex items-center gap-1.5 ${
+            activeTab === 'configs' ? 'bg-purple-900/40 text-purple-200' : 'text-slate-400 hover:text-slate-200'
+          }`}
+        >
+          <Settings className="w-3.5 h-3.5" /> Configurações
+        </button>
+        <button
+          onClick={() => setActiveTab('observability')}
+          className={`px-4 py-2 rounded-xl font-medium transition-all cursor-pointer flex items-center gap-1.5 ${
+            activeTab === 'observability' ? 'bg-[#a855f7]/20 text-purple-300 border border-purple-500/20' : 'text-slate-400 hover:text-slate-200'
+          }`}
+        >
+          <Activity className="w-3.5 h-3.5" /> Observabilidade
+        </button>
+      </div>
+
+      <AnimatePresence mode="wait">
+        
+        {/* TAB 1: COMMERCIAL EXECUTIVE DASHBOARD */}
+        {activeTab === 'dashboard' && (
+          <motion.div
+            key="admin-dashboard-view"
+            initial={{ opacity: 0, y: 10 }}
+            animate={{ opacity: 1, y: 0 }}
+            exit={{ opacity: 0, y: -10 }}
+            className="space-y-6 animate-fade-in"
+          >
+            {/* COMMERCIAL KPI CARDS */}
+            <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-4">
+              <div className="p-5 bg-gradient-to-br from-[#0c0524] to-[#04010a] border border-purple-950/40 rounded-3xl shrink-0 shadow-sm">
+                <div className="flex justify-between items-center text-purple-400 mb-2">
+                  <span className="text-[10px] font-mono tracking-wider font-bold uppercase text-purple-300">Usuários Ativos</span>
+                  <Users className="w-4 h-4" />
+                </div>
+                <p className="text-3xl font-extrabold text-white font-mono">{activeProfilesCount}</p>
+                <span className="text-[10px] text-purple-300/40 block mt-1 font-mono">
+                  De um total de {totalProfilesCount} registrados
+                </span>
+              </div>
+
+              <div className="p-5 bg-gradient-to-br from-[#0a0f24] to-[#01060a] border border-purple-950/40 rounded-3xl shadow-sm">
+                <div className="flex justify-between items-center text-teal-400 mb-2">
+                  <span className="text-[10px] font-mono tracking-wider font-bold uppercase text-indigo-300">Contas Pagas</span>
+                  <Sparkles className="w-4 h-4" />
+                </div>
+                <p className="text-3xl font-extrabold text-teal-400 font-mono">{paidProfilesCount}</p>
+                <span className="text-[10px] text-indigo-300/40 block mt-1 font-mono">
+                  Total de usuários PRO ou PRO+
+                </span>
+              </div>
+
+              <div className="p-5 bg-gradient-to-br from-[#1b082e] to-[#03010b] border border-[#a855f7]/25 rounded-3xl relative overflow-hidden shadow-sm">
+                <div className="flex justify-between items-center text-fuchsia-400 mb-2">
+                  <span className="text-[10px] font-mono tracking-wider font-bold uppercase text-fuchsia-300">Receita MRR Estimada</span>
+                  <Coins className="w-4 h-4" />
+                </div>
+                <p className="text-3xl font-extrabold text-fuchsia-400 font-mono">
+                  R$ {estimatedMonthlyRevenue.toLocaleString('pt-BR', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}
+                </p>
+                <span className="text-[10px] text-fuchsia-300/40 block mt-1 font-mono">
+                  Mensal Recorrente Estimada
+                </span>
+              </div>
+
+              <div className="p-5 bg-gradient-to-br from-[#0c1815] to-[#010906] border border-emerald-950/50 rounded-3xl shadow-sm">
+                <div className="flex justify-between items-center text-emerald-400 mb-2">
+                  <span className="text-[10px] font-mono tracking-wider font-bold uppercase text-emerald-300">Conversão de Planos</span>
+                  <Gauge className="w-4 h-4" />
+                </div>
+                <p className="text-3xl font-extrabold text-emerald-400 font-mono">{conversionRate}%</p>
+                <span className="text-[10px] text-emerald-300/40 block mt-1 font-mono">
+                  Percentual de usuários pagantes
+                </span>
+              </div>
+            </div>
+
+            {/* MANUAL MANAGE PIX QUEUE */}
+            {pendingPaymentsList.length > 0 ? (
+              <div className="bg-[#0b0520] border border-amber-950/40 rounded-3xl p-6">
+                <div className="flex items-center gap-2 border-b border-purple-950/10 pb-3 mb-4">
+                  <Coins className="w-5 h-5 text-amber-400 animate-pulse" />
+                  <span className="text-xs font-bold uppercase tracking-wider font-mono text-amber-400">
+                    Sinal de Upgrade: Moderação Pix Manual ({pendingPaymentsList.length})
+                  </span>
+                </div>
+
+                <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+                  {pendingPaymentsList.map((pay) => {
+                    const matchedUser = users.find(u => u.id === pay.user_id);
+                    return (
+                      <div 
+                        key={pay.id} 
+                        className="bg-[#050210] border border-amber-900/30 rounded-2xl p-4 flex items-center justify-between gap-4"
+                      >
+                        <div className="min-w-0 flex-1">
+                          <div className="flex items-center gap-2">
+                            <span className="text-white font-bold text-xs truncate">
+                              {matchedUser?.name || 'Motorista Desconhecido'}
+                            </span>
+                            <span className="text-[9px] font-bold font-mono px-1.5 py-0.2 bg-purple-950 text-fuchsia-400 rounded-md border border-purple-900/30 uppercase shrink-0">
+                              {pay.plan}
+                            </span>
+                          </div>
+                          <p className="text-[10px] text-slate-400 truncate mt-0.5">{matchedUser?.email || 'N/A'}</p>
+                          <p className="text-[11px] text-slate-300 font-mono mt-1">
+                            Validação Pix: <span className="text-teal-400 font-bold">R$ {pay.amount.toFixed(2)}</span>
+                          </p>
+                        </div>
+
+                        <div className="flex gap-2 shrink-0">
+                          <button
+                            onClick={() => approvePayment(pay.id)}
+                            className="px-3 py-2 bg-emerald-900/30 hover:bg-emerald-800 text-emerald-400 hover:text-white rounded-xl cursor-pointer transition-all text-xs flex items-center gap-1 font-bold"
+                          >
+                            <Check className="w-4 h-4" /> Aprovar
+                          </button>
+                          <button
+                            onClick={() => rejectPayment(pay.id)}
+                            className="p-2 bg-rose-950/30 hover:bg-rose-800 text-rose-400 hover:text-white rounded-xl cursor-pointer"
+                          >
+                            <X className="w-4 h-4" />
+                          </button>
+                        </div>
+                      </div>
+                    );
+                  })}
+                </div>
+              </div>
+            ) : (
+              <div className="p-8 border border-purple-950/20 bg-[#090516]/40 rounded-3xl text-center">
+                <div className="w-10 h-10 rounded-full bg-purple-950/40 border border-purple-900/30 flex items-center justify-center text-purple-400 mx-auto mb-3">
+                  <UserCheck className="w-4.5 h-4.5" />
+                </div>
+                <h4 className="text-sm font-semibold text-slate-200">Fila Pix Manual vazia</h4>
+                <p className="text-xs text-purple-300/40 mt-1 max-w-md mx-auto">
+                  Atualmente, nenhuma requisição manual de Pix pendente foi encontrada. Toda auditoria está em dia!
+                </p>
+              </div>
+            )}
+          </motion.div>
+        )}
+
+        {/* TAB 2: GESTÃO DE USUÁRIOS (HIGH FIDELITY SEARCH & FILTERS) */}
+        {activeTab === 'users' && (
+          <motion.div
+            key="admin-users-view"
+            initial={{ opacity: 0, y: 10 }}
+            animate={{ opacity: 1, y: 0 }}
+            exit={{ opacity: 0, y: -10 }}
+            className="space-y-4"
+          >
+            {/* Filter Toolbar Block */}
+            <div className="p-5 bg-[#0a051d] border border-purple-950/30 rounded-2xl space-y-4">
+              <div className="flex items-center gap-2 border-b border-purple-955/20 pb-2.5">
+                <Filter className="w-4 h-4 text-purple-400" />
+                <span className="text-xs font-semibold uppercase tracking-wider font-mono text-purple-300">Filtro de Motoristas Avançado</span>
+              </div>
+
+              <div className="grid grid-cols-1 md:grid-cols-4 gap-4">
+                {/* Search Term */}
+                <div className="relative">
+                  <span className="absolute inset-y-0 left-3.5 flex items-center text-slate-500">
+                    <Search className="w-4 h-4" />
+                  </span>
+                  <input
+                    type="text"
+                    value={searchTerm}
+                    onChange={(e) => setSearchTerm(e.target.value)}
+                    placeholder="Nome, e-mail do motorista..."
+                    className="w-full bg-[#04010a] border border-purple-950/50 rounded-xl py-2.5 pl-10 pr-4 text-xs text-slate-200 focus:outline-none focus:border-purple-600 focus:ring-1 focus:ring-purple-600 placeholder:text-slate-600"
+                  />
+                </div>
+
+                {/* Plan Dropdown */}
+                <div>
+                  <select
+                    value={planFilter}
+                    onChange={(e) => setPlanFilter(e.target.value as any)}
+                    className="w-full bg-[#04010a] border border-purple-950/50 rounded-xl p-2.5 text-xs text-slate-200 focus:outline-none focus:border-purple-600 cursor-pointer font-medium"
+                  >
+                    <option value="all">Todos os Planos</option>
+                    <option value="free">Plano FREE</option>
+                    <option value="pro">Plano PRO</option>
+                    <option value="pro_plus">Plano PRO+</option>
+                  </select>
+                </div>
+
+                {/* Status Dropdown */}
+                <div>
+                  <select
+                    value={statusFilter}
+                    onChange={(e) => setStatusFilter(e.target.value as any)}
+                    className="w-full bg-[#04010a] border border-purple-950/50 rounded-xl p-2.5 text-xs text-slate-200 focus:outline-none focus:border-purple-600 cursor-pointer font-medium"
+                  >
+                    <option value="all">Todos Status</option>
+                    <option value="active">Ativo (Livre)</option>
+                    <option value="blocked">Bloqueado</option>
+                  </select>
+                </div>
+
+                {/* Cargo Dropdown */}
+                <div>
+                  <select
+                    value={roleFilter}
+                    onChange={(e) => setRoleFilter(e.target.value as any)}
+                    className="w-full bg-[#04010a] border border-purple-950/50 rounded-xl p-2.5 text-xs text-slate-200 focus:outline-none focus:border-purple-600 cursor-pointer font-medium"
+                  >
+                    <option value="all">Todos Cargos</option>
+                    <option value="driver">Motorista Normal</option>
+                    <option value="admin">Administrador Geral</option>
+                  </select>
+                </div>
+              </div>
+            </div>
+
+            {/* Main Table user list */}
+            <div className="bg-[#0a061b] border border-purple-950/30 rounded-3xl overflow-hidden shadow-xl">
+              <div className="p-5 border-b border-purple-955/20 bg-purple-955/5 flex justify-between items-center">
+                <span className="text-xs font-bold uppercase tracking-wider font-mono text-purple-300">Motoristas ({filteredUsers.length} encontrados)</span>
+              </div>
+
+              <div className="overflow-x-auto">
+                <table className="w-full text-left border-collapse text-xs">
+                  <thead>
+                    <tr className="border-b border-purple-950/10 text-purple-400 uppercase tracking-widest text-[9.5px] font-mono bg-purple-950/5">
+                      <th className="py-4 px-6">Motorista</th>
+                      <th className="py-4 px-4">Cadastro</th>
+                      <th className="py-4 px-4">Último Acesso</th>
+                      <th className="py-4 px-4">Plano Ativo</th>
+                      <th className="py-4 px-4">Assinatura Status</th>
+                      <th className="py-4 px-4 text-center">Beta Tester</th>
+                      <th className="py-4 px-6 text-right">Ações Rápidas</th>
+                    </tr>
+                  </thead>
+                  <tbody className="divide-y divide-purple-950/10">
+                    {filteredUsers.length > 0 ? (
+                      filteredUsers.map((item) => {
+                        const subInfo = getSubStatusLabel(item.id);
+                        return (
+                          <tr 
+                            key={item.id} 
+                            className={`hover:bg-purple-950/5 transition-colors ${
+                              item.is_blocked ? 'bg-[#ff0000]/5 opacity-80' : ''
+                            }`}
+                          >
+                            {/* Avatar & Email */}
+                            <td className="py-4 px-6">
+                              <div className="flex items-center gap-3">
+                                <img 
+                                  src={item.avatar_url || 'https://images.unsplash.com/photo-1535713875002-d1d0cf377fde?auto=format&fit=crop&q=80&w=64'} 
+                                  alt="Avatar" 
+                                  className="w-8 h-8 rounded-full ring-1 ring-purple-900 object-cover shrink-0"
+                                />
+                                <div className="min-w-0">
+                                  <div className="flex items-center gap-1.5">
+                                    <span className="font-bold text-white block truncate">{item.name}</span>
+                                    {item.role === 'admin' ? (
+                                      <span className="text-[8px] bg-red-950 text-red-400 font-bold px-1 py-0.2 rounded border border-red-900/30 uppercase font-mono">ADMIN</span>
+                                    ) : (
+                                      <span className="text-[8px] bg-purple-950 text-purple-400 font-bold px-1 py-0.2 rounded border border-purple-900/30 uppercase font-mono">DRIVER</span>
+                                    )}
+                                  </div>
+                                  <span className="text-[10px] text-slate-400 truncate block mt-0.5">{item.email}</span>
+                                </div>
+                              </div>
+                            </td>
+
+                            {/* Data Cadastro */}
+                            <td className="py-4 px-4 text-slate-300 font-mono text-[10.5px]">
+                              {formatDate(item.created_at)}
+                            </td>
+
+                            {/* Ultimo Acesso */}
+                            <td className="py-4 px-4 text-slate-300 font-mono text-[10.5px]">
+                              {formatDate(item.last_access)}
+                            </td>
+
+                            {/* Current Plan SELECT dropdown */}
+                            <td className="py-4 px-4">
+                              <select
+                                value={item.plan}
+                                onChange={(e) => updateUserPlan(item.id, e.target.value as UserPlan)}
+                                className="bg-[#050210] border border-purple-950/50 rounded-xl px-2 py-1.5 text-[11px] text-white focus:outline-none focus:border-purple-600 select-all cursor-pointer font-semibold font-mono"
+                              >
+                                <option value="free">FREE</option>
+                                <option value="pro">PRO (R$ 29,90)</option>
+                                <option value="pro_plus">PRO+ (R$ 49,90)</option>
+                              </select>
+                            </td>
+
+                            {/* Recurrence Sub status */}
+                            <td className="py-4 px-4">
+                              <span className={`inline-block px-2 py-0.5 rounded-full text-[10px] font-mono font-bold ${subInfo.css}`}>
+                                {subInfo.label}
+                              </span>
+                            </td>
+
+                            {/* Beta tester toggle */}
+                            <td className="py-4 px-4 text-center">
+                              <button
+                                onClick={() => toggleBetaTester(item.id)}
+                                className={`px-2.5 py-1.5 rounded-xl text-[10px] font-mono font-semibold cursor-pointer transition-all active:scale-[0.97] border ${
+                                  item.beta_tester
+                                    ? 'bg-purple-950/45 border-purple-500/50 text-purple-300 hover:bg-purple-900/40'
+                                    : 'bg-slate-900/40 border-slate-800 text-slate-500 hover:border-slate-700 hover:text-slate-400'
+                                }`}
+                              >
+                                {item.beta_tester ? '⚡ ATIVO' : '☐ INATIVO'}
+                              </button>
+                            </td>
+
+                            {/* Action Buttons */}
+                            <td className="py-4 px-6 text-right space-x-2 whitespace-nowrap">
+                              {/* Toggle subscription state */}
+                              <button
+                                onClick={() => {
+                                  const nextStatus = subInfo.label === 'Ativo' ? 'inactive' : 'active';
+                                  const activePlanForUser = item.plan === 'free' ? 'pro' : item.plan;
+                                  updateSubscriptionStatus(item.id, activePlanForUser, nextStatus);
+                                }}
+                                className={`p-2 rounded-xl border text-[10px] uppercase font-mono font-bold active:scale-95 cursor-pointer inline-flex items-center gap-1 transition-colors ${
+                                  subInfo.label === 'Ativo'
+                                    ? 'bg-amber-950/20 border-amber-900/40 text-amber-400 hover:bg-amber-900 hover:text-white'
+                                    : 'bg-emerald-950/20 border-emerald-900/40 text-emerald-400 hover:bg-emerald-900 hover:text-white'
+                                }`}
+                              >
+                                <Power className="w-3 h-3" />
+                                {subInfo.label === 'Ativo' ? 'Inativar' : 'Ativar'}
+                              </button>
+
+                              {/* Target admin Role */}
+                              <button
+                                onClick={() => toggleUserRole(item.id)}
+                                className="p-2 bg-purple-950/30 border border-purple-900/30 hover:bg-purple-900/40 text-purple-300 hover:text-white rounded-xl cursor-pointer active:scale-95"
+                                title="Inverter Cargo de Liderança"
+                              >
+                                <Shield className="w-3.5 h-3.5" />
+                              </button>
+
+                              {/* Block toggle */}
+                              <button
+                                onClick={() => toggleBlockUser(item.id)}
+                                className={`p-2 rounded-xl cursor-pointer active:scale-95 transition-colors border inline-flex items-center gap-1 ${
+                                  item.is_blocked
+                                    ? 'bg-teal-950/30 border-teal-900/40 text-teal-400 hover:bg-teal-900 hover:text-white_b shadow'
+                                    : 'bg-rose-950/30 border-rose-900/40 text-rose-400 hover:bg-rose-900 hover:text-white'
+                                }`}
+                                title={item.is_blocked ? 'Desbloquear Contribuinte' : 'Banir Motorista'}
+                              >
+                                <Ban className="w-3.5 h-3.5" />
+                              </button>
+                            </td>
+
+                          </tr>
+                        );
+                      })
+                    ) : (
+                      <tr>
+                        <td colSpan={6} className="py-12 text-center text-slate-500 text-xs italic">
+                          Nenhum motorista coincide com os filtros aplicados. Tente ajustar os termos de pesquisa!
+                        </td>
+                      </tr>
+                    )}
+                  </tbody>
+                </table>
+              </div>
+            </div>
+          </motion.div>
+        )}
+
+        {/* TAB 3: SIGNATURES & REVENUE CONTROL */}
+        {activeTab === 'subscriptions' && (
+          <motion.div
+            key="admin-subscriptions-view"
+            initial={{ opacity: 0, y: 10 }}
+            animate={{ opacity: 1, y: 0 }}
+            exit={{ opacity: 0, y: -10 }}
+            className="bg-[#0a061b] border border-purple-950/30 rounded-3xl p-6 space-y-6"
+          >
+            <div>
+              <h3 className="text-sm font-bold text-white uppercase tracking-wider font-mono">Controle de Cobrança & Faturamento</h3>
+              <p className="text-xs text-purple-300/40 mt-1">Lista de assinaturas registradas no banco de metadados do DriverDash.</p>
+            </div>
+
+            <div className="overflow-x-auto">
+              <table className="w-full text-left text-xs border-collapse font-sans">
+                <thead>
+                  <tr className="border-b border-purple-950/20 text-purple-300 font-mono text-[10px] uppercase tracking-wider py-2">
+                    <th className="py-3">ID Recorrência</th>
+                    <th className="py-3">Usuário</th>
+                    <th className="py-3">Plano</th>
+                    <th className="py-3">Status Assinatura</th>
+                    <th className="py-3">Última Atualização</th>
+                  </tr>
+                </thead>
+                <tbody className="divide-y divide-purple-950/10">
+                  {subscriptions.length > 0 ? (
+                    subscriptions.map((sub, sidx) => {
+                      const client = users.find(u => u.id === sub.user_id);
+                      return (
+                        <tr key={sub.id || sidx} className="hover:bg-purple-950/5 text-slate-300">
+                          <td className="py-3 font-mono text-[10px] text-purple-400">{sub.id.substring(0, 13)}...</td>
+                          <td className="py-3">
+                            <span className="font-semibold text-white">{client?.name || 'Inexistente'}</span>
+                            <span className="block text-[10px] text-slate-500">{client?.email || 'N/A'}</span>
+                          </td>
+                          <td className="py-3 font-mono font-bold text-fuchsia-400 uppercase">{sub.plan}</td>
+                          <td className="py-3">
+                            <span className={`inline-block px-2.5 py-0.5 rounded-full text-[10px] font-mono font-bold ${
+                              sub.status === 'active' ? 'bg-emerald-950 text-emerald-400 border border-emerald-900/30' : 'bg-rose-950 text-rose-400 border border-rose-900/20'
+                            }`}>
+                              {sub.status.toUpperCase()}
+                            </span>
+                          </td>
+                          <td className="py-3 font-mono text-[11px] text-slate-400">{formatDate(sub.updated_at)}</td>
+                        </tr>
+                      );
+                    })
+                  ) : (
+                    <tr>
+                      <td colSpan={5} className="py-8 text-center text-slate-500 italic">Nenhuma assinatura registrada no momento.</td>
+                    </tr>
+                  )}
+                </tbody>
+              </table>
+            </div>
+          </motion.div>
+        )}
+
+        {/* TAB 4: RISK OCCURRENCES REPORTED BY USERS */}
+        {activeTab === 'occurrences' && (
+          <motion.div
+            key="admin-occurrences-view"
+            initial={{ opacity: 0, y: 10 }}
+            animate={{ opacity: 1, y: 0 }}
+            exit={{ opacity: 0, y: -10 }}
+            className="bg-[#0a061b] border border-purple-950/30 rounded-3xl p-6"
+          >
+            <h3 className="text-xs font-semibold text-white uppercase tracking-wider font-mono text-rose-400 border-b border-purple-950/20 pb-3 mb-4 flex items-center gap-1.5">
+              <Megaphone className="w-4 h-4 text-rose-500" /> Registro Geral de Alertas e Ocorrências Compartilhadas
+            </h3>
+            
+            {passengerReports.length > 0 ? (
+              <div className="space-y-3.5 text-xs">
+                {passengerReports.map((report, idx) => (
+                  <div key={report.id || idx} className="p-4 bg-purple-950/10 rounded-2xl border border-purple-950/30 flex justify-between gap-3 shadow-sm">
+                    <div>
+                      <span className="font-bold text-white text-sm block">{report.title}</span>
+                      <span className="text-[10px] text-purple-400/60 font-mono block mt-0.5">Localização: {report.region}</span>
+                      <p className="text-slate-400 text-xs mt-2 leading-relaxed">{report.description}</p>
+                    </div>
+                    <span className={`text-[9px] font-bold uppercase font-mono px-2 py-0.5 rounded shrink-0 h-fit ${
+                      report.severity === 'high' ? 'bg-rose-950 text-rose-400 border border-rose-900/30' : 'bg-amber-950 text-amber-500 border border-amber-900/20'
+                    }`}>
+                      {report.severity.toUpperCase()}
+                    </span>
+                  </div>
+                ))}
+              </div>
+            ) : (
+              <p className="text-xs text-purple-300/30 italic py-8 text-center">Nenhum relato de risco adicionado pelos motoristas do app.</p>
+            )}
+          </motion.div>
+        )}
+
+        {/* TAB 5: INTELIGÊNCIA ROXOU (PEAK HOUR, DEMAND SIGNALS & HEATMAP CONFIG) */}
+        {activeTab === 'intelligence' && (
+          <motion.div
+            key="admin-intelligence-view"
+            initial={{ opacity: 0, y: 10 }}
+            animate={{ opacity: 1, y: 0 }}
+            exit={{ opacity: 0, y: -10 }}
+            className="space-y-6"
+          >
+            {/* SUBTAB BAR */}
+            <div className="flex gap-2 p-1.5 bg-[#070316] rounded-2xl border border-purple-950/40 w-fit">
+              <button
+                type="button"
+                onClick={() => setIntelSubTab('peak_rules')}
+                className={`px-4 py-2 text-xs font-bold font-mono rounded-xl transition-all cursor-pointer ${
+                  intelSubTab === 'peak_rules'
+                    ? 'bg-purple-600 text-white shadow-md shadow-purple-900/30'
+                    : 'text-purple-300/60 hover:text-purple-300 hover:bg-purple-950/20'
+                }`}
+              >
+                Regras de Pico ({peakRules.length})
+              </button>
+              <button
+                type="button"
+                onClick={() => setIntelSubTab('demand_signals')}
+                className={`px-4 py-2 text-xs font-bold font-mono rounded-xl transition-all cursor-pointer ${
+                  intelSubTab === 'demand_signals'
+                    ? 'bg-purple-600 text-white shadow-md shadow-purple-900/30'
+                    : 'text-purple-300/60 hover:text-purple-300 hover:bg-purple-950/20'
+                }`}
+              >
+                Sinais Temporais ({demandSignals.length})
+              </button>
+              <button
+                type="button"
+                onClick={() => setIntelSubTab('heatmap_zones')}
+                className={`px-4 py-2 text-xs font-bold font-mono rounded-xl transition-all cursor-pointer ${
+                  intelSubTab === 'heatmap_zones'
+                    ? 'bg-purple-600 text-white shadow-md shadow-purple-900/30'
+                    : 'text-purple-300/60 hover:text-purple-300 hover:bg-purple-950/20'
+                }`}
+              >
+                Tuning Mapa Térmico ({heatmapZones.length})
+              </button>
+              <button
+                type="button"
+                onClick={() => setIntelSubTab('roxou_integration')}
+                className={`px-4 py-2 text-xs font-bold font-mono rounded-xl transition-all cursor-pointer ${
+                  intelSubTab === 'roxou_integration'
+                    ? 'bg-purple-600 text-white shadow-md shadow-purple-900/30'
+                    : 'text-purple-300/60 hover:text-purple-300 hover:bg-purple-950/20'
+                }`}
+              >
+                🔌 Integração Roxou
+              </button>
+            </div>
+
+            {/* SUBTAB 1: HORÁRIOS DE PICO */}
+            {intelSubTab === 'peak_rules' && (
+              <div className="grid grid-cols-1 lg:grid-cols-3 gap-8">
+                {/* COLUMN 1: NEW RULE FORM */}
+                <div className="bg-[#0b0720]/80 border border-purple-950/40 rounded-3xl p-6 h-fit">
+                  <div className="flex items-center gap-2 border-b border-purple-950/20 pb-3 mb-5">
+                    <Plus className="w-5 h-5 text-purple-400" />
+                    <h3 className="text-sm font-bold text-white">Criar Alerta de Faturamento (Regra de Pico)</h3>
+                  </div>
+
+                  {success && (
+                    <div className="mb-4 p-3 bg-emerald-950/60 border border-emerald-900/40 text-emerald-400 text-xs rounded-xl flex items-center gap-2 font-semibold animate-pulse font-mono">
+                      <Sparkles className="w-4 h-4 shrink-0 animate-spin" />
+                      <span>Regra registrada com sucesso!</span>
+                    </div>
+                  )}
+
+                  <form onSubmit={handleAddRule} className="space-y-4 text-xs font-sans">
+                    <div>
+                      <label className="block text-slate-400 mb-1.5 font-semibold">Título do Alerta Tarifário</label>
+                      <input 
+                        type="text" 
+                        value={title} 
+                        onChange={(e) => setTitle(e.target.value)}
+                        placeholder="Ex: Saída de Shows, Chuva pesada, Pico do Almoço"
+                        className="w-full bg-[#04010a] border border-purple-950/55 rounded-xl p-3 text-slate-100 focus:outline-none focus:border-purple-600 transition-colors"
+                      />
+                    </div>
+
+                    <div>
+                      <label className="block text-slate-400 mb-1.5 font-semibold">Região / Cidade de Aplicação</label>
+                      <select
+                        value={region}
+                        onChange={(e) => setRegion(e.target.value)}
+                        className="w-full bg-[#04010a] border border-purple-950/55 rounded-xl p-3 text-slate-100 focus:outline-none focus:border-purple-600 cursor-pointer font-bold font-mono text-[11px]"
+                      >
+                        <option value="">Selecione a Região...</option>
+                        {Object.keys(REG_COORDS).map(reg => (
+                          <option key={reg} value={reg}>{reg}</option>
+                        ))}
+                      </select>
+                    </div>
+
+                    <div className="grid grid-cols-2 gap-3">
+                      <div>
+                        <label className="block text-slate-400 mb-1.5 font-semibold font-sans">Início do Turno</label>
+                        <input 
+                          type="text" 
+                          value={startTime} 
+                          onChange={(e) => setStartTime(e.target.value)}
+                          placeholder="Ex: 17:00"
+                          className="w-full bg-[#04010a] border border-purple-950/55 rounded-xl p-2.5 text-slate-100 focus:outline-none focus:border-purple-600 font-mono"
+                        />
+                      </div>
+                      <div>
+                        <label className="block text-slate-400 mb-1.5 font-semibold font-sans">Fim do Turno</label>
+                        <input 
+                          type="text" 
+                          value={endTime} 
+                          onChange={(e) => setEndTime(e.target.value)}
+                          placeholder="Ex: 19:30"
+                          className="w-full bg-[#04010a] border border-purple-950/55 rounded-xl p-2.5 text-slate-100 focus:outline-none focus:border-purple-600 font-mono"
+                        />
+                      </div>
+                    </div>
+
+                    <div>
+                      <label className="block text-slate-400 mb-1.5 font-semibold">Multiplicador Estipulado</label>
+                      <select
+                        value={demandLevel}
+                        onChange={(e) => setDemandLevel(e.target.value as any)}
+                        className="w-full bg-[#04010a] border border-purple-950/55 rounded-xl p-3 text-slate-100 focus:outline-none focus:border-purple-600 cursor-pointer font-bold"
+                      >
+                        <option value="low">Baixa (+5%)</option>
+                        <option value="medium">Média (Multiplicador x1.35)</option>
+                        <option value="high">Alta (Multiplicador x1.8)</option>
+                        <option value="extreme">Roxou Extremo (Multiplicador x2.4!)</option>
+                      </select>
+                    </div>
+
+                    <div>
+                      <label className="block text-slate-400 mb-1.5 font-semibold font-sans">Dias da Semana Ativos</label>
+                      <div className="flex gap-1">
+                        {dayLabels.map((d) => {
+                          const active = selectedDays.includes(d.value);
+                          return (
+                            <button
+                              key={d.value}
+                              type="button"
+                              onClick={() => handleDayToggle(d.value)}
+                              className={`w-7 h-7 rounded-lg text-[10px] font-bold font-mono transition-all border cursor-pointer active:scale-95 flex items-center justify-center ${
+                                active 
+                                  ? 'bg-purple-600 text-white border-purple-500' 
+                                  : 'bg-[#04010a] text-purple-300/40 border-purple-950/40 hover:text-purple-300 ml-0.5'
+                              }`}
+                            >
+                              {d.label}
+                            </button>
+                          );
+                        })}
+                      </div>
+                    </div>
+
+                    <button
+                      type="submit"
+                      className="w-full py-3 bg-gradient-to-r from-purple-700 to-indigo-600 hover:from-purple-600 hover:to-indigo-300 rounded-xl text-white font-bold tracking-wide shadow-[0_4px_15px_rgba(147,51,234,0.3)] cursor-pointer hover:shadow-purple-600/30 transition-shadow active:scale-95"
+                    >
+                      Confirmar Regra Inteligente
+                    </button>
+                  </form>
+                </div>
+
+                {/* COLUMN 2: ACTIVE RULES LIST */}
+                <div className="lg:col-span-2 bg-[#0a061b] border border-purple-950/40 rounded-3xl p-6">
+                  <div className="flex items-center justify-between border-b border-purple-950/20 pb-3 mb-4">
+                    <h3 className="text-xs font-semibold text-white uppercase tracking-wider font-mono text-purple-400">Regras de Pico Ativas</h3>
+                    <span className="text-[10px] bg-purple-950/60 text-purple-300 font-mono px-2 py-0.5 rounded border border-purple-900/30">
+                      {peakRules.length} registradas
+                    </span>
+                  </div>
+
+                  {peakRules.length > 0 ? (
+                    <div className="space-y-3 max-h-[440px] overflow-y-auto pr-1">
+                      {peakRules.map((rule, idx) => {
+                        const daysString = rule.days_of_week && Array.isArray(rule.days_of_week)
+                          ? rule.days_of_week.map(fullDayName).join(', ')
+                          : '-';
+                        
+                        return (
+                          <div 
+                            key={rule.id || idx}
+                            className={`p-4 rounded-xl border flex items-center justify-between gap-4 transition-all ${
+                              rule.is_active 
+                                ? 'bg-[#0e0a29] border-purple-900/40 shadow-sm' 
+                                : 'bg-purple-950/5 border-purple-950/30 opacity-60'
+                            }`}
+                          >
+                            <div>
+                              <div className="flex items-center gap-2">
+                                <span className={`text-[9px] font-bold px-1.5 py-0.2 rounded uppercase font-mono ${
+                                  rule.demand_level === 'extreme'
+                                    ? 'bg-purple-900 text-fuchsia-400 border border-fuchsia-800'
+                                    : rule.demand_level === 'high'
+                                    ? 'bg-rose-950 text-rose-400 border border-rose-900/40'
+                                    : 'bg-indigo-950 text-indigo-400 border border-indigo-900/30'
+                                }`}>
+                                  {rule.demand_level === 'extreme' ? 'ROXOU EXTREMO' : rule.demand_level.toUpperCase()}
+                                </span>
+                                
+                                <span className="text-[10.5px] text-purple-300 font-mono flex items-center gap-1">
+                                  <Clock className="w-3.5 h-3.5 text-purple-400" /> {rule.start_time} - {rule.end_time}
+                                </span>
+                              </div>
+
+                              <h4 className="text-xs font-bold text-white mt-1 font-sans">{rule.title}</h4>
+                              <p className="text-[11px] text-slate-400 font-mono mt-0.5"><span className="text-purple-300/45">Local:</span> {rule.region}</p>
+                              <p className="text-[9px] text-slate-500 font-mono mt-1">Dias: {daysString}</p>
+                            </div>
+
+                            <button
+                              type="button"
+                              onClick={() => togglePeakRule(rule.id, idx)}
+                              className="text-purple-400 hover:text-white p-2.5 transition-transform active:scale-90 cursor-pointer"
+                            >
+                              {rule.is_active ? (
+                                <ToggleRight className="w-8 h-8 text-purple-500" />
+                              ) : (
+                                <ToggleLeft className="w-8 h-8 text-slate-500" />
+                              )}
+                            </button>
+                          </div>
+                        );
+                      })}
+                    </div>
+                  ) : (
+                    <div className="py-8 flex flex-col items-center justify-center text-center border border-dashed border-purple-950/40 rounded-xl">
+                      <p className="text-xs text-purple-400/40 font-mono">Nenhuma regra cadastrada pelo administrador.</p>
+                      <p className="text-[11px] text-purple-300/20 px-2 mt-0.5">Use o formulário ao lado para simular e deitar tarifas de pico de urgência.</p>
+                    </div>
+                  )}
+                </div>
+              </div>
+            )}
+
+            {/* SUBTAB 2: SINAIS TEMPORAIS */}
+            {intelSubTab === 'demand_signals' && (
+              <div className="grid grid-cols-1 lg:grid-cols-3 gap-8">
+                {/* FORM: NEW TEMPORAL SINAL */}
+                <div className="bg-[#0b0720]/80 border border-purple-950/40 rounded-3xl p-6 h-fit">
+                  <div className="flex items-center gap-2 border-b border-purple-950/20 pb-3 mb-5">
+                    <Plus className="w-5 h-5 text-purple-400" />
+                    <h3 className="text-sm font-bold text-white">Criar Novo Alerta de Clima, Evento ou Aula</h3>
+                  </div>
+
+                  {sigSuccess && (
+                    <div className="mb-4 p-3 bg-emerald-950/60 border border-emerald-900/40 text-emerald-400 text-xs rounded-xl flex items-center gap-2 font-semibold font-mono animate-pulse">
+                      <Sparkles className="w-4 h-4 shrink-0 animate-spin" />
+                      <span>Sinal temporal disparado no mapa!</span>
+                    </div>
+                  )}
+
+                  <form onSubmit={handleAddSignal} className="space-y-4 text-xs font-sans">
+                    <div>
+                      <label className="block text-slate-400 mb-1.5 font-semibold">Nome da Alerta Temporal</label>
+                      <input 
+                        type="text" 
+                        value={sigTitle} 
+                        onChange={(e) => setSigTitle(e.target.value)}
+                        placeholder="Ex: Jogo da Copa, Chuva Forte, Show de Rock"
+                        className="w-full bg-[#04010a] border border-purple-950/55 rounded-xl p-3 text-slate-100 focus:outline-none focus:border-purple-600 transition-colors"
+                      />
+                    </div>
+
+                    <div className="grid grid-cols-2 gap-3">
+                      <div>
+                        <label className="block text-slate-400 mb-1.5 font-semibold">Ponto Centróide</label>
+                        <select
+                          value={sigRegion}
+                          onChange={(e) => setSigRegion(e.target.value)}
+                          className="w-full bg-[#04010a] border border-purple-950/55 rounded-xl p-3 text-slate-100 focus:outline-none focus:border-purple-600 cursor-pointer font-bold"
+                        >
+                          {Object.keys(REG_COORDS).map(reg => (
+                            <option key={reg} value={reg}>{reg}</option>
+                          ))}
+                        </select>
+                      </div>
+
+                      <div>
+                        <label className="block text-slate-400 mb-1.5 font-semibold">Tipo do Evento</label>
+                        <select
+                          value={sigType}
+                          onChange={(e) => setSigType(e.target.value)}
+                          className="w-full bg-[#04010a] border border-purple-950/55 rounded-xl p-3 text-slate-100 focus:outline-none focus:border-purple-600 cursor-pointer font-bold"
+                        >
+                          <option value="climate">🌧️ Clima / Tempo</option>
+                          <option value="event">🎤 Show / Concerto</option>
+                          <option value="academic">🎓 Volta às Aulas / Vestibulares</option>
+                          <option value="leisure">🍻 Happy Hour / Lazer</option>
+                        </select>
+                      </div>
+                    </div>
+
+                    <div>
+                      <div className="flex justify-between items-center mb-1">
+                        <label className="block text-slate-400 font-semibold">Peso Booster (Multiplicador peso)</label>
+                        <span className="font-mono text-purple-300 font-bold">+{Math.round(sigWeight * 15)} pts de Score</span>
+                      </div>
+                      <input 
+                        type="range"
+                        min="0.5"
+                        max="3.0"
+                        step="0.1"
+                        value={sigWeight}
+                        onChange={(e) => setSigWeight(Number(e.target.value))}
+                        className="w-full accent-purple-600 cursor-pointer"
+                      />
+                      <div className="flex justify-between text-[9px] text-slate-500 font-mono mt-0.5">
+                        <span>Fraco (0.5)</span>
+                        <span>Moderado (1.5)</span>
+                        <span>Extremo (3.0)</span>
+                      </div>
+                    </div>
+
+                    <button
+                      type="submit"
+                      className="w-full py-3 bg-gradient-to-r from-purple-700 to-indigo-600 hover:from-purple-600 hover:to-indigo-300 rounded-xl text-white font-bold tracking-wide shadow-[0_4px_15px_rgba(147,51,234,0.3)] cursor-pointer hover:shadow-purple-600/30 transition-shadow active:scale-95"
+                    >
+                      Intercalar Sinal no Mapa
+                    </button>
+                  </form>
+                </div>
+
+                {/* LIST: ACTIVE SIGNALS */}
+                <div className="lg:col-span-2 bg-[#0a061b] border border-purple-950/40 rounded-3xl p-6">
+                  <div className="flex items-center justify-between border-b border-purple-950/20 pb-3 mb-4">
+                    <h3 className="text-xs font-semibold text-white uppercase tracking-wider font-mono text-purple-400">Alertas Ativos em Presidente Prudente</h3>
+                    <span className="text-[10px] bg-purple-950/60 text-purple-300 font-mono px-2 py-0.5 rounded border border-purple-900/30">
+                      {demandSignals.length} disparados
+                    </span>
+                  </div>
+
+                  {demandSignals.length > 0 ? (
+                    <div className="space-y-3 max-h-[440px] overflow-y-auto pr-1">
+                      {demandSignals.map((signal) => (
+                        <div 
+                          key={signal.id}
+                          className={`p-4 rounded-xl border flex items-center justify-between gap-4 transition-all ${
+                            signal.is_active 
+                              ? 'bg-[#0e0a29] border-purple-900/40 shadow-sm' 
+                              : 'bg-purple-950/5 border-purple-950/30 opacity-60'
+                          }`}
+                        >
+                          <div>
+                            <div className="flex items-center gap-2">
+                              <span className="text-lg">
+                                {signal.signal_type === 'climate' ? '🌧️' : signal.signal_type === 'event' ? '🎤' : '🎓'}
+                              </span>
+                              <span className="text-xs text-white font-bold">{signal.title}</span>
+                            </div>
+                            <div className="text-[10px] text-slate-400 font-mono mt-1 space-x-3">
+                              <span><strong className="text-purple-300">Região:</strong> {signal.region}</span>
+                              <span><strong className="text-purple-300">Booster:</strong> +{Math.round(Number(signal.weight) * 15)} pts</span>
+                              <span><strong className="text-purple-300">Tipo:</strong> {signal.signal_type}</span>
+                            </div>
+                          </div>
+
+                          <div className="flex items-center gap-2 shrink-0">
+                            <button
+                              type="button"
+                              onClick={() => toggleDemandSignal(signal.id)}
+                              className="text-purple-400 hover:text-white transition-all cursor-pointer"
+                            >
+                              {signal.is_active ? (
+                                <ToggleRight className="w-7 h-7 text-purple-500" />
+                              ) : (
+                                <ToggleLeft className="w-7 h-7 text-slate-500" />
+                              )}
+                            </button>
+                            <button
+                              type="button"
+                              onClick={() => deleteDemandSignal(signal.id)}
+                              className="p-1.5 text-red-400 hover:bg-red-950/20 rounded-lg hover:text-red-300 transition-colors uppercase font-mono text-[9px] font-bold cursor-pointer border border-red-950/30"
+                            >
+                              Deletar
+                            </button>
+                          </div>
+                        </div>
+                      ))}
+                    </div>
+                  ) : (
+                    <p className="text-xs text-purple-300/30 italic text-center py-12">
+                      Sem sinais temporais disparados. Use o formulário esquerdo para colocar picos locais instantâneos.
+                    </p>
+                  )}
+                </div>
+              </div>
+            )}
+
+            {/* SUBTAB 3: EXTREME MATRIX TUNING (HEATMAPS SENSITIVITY) */}
+            {intelSubTab === 'heatmap_zones' && (
+              <div className="bg-[#0a061b] border border-purple-950/40 rounded-3xl p-6">
+                <div className="flex items-center justify-between border-b border-purple-950/20 pb-3 mb-5">
+                  <div>
+                    <h3 className="text-xs font-semibold text-white uppercase tracking-wider font-mono text-purple-400">Central de Calibração Térmica (Multiplicadores de Saturação)</h3>
+                    <p className="text-[10px] text-slate-500 font-mono mt-0.5">Defina a densidade base de passageiros ativa e intensidade em tempo real para os 10 pólos de Presidente Prudente.</p>
+                  </div>
+                  <span className="text-[10px] bg-purple-950/60 text-purple-300 font-mono px-2 py-0.5 rounded border border-purple-900/30 shrink-0">
+                    {heatmapZones.length} Pólos Operacionais
+                  </span>
+                </div>
+
+                <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+                  {heatmapZones.map((zone) => {
+                    return (
+                      <div 
+                        key={zone.id}
+                        className="bg-[#050210] p-4 rounded-2xl border border-purple-950/35 space-y-3"
+                      >
+                        <div className="flex justify-between items-center">
+                          <div>
+                            <span className="text-xs text-white font-extrabold block">{zone.regionName}</span>
+                            <span className="text-[9px] text-purple-450 text-purple-400 font-mono">
+                              Lat: {zone.latitude.toFixed(4)} | Lng: {zone.longitude.toFixed(4)}
+                            </span>
+                          </div>
+                          
+                          <span className={`text-[9px] font-mono px-1.5 py-0.2 rounded font-extrabold uppercase border ${
+                            zone.status === 'extreme'
+                              ? 'bg-rose-950 text-rose-400 border-rose-800'
+                              : zone.status === 'hot'
+                              ? 'bg-orange-950 text-orange-400 border-orange-850'
+                              : 'bg-slate-950 text-slate-400 border-slate-800'
+                          }`}>
+                            {zone.status}
+                          </span>
+                        </div>
+
+                        {/* Sliders in card */}
+                        <div className="space-y-3 font-mono text-[10.5px]">
+                          {/* Passenger Density slider */}
+                          <div>
+                            <div className="flex justify-between mb-1">
+                              <span className="text-slate-400">Densidade Base Passageiros:</span>
+                              <span className="text-white font-bold">{zone.passengerDensity}%</span>
+                            </div>
+                            <input 
+                              type="range"
+                              min="10"
+                              max="100"
+                              value={zone.passengerDensity}
+                              onChange={(e) => updateHeatmapZone(zone.id, Number(e.target.value), zone.intensity)}
+                              className="w-full accent-fuchsia-600 cursor-pointer"
+                            />
+                          </div>
+
+                          {/* Dynamic Intensity slider */}
+                          <div>
+                            <div className="flex justify-between mb-1">
+                              <span className="text-slate-400">Intensidade Térmica:</span>
+                              <span className="text-white font-bold">{Math.round(zone.intensity * 100)}%</span>
+                            </div>
+                            <input 
+                              type="range"
+                              min="0.10"
+                              max="1.00"
+                              step="0.05"
+                              value={zone.intensity}
+                              onChange={(e) => updateHeatmapZone(zone.id, zone.passengerDensity, Number(e.target.value))}
+                              className="w-full accent-purple-600 cursor-pointer"
+                            />
+                          </div>
+                        </div>
+
+                        <div className="flex justify-between items-center text-[10px] text-fuchsia-400 font-mono pt-1.5 border-t border-purple-950/20">
+                          <span>Tarifa Média Estimada:</span>
+                          <strong>{zone.averageFareMultiplier.toFixed(2)}x</strong>
+                        </div>
+                      </div>
+                    );
+                  })}
+                </div>
+              </div>
+            )}
+
+            {/* SUBTAB 4: ROXOU INTEGRATION PREPARATION PANEL */}
+            {intelSubTab === 'roxou_integration' && (
+              <motion.div
+                initial={{ opacity: 0, y: 10 }}
+                animate={{ opacity: 1, y: 0 }}
+                className="space-y-6"
+              >
+                {/* Warning notice banner */}
+                <div className="p-4 bg-amber-950/20 border border-amber-500/20 rounded-2xl flex items-start gap-3">
+                  <AlertCircle className="w-5 h-5 text-amber-500 shrink-0 mt-0.5" />
+                  <div className="text-xs">
+                    <h4 className="font-bold text-amber-400">Ambiente de Preparação Ativo</h4>
+                    <p className="text-amber-300/60 mt-0.5 leading-relaxed">
+                      Integração real ainda não habilitada. Esta área prepara o DriverDash para consumir dados da Roxou futuramente.
+                      Não consome APIs reais, não altera dados de produção da Roxou e opera em ambiente de sandbox estrito.
+                    </p>
+                  </div>
+                </div>
+
+                <div className="grid grid-cols-1 lg:grid-cols-3 gap-6">
+                  {/* Status metrics card */}
+                  <div className="bg-[#0b0720]/90 border border-purple-950/35 p-6 rounded-3xl space-y-4">
+                    <h3 className="text-sm font-bold text-white uppercase tracking-wider font-mono border-b border-purple-950/20 pb-2">
+                      🔌 Estado do Adaptador
+                    </h3>
+
+                    {integrationSuccessMsg && (
+                      <div className="p-2.5 bg-emerald-950/40 border border-emerald-900/30 text-emerald-400 text-[11px] rounded-xl font-mono">
+                        {integrationSuccessMsg}
+                      </div>
+                    )}
+
+                    <div className="space-y-3.5 text-xs font-mono font-bold">
+                      <div className="flex justify-between items-center py-1.5 border-b border-purple-950/10">
+                        <span className="text-slate-400">Status Geral:</span>
+                        <div className="flex items-center gap-1.5">
+                          <span className={`w-2.5 h-2.5 rounded-full ${roxouStatus.enabled ? 'bg-emerald-500 animate-pulse' : 'bg-slate-500'}`} />
+                          <span className={roxouStatus.enabled ? 'text-emerald-400' : 'text-slate-400'}>
+                            {roxouStatus.enabled ? 'MOCK ATIVO' : 'DESATIVADO'}
+                          </span>
+                        </div>
+                      </div>
+
+                      <div className="flex justify-between items-center py-1.5 border-b border-purple-950/10">
+                        <span className="text-slate-400">Modo de Operação:</span>
+                        <span className="text-white uppercase">{roxouStatus.mode}</span>
+                      </div>
+
+                      <div className="flex justify-between items-center py-1.5 border-b border-purple-950/10">
+                        <span className="text-slate-400">Eldorado Source:</span>
+                        <span className="text-slate-300 text-[11px] font-semibold">{roxouStatus.source}</span>
+                      </div>
+
+                      <div className="flex justify-between items-center py-1.5 border-b border-purple-950/10">
+                        <span className="text-slate-400">Última Sincronização:</span>
+                        <span className="text-indigo-300 font-semibold">
+                          {roxouStatus.last_sync ? new Date(roxouStatus.last_sync).toLocaleTimeString('pt-BR') : 'Nunca'}
+                        </span>
+                      </div>
+
+                      <div className="flex justify-between items-center py-1.5 border-b border-purple-950/10">
+                        <span className="text-slate-400">Sinais Mock Seeding:</span>
+                        <span className="text-purple-300 font-bold">{roxouStatus.mock_signals_count}</span>
+                      </div>
+
+                      <div className="flex justify-between items-center py-1.5">
+                        <span className="text-slate-400">Erros Controlados:</span>
+                        <span className={`font-bold ${roxouStatus.error_count > 0 ? 'text-rose-400' : 'text-emerald-400'}`}>
+                          {roxouStatus.error_count}
+                        </span>
+                      </div>
+                    </div>
+
+                    {/* Operational controls button container */}
+                    <div className="space-y-2 pt-4">
+                      <button
+                        type="button"
+                        onClick={() => {
+                          const result = roxouIntegrationService.previewRoxouSignals();
+                          setPreviewSignals(result.signals);
+                          setShowPreview(true);
+                          setIntegrationSuccessMsg('Visualização de sinais simulada de modo passivo.');
+                          setTimeout(() => setIntegrationSuccessMsg(''), 4000);
+                        }}
+                        className="w-full py-2.5 bg-purple-900/35 border border-purple-800/40 hover:bg-purple-900/50 hover:border-purple-600 rounded-xl text-purple-200 hover:text-white text-xs font-bold font-mono cursor-pointer transition-all active:scale-[0.98] flex items-center justify-center gap-1.5"
+                      >
+                        <Eye className="w-4 h-4" /> Pré-visualizar Sinais Mock
+                      </button>
+
+                      <button
+                        type="button"
+                        onClick={() => {
+                          roxouIntegrationService.enableMockIntegration();
+                          refreshRoxouStatus();
+                          refetchDemand();
+                          const result = roxouIntegrationService.previewRoxouSignals();
+                          setPreviewSignals(result.signals);
+                          setShowPreview(true);
+                          setIntegrationSuccessMsg('Modo MOCK ativo! Mapa e demandas sincronizados.');
+                          setTimeout(() => setIntegrationSuccessMsg(''), 4005);
+                        }}
+                        className="w-full py-2.5 bg-gradient-to-r from-emerald-600 to-teal-600 hover:from-emerald-500 hover:to-teal-500 rounded-xl text-white text-xs font-bold cursor-pointer font-sans transition-all active:scale-[0.98] shadow-md shadow-emerald-900/10 flex items-center justify-center gap-1.5"
+                      >
+                        <Check className="w-4 h-4" /> Ativar Modo Mock
+                      </button>
+
+                      <button
+                        type="button"
+                        onClick={() => {
+                          roxouIntegrationService.disableRoxouIntegration();
+                          refreshRoxouStatus();
+                          refetchDemand();
+                          setShowPreview(false);
+                          setIntegrationSuccessMsg('Integração Roxou desativada.');
+                          setTimeout(() => setIntegrationSuccessMsg(''), 4000);
+                        }}
+                        className="w-full py-2.5 bg-rose-950/30 hover:bg-rose-900 border border-rose-900/40 text-rose-400 hover:text-white text-xs font-bold cursor-pointer font-sans transition-all active:scale-[0.98] flex items-center justify-center gap-1.5"
+                      >
+                        <X className="w-4 h-4" /> Desativar Integração
+                      </button>
+                    </div>
+                  </div>
+
+                  {/* Future Architecture Checklist card */}
+                  <div className="lg:col-span-2 bg-[#0a061b] border border-purple-950/35 p-6 rounded-3xl space-y-4">
+                    <h3 className="text-sm font-bold text-white uppercase tracking-wider font-mono border-b border-purple-950/20 pb-2">
+                      🚀 Checklist de Roadmapping Real
+                    </h3>
+
+                    <div className="space-y-3.5 text-xs text-slate-300 font-sans">
+                      <p className="text-[11px] text-fuchsia-400 font-mono">FASE DE DESIGN CONTRATUAL COMPLETADA (FASE 5.1)</p>
+                      
+                      <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
+                        <div className="p-3.5 bg-purple-950/10 rounded-xl border border-purple-950/30">
+                          <span className="font-bold text-white block text-xs">🔒 1. Segurança e TLS</span>
+                          <span className="text-[11px] text-slate-400/80 mt-1 block leading-relaxed">
+                            A integração exige chaves criptográficas sob encriptação TLS. Chaves reais NUNCA devem residir no código do frontend ou nos metadados expostos do navegador.
+                          </span>
+                        </div>
+
+                        <div className="p-3.5 bg-purple-950/10 rounded-xl border border-purple-950/30">
+                          <span className="font-bold text-white block text-xs">📡 2. Edge Functions e Webhooks</span>
+                          <span className="text-[11px] text-slate-400/80 mt-1 block leading-relaxed">
+                            Em ambiente produtivo, configure a ingestão de sinais de alta prioridade via webhooks da Roxou enviando requisições assíncronas para Edge Functions seguras.
+                          </span>
+                        </div>
+
+                        <div className="p-3.5 bg-[#0e0a29] rounded-xl border border-[#a855f7]/20">
+                          <span className="font-bold text-white block text-xs">📦 3. Tabelas Supabase Dedicadas</span>
+                          <span className="text-[11px] text-slate-400/85 mt-1 block leading-relaxed font-sans">
+                            Implementar as tabelas roxou_events e roxou_games com RLS e políticas de acesso restritas, sem permissões de escrita externa (read-only por drivers).
+                          </span>
+                        </div>
+
+                        <div className="p-3.5 bg-purple-950/10 rounded-xl border border-purple-950/30">
+                          <span className="font-bold text-white block text-xs">🌐 4. Consumo API e Fallbacks</span>
+                          <span className="text-[11px] text-slate-400/80 mt-1 block leading-relaxed">
+                            Limitação de requisições de API via cache Redis ou localStorage (15 mins de TTL) para evitar cobranças de dados e travamento por rate-limit.
+                          </span>
+                        </div>
+                      </div>
+                    </div>
+                  </div>
+                </div>
+
+                {/* SINAL PREVIEW ZONE */}
+                {showPreview && previewSignals.length > 0 && (
+                  <div className="bg-[#0a061b] border border-purple-950/35 rounded-3xl p-6 space-y-4">
+                    <div className="flex justify-between items-center border-b border-purple-950/20 pb-3">
+                      <div>
+                        <h4 className="text-xs font-bold text-white uppercase tracking-wider font-mono">
+                          🔍 Sinais Normalizados no Adaptador ({previewSignals.length} canais)
+                        </h4>
+                        <p className="text-[10px] text-slate-400 font-mono">
+                          Mapeamento de adapters automáticos que alimenta o índice de picos do DriverDash.
+                        </p>
+                      </div>
+                    </div>
+
+                    <div className="overflow-x-auto">
+                      <table className="w-full text-left text-xs font-mono border-collapse">
+                        <thead>
+                          <tr className="border-b border-purple-950/20 text-purple-400 py-2">
+                            <th className="pb-3 pr-4">ID do Sinal</th>
+                            <th className="pb-3 pr-4">Nome do Sinal</th>
+                            <th className="pb-3 pr-4">Região</th>
+                            <th className="pb-3 pr-4">Tipo</th>
+                            <th className="pb-3 pr-4 text-center">Peso Booster</th>
+                            <th className="pb-3 text-right">Status</th>
+                          </tr>
+                        </thead>
+                        <tbody className="divide-y divide-purple-950/10 text-[11px] text-slate-300">
+                          {previewSignals.map((sig, sidx) => (
+                            <tr key={sig.id || sidx} className="hover:bg-purple-950/5">
+                              <td className="py-3 font-mono text-[10px] text-purple-400">{sig.id}</td>
+                              <td className="py-3 font-bold text-white max-w-xs truncate">{sig.title}</td>
+                              <td className="py-3 text-slate-400">{sig.region}</td>
+                              <td className="py-3 text-[10px] uppercase font-bold text-fuchsia-400">{sig.signal_type}</td>
+                              <td className="py-3 text-center text-emerald-400 font-bold">
+                                {sig.weight.toFixed(2)}x
+                              </td>
+                              <td className="py-3 text-right">
+                                <span className={`px-2 py-0.5 rounded font-extrabold uppercase text-[9px] ${
+                                  sig.is_active ? 'bg-emerald-950 text-emerald-400 border border-emerald-950/30' : 'bg-slate-950 text-slate-400 border border-slate-950/20'
+                                }`}>
+                                  {sig.is_active ? 'Ativo' : 'Pendente'}
+                                </span>
+                              </td>
+                            </tr>
+                          ))}
+                        </tbody>
+                      </table>
+                    </div>
+                  </div>
+                )}
+              </motion.div>
+            )}
+          </motion.div>
+        )}
+
+        {/* TAB 6: CONFIGURAÇÕES OPERACIONAIS */}
+        {activeTab === 'configs' && (
+          <motion.div
+            key="admin-configs-view"
+            initial={{ opacity: 0, y: 10 }}
+            animate={{ opacity: 1, y: 0 }}
+            exit={{ opacity: 0, y: -10 }}
+            className="bg-[#0a061b] border border-purple-950/30 rounded-3xl p-6 space-y-6"
+          >
+            <div>
+              <h3 className="text-sm font-bold text-white uppercase tracking-wider font-mono">Configurações Gerais do Sistema DriverDash</h3>
+              <p className="text-xs text-purple-300/45 mt-1">Configure parâmetros globais do aplicativo, taxas administrativas e controle de simulação.</p>
+            </div>
+
+            <div className="grid grid-cols-1 md:grid-cols-2 gap-6 text-xs">
+              
+              <div className="p-5 rounded-2xl bg-[#03010b] border border-purple-950/60 space-y-3">
+                <span className="text-[10px] uppercase font-bold tracking-wide font-mono text-fuchsia-400 block">Parâmetros de Auditoria</span>
+                
+                <div className="space-y-3">
+                  <div>
+                    <label className="block text-slate-400 mb-1">Período de Retenção de Logs</label>
+                    <input type="text" className="w-full bg-[#0d0922] border border-purple-950/60 p-2.5 rounded-lg text-white font-mono" defaultValue="365 Dias (PRO)" readOnly />
+                  </div>
+                  <div>
+                    <label className="block text-slate-400 mb-1">Intervalo de Verificação de Alertas</label>
+                    <input type="text" className="w-full bg-[#0d0922] border border-purple-950/60 p-2.5 rounded-lg text-white font-mono" defaultValue="Tempo Real (Supabase Ingress)" readOnly />
+                  </div>
+                </div>
+              </div>
+
+              <div className="p-5 rounded-2xl bg-[#03010b] border border-purple-950/60 space-y-3">
+                <span className="text-[10px] uppercase font-bold tracking-wide font-mono text-teal-400 block">Status da Infraestrutura</span>
+                
+                <div className="space-y-4">
+                  <div className="flex justify-between items-center py-2 border-b border-purple-950/30">
+                    <span className="text-slate-400">Banco de Dados Relacional</span>
+                    <span className="font-mono text-[11px] text-emerald-400 font-bold">Ativo & Saudável</span>
+                  </div>
+                  <div className="flex justify-between items-center py-2 border-b border-purple-950/30">
+                    <span className="text-slate-400">Triggers de Autocadastro</span>
+                    <span className="font-mono text-[11px] text-emerald-400 font-bold">Instalados</span>
+                  </div>
+                  <div className="flex justify-between items-center py-2">
+                    <span className="text-slate-400">Vias de GPS (Driver Sessions)</span>
+                    <span className="font-mono text-[11px] text-purple-400 font-bold tracking-wider">Preparação Pronta</span>
+                  </div>
+                </div>
+              </div>
+
+            </div>
+          </motion.div>
+        )}
+
+        {/* TAB 7: OBSERVABILIDADE, METRICAS & LOGS */}
+        {activeTab === 'observability' && (
+          <motion.div
+            key="admin-observability-view"
+            initial={{ opacity: 0, y: 10 }}
+            animate={{ opacity: 1, y: 0 }}
+            exit={{ opacity: 0, y: -10 }}
+            className="space-y-6"
+          >
+            {/* Header with quick controls */}
+            <div className="bg-[#0a061b] border border-purple-950/30 rounded-3xl p-6 flex flex-col sm:flex-row justify-between items-start sm:items-center gap-4">
+              <div>
+                <h3 className="text-sm font-bold text-white uppercase tracking-wider font-mono">Painel de Observabilidade do Sistema</h3>
+                <p className="text-xs text-purple-300/40 mt-1">Monitore falhas em tempo real, telemetria de GPS, auditorias administrativas e status dos microsserviços.</p>
+              </div>
+              <div className="flex gap-2 shrink-0">
+                <button
+                  onClick={() => {
+                    refreshLogs();
+                    refreshAudits();
+                    refreshHealth();
+                  }}
+                  className="px-3 py-1.5 bg-purple-900/30 hover:bg-purple-900/50 text-purple-200 border border-purple-800/25 rounded-xl text-xs font-mono font-bold flex items-center gap-1.5 transition-all cursor-pointer"
+                >
+                  <RefreshCw className="w-3.5 h-3.5" /> Atualizar
+                </button>
+                <button
+                  onClick={clearLocalLogs}
+                  className="px-3 py-1.5 bg-rose-950/30 hover:bg-rose-900/40 text-rose-300 border border-rose-950/40 rounded-xl text-xs font-mono font-bold flex items-center gap-1.5 transition-all cursor-pointer"
+                >
+                  <Ban className="w-3.5 h-3.5" /> Limpar Logs
+                </button>
+              </div>
+            </div>
+
+            {/* Diagnostics and Health Grid */}
+            <div className="grid grid-cols-2 md:grid-cols-4 lg:grid-cols-6 gap-3">
+              <div className="p-4 bg-[#0a061b] border border-purple-950/20 rounded-2xl flex flex-col justify-between">
+                <span className="text-[10px] text-slate-400 font-mono uppercase">Banco de Dados</span>
+                <div className="flex items-center gap-1.5 mt-2">
+                  <span className={`w-2.5 h-2.5 rounded-full ${obsHealth?.database_ok !== false ? 'bg-emerald-400 animate-pulse' : 'bg-rose-500'}`} />
+                  <span className="text-[11px] font-bold font-mono uppercase text-white">{obsHealth?.database_ok !== false ? 'Saudável' : 'Falha'}</span>
+                </div>
+              </div>
+              
+              <div className="p-4 bg-[#0a061b] border border-purple-950/20 rounded-2xl flex flex-col justify-between">
+                <span className="text-[10px] text-slate-400 font-mono uppercase">Autenticação</span>
+                <div className="flex items-center gap-1.5 mt-2">
+                  <span className={`w-2.5 h-2.5 rounded-full ${obsHealth?.auth_ok !== false ? 'bg-emerald-400 animate-pulse' : 'bg-rose-500'}`} />
+                  <span className="text-[11px] font-bold font-mono uppercase text-white">{obsHealth?.auth_ok !== false ? 'Saudável' : 'Falha'}</span>
+                </div>
+              </div>
+
+              <div className="p-4 bg-[#0a061b] border border-purple-950/20 rounded-2xl flex flex-col justify-between">
+                <span className="text-[10px] text-slate-400 font-mono uppercase">GPS Hardware</span>
+                <div className="flex items-center gap-1.5 mt-2">
+                  <span className={`w-2.5 h-2.5 rounded-full ${obsHealth?.gps_ok !== false ? 'bg-emerald-400 animate-pulse' : 'bg-rose-500'}`} />
+                  <span className="text-[11px] font-bold font-mono uppercase text-white">{obsHealth?.gps_ok !== false ? 'Saudável' : 'Inativo'}</span>
+                </div>
+              </div>
+
+              <div className="p-4 bg-[#0a061b] border border-purple-950/20 rounded-2xl flex flex-col justify-between">
+                <span className="text-[10px] text-slate-400 font-mono uppercase">Sincronização</span>
+                <div className="flex items-center gap-1.5 mt-2">
+                  <span className={`w-2.5 h-2.5 rounded-full ${obsHealth?.sync_ok !== false ? 'bg-emerald-400 animate-pulse' : 'bg-rose-500'}`} />
+                  <span className="text-[11px] font-bold font-mono uppercase text-white">{obsHealth?.sync_ok !== false ? 'Ativa' : 'Falha'}</span>
+                </div>
+              </div>
+
+              <div className="p-4 bg-[#0a061b] border border-purple-950/20 rounded-2xl flex flex-col justify-between font-mono">
+                <span className="text-[10px] text-slate-400 uppercase">Motor Demanda</span>
+                <div className="flex items-center gap-1.5 mt-2">
+                  <span className="w-2.5 h-2.5 rounded-full bg-emerald-400 animate-pulse" />
+                  <span className="text-[11px] font-bold uppercase text-white">Pronta</span>
+                </div>
+              </div>
+
+              <div className="p-4 bg-[#0a061b] border border-purple-950/20 rounded-2xl flex flex-col justify-between font-mono">
+                <span className="text-[10px] text-slate-400 uppercase">Versão Deploy</span>
+                <span className="text-[11px] font-extrabold text-purple-300 mt-2">{obsHealth?.version || '0.9.0-beta'}</span>
+              </div>
+            </div>
+
+            {/* Quick Metrics Summaries */}
+            <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-4">
+              <div className="p-4 bg-gradient-to-br from-[#0a041a] to-[#03010b] border border-purple-950/30 rounded-2xl">
+                <div className="flex justify-between text-purple-400 text-xs font-mono">
+                  <span>ERROS (ÚLTIMAS 24H)</span>
+                  <AlertCircle className="w-4 h-4 text-rose-500 animate-pulse" />
+                </div>
+                <p className="text-2xl font-bold font-mono text-white mt-1">
+                  {obsLogs.filter(l => (l.level === 'error' || l.level === 'critical') && new Date(l.created_at) > new Date(Date.now() - 24 * 3600 * 1000)).length}
+                </p>
+              </div>
+
+              <div className="p-4 bg-gradient-to-br from-[#061219] to-[#010609] border border-teal-950/30 rounded-2xl">
+                <div className="flex justify-between text-teal-400 text-xs font-mono">
+                  <span>FALHAS DE GPS (HISTÓRICO)</span>
+                  <MapPin className="w-4 h-4 text-teal-500" />
+                </div>
+                <p className="text-2xl font-bold font-mono text-white mt-1">
+                  {obsLogs.filter(l => l.category === 'gps').length}
+                </p>
+              </div>
+
+              <div className="p-4 bg-gradient-to-br from-[#12081c] to-[#030107] border border-fuchsia-950/30 rounded-2xl">
+                <div className="flex justify-between text-fuchsia-400 text-xs font-mono">
+                  <span>ERROS DE SYNC / SUPABASE</span>
+                  <Database className="w-4 h-4 text-fuchsia-500" />
+                </div>
+                <p className="text-2xl font-bold font-mono text-white mt-1">
+                  {obsLogs.filter(l => l.category === 'sync' || l.category === 'supabase').length}
+                </p>
+              </div>
+
+              <div className="p-4 bg-gradient-to-br from-[#140f04] to-[#050301] border border-amber-900/30 rounded-2xl">
+                <div className="flex justify-between text-amber-500 text-xs font-mono">
+                  <span>SESSÕES EM REPRODUÇÃO</span>
+                  <Users className="w-4 h-4 text-amber-500" />
+                </div>
+                <p className="text-2xl font-bold font-mono text-white mt-1">
+                  {obsAudits.filter(a => a.action === 'login' || a.action === 'localDemoLogin').length}
+                </p>
+              </div>
+            </div>
+
+            {/* FILTERS FOR TELEMETRY LOGS */}
+            <div className="p-4 bg-[#070314] border border-purple-950/40 rounded-2xl flex flex-wrap gap-4 items-center font-mono">
+              <span className="text-xs font-bold text-slate-300 uppercase inline-flex items-center gap-1">
+                <Filter className="w-3.5 h-3.5" /> Filtrar Logs:
+              </span>
+              
+              <div className="flex gap-2">
+                <select
+                  value={obsLevelFilter}
+                  onChange={(e) => setObsLevelFilter(e.target.value as any)}
+                  className="bg-[#05020c] border border-purple-950/45 rounded-lg px-2.5 py-1 text-xs text-white focus:outline-none"
+                >
+                  <option value="all">Todos Níveis</option>
+                  <option value="info">INFO</option>
+                  <option value="warn">Aviso (WARN)</option>
+                  <option value="error">FALHA (Error)</option>
+                  <option value="critical">CRÍTICO</option>
+                </select>
+              </div>
+
+              <div className="flex gap-2">
+                <select
+                  value={obsCategoryFilter}
+                  onChange={(e) => setObsCategoryFilter(e.target.value as any)}
+                  className="bg-[#05020c] border border-purple-950/45 rounded-lg px-2.5 py-1 text-xs text-white focus:outline-none"
+                >
+                  <option value="all">Todas Categorias</option>
+                  <option value="auth">Autenticação (Auth)</option>
+                  <option value="gps">GPS / Telemetria</option>
+                  <option value="sync">Sincronização</option>
+                  <option value="supabase">Supabase / Database</option>
+                  <option value="admin">Administração</option>
+                  <option value="payment">Financeiro / Planos</option>
+                  <option value="demand">Motor Demanda</option>
+                  <option value="system">Sistema interno</option>
+                </select>
+              </div>
+
+              <div className="flex gap-2">
+                <select
+                  value={obsPeriodFilter}
+                  onChange={(e) => setObsPeriodFilter(e.target.value as any)}
+                  className="bg-[#05020c] border border-purple-950/45 rounded-lg px-2.5 py-1 text-xs text-white focus:outline-none"
+                >
+                  <option value="all">Qualquer período</option>
+                  <option value="24h">Últimas 24 horas</option>
+                  <option value="3d">Últimos 3 dias</option>
+                  <option value="7d">Últimos 7 dias</option>
+                </select>
+              </div>
+            </div>
+
+            {/* Split Log Columns: App Telemetry & Administrative Audits */}
+            <div className="grid grid-cols-1 lg:grid-cols-2 gap-6 text-xs">
+              
+              {/* LEFT CONTAINER: TELEMETRY & SYSTEM LOGS */}
+              <div className="bg-[#0a061b] border border-purple-950/30 rounded-3xl p-5 space-y-4">
+                <span className="text-xs font-bold uppercase tracking-wider font-mono text-purple-300 block border-b border-purple-950/30 pb-3">
+                  ⚙️ TELEMETRIA DE APLICATIVO ({obsLogs.length} logs)
+                </span>
+                
+                <div className="space-y-2.5 max-h-96 overflow-y-auto pr-1">
+                  {obsLogs.length === 0 ? (
+                    <p className="text-slate-500 italic text-center py-8">Nenhum evento telemétrico registrado localmente.</p>
+                  ) : (
+                    obsLogs
+                      .filter(l => {
+                        const matchLvl = obsLevelFilter === 'all' ? true : l.level === obsLevelFilter;
+                        const matchCat = obsCategoryFilter === 'all' ? true : l.category === obsCategoryFilter;
+                        
+                        let matchT = true;
+                        if (obsPeriodFilter === '24h') matchT = new Date(l.created_at) > new Date(Date.now() - 24 * 3600 * 1000);
+                        else if (obsPeriodFilter === '3d') matchT = new Date(l.created_at) > new Date(Date.now() - 3 * 24 * 3600 * 1000);
+                        else if (obsPeriodFilter === '7d') matchT = new Date(l.created_at) > new Date(Date.now() - 7 * 24 * 3600 * 1000);
+
+                        return matchLvl && matchCat && matchT;
+                      })
+                      .map((logItem, idx) => {
+                        const badgeColor = {
+                          info: 'bg-emerald-950/45 border-emerald-900/30 text-emerald-400',
+                          warn: 'bg-amber-950/45 border-amber-900/30 text-amber-400',
+                          error: 'bg-rose-950/45 border-rose-900/30 text-rose-400',
+                          critical: 'bg-red-950 border border-red-500 text-red-100 animate-pulse'
+                        }[logItem.level];
+
+                        return (
+                          <div key={logItem.id || idx} className="p-3 bg-[#03010b] border border-purple-950/40 rounded-xl space-y-1">
+                            <div className="flex justify-between items-center text-[10px] font-mono">
+                              <span className={`px-1.5 py-0.5 rounded border text-[9px] font-semibold uppercase ${badgeColor}`}>
+                                {logItem.level} | {logItem.category}
+                              </span>
+                              <span className="text-slate-500">{formatDate(logItem.created_at)}</span>
+                            </div>
+                            <p className="text-[11.5px] font-semibold text-slate-200">{logItem.message}</p>
+                            {logItem.metadata && Object.keys(logItem.metadata).length > 0 && (
+                              <pre className="text-[9.5px] bg-[#070314] text-purple-300 p-2 rounded border border-purple-950/25 overflow-x-auto font-mono max-h-24">
+                                {JSON.stringify(logItem.metadata, null, 2)}
+                              </pre>
+                            )}
+                          </div>
+                        );
+                      })
+                  )}
+                </div>
+              </div>
+
+              {/* RIGHT CONTAINER: ADMINISTRATIVE ACTIONS AUDITS */}
+              <div className="bg-[#0a061b] border border-purple-950/30 rounded-3xl p-5 space-y-4">
+                <span className="text-xs font-bold uppercase tracking-wider font-mono text-purple-300 block border-b border-purple-950/30 pb-3">
+                  🔑 AUDITORIAS DE SEGURANÇA E ACESSOS ({obsAudits.length} registros)
+                </span>
+
+                <div className="space-y-2.5 max-h-96 overflow-y-auto pr-1">
+                  {obsAudits.length === 0 ? (
+                    <p className="text-slate-500 italic text-center py-8">Nenhuma auditoria ou acesso monitorado ainda.</p>
+                  ) : (
+                    obsAudits.map((item, idx) => (
+                      <div key={item.id || idx} className="p-3 bg-[#03010b] border border-purple-950/40 rounded-xl space-y-1">
+                        <div className="flex justify-between items-center text-[10px] font-mono">
+                          <span className="text-slate-400">Ator: <strong className="text-purple-300">{item.actor_user_id}</strong></span>
+                          <span className="text-slate-500">{formatDate(item.created_at)}</span>
+                        </div>
+                        <p className="text-[11.5px] text-slate-200">
+                          Efetuou ação <strong className="text-fuchsia-300 font-mono uppercase">{item.action}</strong> sobre <span className="text-purple-400 font-semibold">{item.entity_type}</span> ({item.entity_id || 'N/A'})
+                        </p>
+                        {item.metadata && Object.keys(item.metadata).length > 0 && (
+                          <pre className="text-[9.5px] bg-[#070314] text-indigo-300 p-2 rounded border border-purple-950/25 overflow-x-auto font-mono max-h-24">
+                            {JSON.stringify(item.metadata, null, 2)}
+                          </pre>
+                        )}
+                      </div>
+                    ))
+                  )}
+                </div>
+              </div>
+
+            </div>
+          </motion.div>
+        )}
+
+      </AnimatePresence>
+
+    </div>
+  );
+};
+
+const dayLabels = [
+  { value: '0', label: 'D' },
+  { value: '1', label: 'S' },
+  { value: '2', label: 'T' },
+  { value: '3', label: 'Q' },
+  { value: '4', label: 'Q' },
+  { value: '5', label: 'S' },
+  { value: '6', label: 'S' }
+];
+
+const fullDayName = (day: string) => {
+  const names: Record<string, string> = {
+    '0': 'Dom',
+    '1': 'Seg',
+    '2': 'Ter',
+    '3': 'Qua',
+    '4': 'Qui',
+    '5': 'Sex',
+    '6': 'Sáb'
+  };
+  return names[day] || day;
+};

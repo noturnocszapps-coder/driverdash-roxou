@@ -1,0 +1,245 @@
+/**
+ * Authentication Hook and Context Provider
+ * Module: Authentication (auth)
+ * When to edit: When adding authentication listeners, changing session persistence, or adding demo variables.
+ */
+
+import React, { createContext, useContext, useState, useEffect } from 'react';
+import { supabase, isSupabaseConfigured } from '../../lib/supabase';
+import { STORAGE_PREFIX } from '../shared/constants';
+import { Profile, UserRole, UserPlan, AuthContextType } from './auth.types';
+import { authService } from './auth.service';
+import { auditLogger } from '../observability/auditLogger';
+
+export const AuthContext = createContext<AuthContextType | undefined>(undefined);
+
+export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children }) => {
+  const [user, setUser] = useState<any | null>(null);
+  const [profile, setProfile] = useState<Profile | null>(null);
+  const [loading, setLoading] = useState<boolean>(true);
+  const [dbStatus, setDbStatus] = useState<'connected' | 'fallback' | 'checking'>('checking');
+  const [errorMessage, setErrorMessage] = useState<string | null>(null);
+
+  // Sync / Load fallback files
+  const loadLocalDemoSession = () => {
+    setDbStatus('fallback');
+    const localUserStr = localStorage.getItem(`${STORAGE_PREFIX}user`);
+    const localProfileStr = localStorage.getItem(`${STORAGE_PREFIX}profile`);
+    
+    if (localUserStr && localProfileStr) {
+      const userObj = JSON.parse(localUserStr);
+      const profileObj = JSON.parse(localProfileStr);
+      setUser(userObj);
+      setProfile(profileObj);
+    } else {
+      setUser(null);
+      setProfile(null);
+    }
+  };
+
+  const fetchProfileAndData = async (userId: string, email: string) => {
+    try {
+      setDbStatus('checking');
+      const loadedProfile = await authService.fetchOrCreateProfile(userId, email);
+      setProfile(loadedProfile);
+      localStorage.setItem(`${STORAGE_PREFIX}profile`, JSON.stringify(loadedProfile));
+      setDbStatus('connected');
+    } catch (err: any) {
+      console.error('Database user check failed. Failing back to local offline backup profiles:', err);
+      setDbStatus('fallback');
+      loadLocalDemoSession();
+    }
+  };
+
+  // Auth Listener and Initial Check
+  useEffect(() => {
+    const initSession = async () => {
+      setLoading(true);
+      try {
+        if (!isSupabaseConfigured()) {
+          loadLocalDemoSession();
+          return;
+        }
+
+        const { data: { session }, error } = await supabase.auth.getSession();
+        if (error) throw error;
+
+        if (session) {
+          setUser(session.user);
+          await fetchProfileAndData(session.user.id, session.user.email || '');
+          setDbStatus('connected');
+        } else {
+          loadLocalDemoSession();
+        }
+      } catch (err: any) {
+        console.error('Database connection failed on init. Falling back to local demonstration rules:', err);
+        loadLocalDemoSession();
+      } finally {
+        setLoading(false);
+      }
+    };
+
+    initSession();
+
+    // Setup listener
+    if (isSupabaseConfigured()) {
+      const { data: { subscription } } = supabase.auth.onAuthStateChange(async (event, session) => {
+        if (session) {
+          setUser(session.user);
+          await fetchProfileAndData(session.user.id, session.user.email || '');
+          setDbStatus('connected');
+        } else {
+          setUser(null);
+          setProfile(null);
+          const localProfileStr = localStorage.getItem(`${STORAGE_PREFIX}profile`);
+          if (!localProfileStr) {
+            setUser(null);
+            setProfile(null);
+          }
+        }
+      });
+
+      return () => {
+        subscription.unsubscribe();
+      };
+    }
+  }, []);
+
+  const loginWithGoogle = async () => {
+    setErrorMessage(null);
+    try {
+      await authService.loginWithGoogle();
+    } catch (err: any) {
+      setErrorMessage(err.message || 'Error executing Google authentication');
+      throw err;
+    }
+  };
+
+  const loginWithEmailAndPassword = async (email: string, password: string) => {
+    setErrorMessage(null);
+    try {
+      const data = await authService.loginWithEmailAndPassword(email, password);
+      if (data.user) {
+        setUser(data.user);
+        await fetchProfileAndData(data.user.id, data.user.email || '');
+        auditLogger.logAuthAction('login', email);
+      }
+    } catch (err: any) {
+      const reason = err.message || 'Invalid email or password';
+      setErrorMessage(reason);
+      auditLogger.logAuthAction('login_failed', email, reason);
+      throw err;
+    }
+  };
+
+  const localDemoLogin = (role: UserRole) => {
+    setErrorMessage(null);
+    setDbStatus('fallback');
+    const mockId = role === 'admin' ? 'demo-admin-uuid-1234' : 'demo-driver-uuid-5678';
+    const mockEmail = role === 'admin' ? 'admin@driverdash.com' : 'motorista@driverdash.com';
+    const mockName = role === 'admin' ? 'Administrador Roxou' : 'Motorista Roxou';
+    
+    const mockUserObj = {
+      id: mockId,
+      email: mockEmail,
+      user_metadata: { full_name: mockName },
+    };
+
+    const mockProfileObj: Profile = {
+      id: mockId,
+      name: mockName,
+      email: mockEmail,
+      avatar_url: 'https://images.unsplash.com/photo-1534528741775-53994a69daeb?auto=format&fit=crop&q=80&w=200',
+      role: role,
+      plan: role === 'admin' ? 'pro_plus' : 'free',
+      beta_tester: true, // Auto enable for demo testers
+      created_at: new Date().toISOString(),
+    };
+
+    localStorage.setItem(`${STORAGE_PREFIX}user`, JSON.stringify(mockUserObj));
+    localStorage.setItem(`${STORAGE_PREFIX}profile`, JSON.stringify(mockProfileObj));
+
+    setUser(mockUserObj);
+    setProfile(mockProfileObj);
+    auditLogger.logAuthAction('login', mockEmail);
+  };
+
+  const logout = async () => {
+    const userEmail = profile?.email || 'unknown';
+    try {
+      await authService.logout();
+    } catch (e) {
+      console.warn('Supabase logout error:', e);
+    }
+    localStorage.removeItem(`${STORAGE_PREFIX}user`);
+    localStorage.removeItem(`${STORAGE_PREFIX}profile`);
+    setUser(null);
+    setProfile(null);
+    auditLogger.logAuthAction('logout', userEmail);
+  };
+
+  const completeOnboarding = async () => {
+    if (!profile) return;
+    try {
+      await authService.completeOnboarding(profile.id);
+    } catch (e) {
+      console.error(e);
+    }
+    const updatedProfile = { ...profile, onboarding_completed: true };
+    setProfile(updatedProfile);
+    localStorage.setItem(`${STORAGE_PREFIX}profile`, JSON.stringify(updatedProfile));
+  };
+
+  const setProfileState = (prof: Profile | null | ((prev: Profile | null) => Profile | null)) => {
+    setProfile(prof);
+  };
+
+  const updateProfilePlanLocal = (userId: string, plan: UserPlan) => {
+    if (profile && profile.id === userId) {
+      const updated = { ...profile, plan };
+      setProfile(updated);
+      localStorage.setItem(`${STORAGE_PREFIX}profile`, JSON.stringify(updated));
+    }
+  };
+
+  const updateProfileRoleLocal = (userId: string, role: UserRole) => {
+    if (profile && profile.id === userId) {
+      const updated = { ...profile, role };
+      setProfile(updated);
+      localStorage.setItem(`${STORAGE_PREFIX}profile`, JSON.stringify(updated));
+    }
+  };
+
+  return (
+    <AuthContext.Provider
+      value={{
+        user,
+        profile,
+        loading,
+        dbStatus,
+        errorMessage,
+        loginWithGoogle,
+        loginWithEmailAndPassword,
+        localDemoLogin,
+        logout,
+        completeOnboarding,
+        setProfileState,
+        updateProfilePlanLocal,
+        updateProfileRoleLocal,
+        setDbStatusState: setDbStatus,
+      }}
+    >
+      {children}
+    </AuthContext.Provider>
+  );
+};
+
+export const useAuth = () => {
+  const context = useContext(AuthContext);
+  if (context === undefined) {
+    throw new Error('useAuth must be used inside an AuthProvider');
+  }
+  return context;
+};
+export { authService };
+export type { UserPlan, UserRole };
