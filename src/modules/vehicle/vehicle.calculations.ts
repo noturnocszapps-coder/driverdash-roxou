@@ -20,9 +20,16 @@ export const calculateCostPerKmEstimate = (
   const fuelPrice = costSettings?.fuel_price || 0;
   const fuelCostPerKm = kmPerLiter > 0 ? fuelPrice / kmPerLiter : 0;
 
+  // If vehicle is rented, preventive maintenance (tires, oil, brakes) is not included
+  if (vehicle.ownership_type === 'rented') {
+    const monthlyFixed = calculateMonthlyFixedCost(vehicle, costSettings);
+    const fixedCostPerKm = monthlyFixed > 0 ? (monthlyFixed / 4.33) / 1000 : 0;
+    return fuelCostPerKm + fixedCostPerKm;
+  }
+
   if (!costSettings) return fuelCostPerKm;
 
-  // 2. Amortization and components per KM
+  // 2. Amortization and components per KM (for non-rented)
   const tireCostPerKm = costSettings.tire_lifespan_km > 0 ? costSettings.tire_cost / costSettings.tire_lifespan_km : 0;
   const oilCostPerKm = costSettings.oil_change_interval_km > 0 ? costSettings.oil_change_cost / costSettings.oil_change_interval_km : 0;
   const brakeCostPerKm = costSettings.brake_interval_km > 0 ? costSettings.brake_cost / costSettings.brake_interval_km : 0;
@@ -46,7 +53,13 @@ export const calculateMonthlyFixedCost = (
   if (vehicle.ownership_type === 'rented') {
     const amount = vehicle.rental_amount || 0;
     const period = vehicle.rental_period || 'weekly';
-    return period === 'weekly' ? amount * 4.33 : amount;
+    const baseRentalMonthly = period === 'weekly' ? amount * 4.33 : amount;
+
+    const foodMonthly = (vehicle.rental_food_daily || 0) * 30;
+    const damageMonthly = vehicle.rental_damage_monthly || 0;
+    const cleaningMonthly = vehicle.rental_cleaning_monthly || 0;
+
+    return baseRentalMonthly + foodMonthly + damageMonthly + cleaningMonthly;
   }
 
   const insuranceMonthly = costSettings ? (costSettings.insurance_yearly || 0) / 12 : 0;

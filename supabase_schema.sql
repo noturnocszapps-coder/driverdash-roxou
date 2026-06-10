@@ -517,6 +517,9 @@ CREATE INDEX IF NOT EXISTS idx_health_snapshots_created ON public.system_health_
 -- Alter table dynamic additions for rented vehicles
 ALTER TABLE IF EXISTS public.vehicles ADD COLUMN IF NOT EXISTS rental_amount NUMERIC DEFAULT 0;
 ALTER TABLE IF EXISTS public.vehicles ADD COLUMN IF NOT EXISTS rental_period TEXT CHECK (rental_period IN ('weekly', 'monthly')) DEFAULT 'weekly';
+ALTER TABLE IF EXISTS public.vehicles ADD COLUMN IF NOT EXISTS rental_food_daily NUMERIC DEFAULT 0;
+ALTER TABLE IF EXISTS public.vehicles ADD COLUMN IF NOT EXISTS rental_damage_monthly NUMERIC DEFAULT 0;
+ALTER TABLE IF EXISTS public.vehicles ADD COLUMN IF NOT EXISTS rental_cleaning_monthly NUMERIC DEFAULT 0;
 
 -- Alter table dynamic additions for financed/own vehicle support inside cost settings
 ALTER TABLE IF EXISTS public.vehicle_cost_settings ADD COLUMN IF NOT EXISTS financing_monthly NUMERIC DEFAULT 0;

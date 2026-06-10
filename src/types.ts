@@ -31,6 +31,9 @@ export interface Vehicle {
   monthly_km_limit?: number;
   rental_amount?: number;
   rental_period?: 'weekly' | 'monthly';
+  rental_food_daily?: number;
+  rental_damage_monthly?: number;
+  rental_cleaning_monthly?: number;
   created_at?: string;
 }
 

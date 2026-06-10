@@ -31,6 +31,9 @@ export const VehiclePage: React.FC = () => {
   // Rented specific states
   const [rentalAmount, setRentalAmount] = useState('');
   const [rentalPeriod, setRentalPeriod] = useState<'weekly' | 'monthly'>('weekly');
+  const [rentalFoodDaily, setRentalFoodDaily] = useState('');
+  const [rentalDamageMonthly, setRentalDamageMonthly] = useState('');
+  const [rentalCleaningMonthly, setRentalCleaningMonthly] = useState('');
 
   // Own / Financed specific states
   const [financingMonthly, setFinancingMonthly] = useState('');
@@ -65,6 +68,9 @@ export const VehiclePage: React.FC = () => {
       setMonthlyKmLimit(vehicle.monthly_km_limit?.toString() || '');
       setRentalAmount(vehicle.rental_amount?.toString() || '');
       setRentalPeriod(vehicle.rental_period || 'weekly');
+      setRentalFoodDaily(vehicle.rental_food_daily?.toString() || '');
+      setRentalDamageMonthly(vehicle.rental_damage_monthly?.toString() || '');
+      setRentalCleaningMonthly(vehicle.rental_cleaning_monthly?.toString() || '');
     }
   }, [vehicle]);
 
@@ -117,7 +123,10 @@ export const VehiclePage: React.FC = () => {
         weekly_km_limit: weeklyKmLimit ? Number(weeklyKmLimit) : undefined,
         monthly_km_limit: monthlyKmLimit ? Number(monthlyKmLimit) : undefined,
         rental_amount: rentalAmount ? Number(rentalAmount) : 0,
-        rental_period: rentalPeriod
+        rental_period: rentalPeriod,
+        rental_food_daily: rentalFoodDaily ? Number(rentalFoodDaily) : 0,
+        rental_damage_monthly: rentalDamageMonthly ? Number(rentalDamageMonthly) : 0,
+        rental_cleaning_monthly: rentalCleaningMonthly ? Number(rentalCleaningMonthly) : 0
       });
 
       // 2. Upsert Cost Settings
@@ -170,7 +179,10 @@ export const VehiclePage: React.FC = () => {
     km_per_liter: Number(kmPerLiter) || 10,
     ownership_type: ownershipType,
     rental_amount: rentalAmount ? Number(rentalAmount) : 0,
-    rental_period: rentalPeriod as 'weekly' | 'monthly'
+    rental_period: rentalPeriod as 'weekly' | 'monthly',
+    rental_food_daily: rentalFoodDaily ? Number(rentalFoodDaily) : 0,
+    rental_damage_monthly: rentalDamageMonthly ? Number(rentalDamageMonthly) : 0,
+    rental_cleaning_monthly: rentalCleaningMonthly ? Number(rentalCleaningMonthly) : 0
   };
 
   const tempCostSettings: VehicleCostSettings = {
@@ -403,6 +415,58 @@ export const VehiclePage: React.FC = () => {
                       placeholder="Ex: 4668"
                       className="w-full bg-[#04010a] border border-purple-950/50 rounded-xl p-2.5 text-slate-100 font-mono"
                     />
+                  </div>
+                </div>
+
+                <div className="border-t border-purple-950/20 pt-4 mt-3">
+                  <h5 className="text-[11px] font-bold text-purple-400 font-mono uppercase tracking-wider mb-3 select-none">
+                    Custos Opcionais / Operacionais
+                  </h5>
+                  <div className="grid grid-cols-1 sm:grid-cols-3 gap-4">
+                    <div>
+                      <label className="block text-[11px] text-slate-400 mb-1">Alimentação Diária</label>
+                      <div className="relative">
+                        <span className="absolute inset-y-0 left-3 flex items-center text-slate-500 font-mono">R$</span>
+                        <input 
+                          type="number" 
+                          value={rentalFoodDaily} 
+                          onChange={(e) => setRentalFoodDaily(e.target.value)}
+                          placeholder="Ex: 35"
+                          className="w-full bg-[#04010a] border border-purple-950/50 rounded-xl py-2 pl-8 pr-3 text-slate-100 font-mono text-xs"
+                        />
+                      </div>
+                      <p className="text-[9px] text-purple-300/40 mt-1">Rateio mensal: R$ {(Number(rentalFoodDaily) || 0) * 30}</p>
+                    </div>
+
+                    <div>
+                      <label className="block text-[11px] text-slate-400 mb-1">Fundo de Avarias Mensal</label>
+                      <div className="relative">
+                        <span className="absolute inset-y-0 left-3 flex items-center text-slate-500 font-mono">R$</span>
+                        <input 
+                          type="number" 
+                          value={rentalDamageMonthly} 
+                          onChange={(e) => setRentalDamageMonthly(e.target.value)}
+                          placeholder="Ex: 150"
+                          className="w-full bg-[#04010a] border border-purple-950/50 rounded-xl py-2 pl-8 pr-3 text-slate-100 font-mono text-xs"
+                        />
+                      </div>
+                      <p className="text-[9px] text-purple-300/40 mt-1">Saldos de risco ou seguro coparticipativo</p>
+                    </div>
+
+                    <div>
+                      <label className="block text-[11px] text-slate-400 mb-1">Limpeza/Lavação Mensal</label>
+                      <div className="relative">
+                        <span className="absolute inset-y-0 left-3 flex items-center text-slate-500 font-mono">R$</span>
+                        <input 
+                          type="number" 
+                          value={rentalCleaningMonthly} 
+                          onChange={(e) => setRentalCleaningMonthly(e.target.value)}
+                          placeholder="Ex: 120"
+                          className="w-full bg-[#04010a] border border-purple-950/50 rounded-xl py-2 pl-8 pr-3 text-slate-100 font-mono text-xs"
+                        />
+                      </div>
+                      <p className="text-[9px] text-purple-300/40 mt-1">Ducha e aspiração regular</p>
+                    </div>
                   </div>
                 </div>
               </motion.div>
@@ -640,6 +704,24 @@ export const VehiclePage: React.FC = () => {
                       <span className="text-slate-400">Mensalidade Equivalente:</span>
                       <span className="font-semibold text-white font-mono">{formatBRL(rentalPeriod === 'weekly' ? Number(rentalAmount) * 4.33 : Number(rentalAmount))}</span>
                     </div>
+                    {Number(rentalFoodDaily) > 0 && (
+                      <div className="flex items-center justify-between text-xs border-b border-purple-950/15 pb-2">
+                        <span className="text-slate-400">Alimentação (Mensal):</span>
+                        <span className="font-semibold text-white font-mono">{formatBRL(Number(rentalFoodDaily) * 30)}</span>
+                      </div>
+                    )}
+                    {Number(rentalDamageMonthly) > 0 && (
+                      <div className="flex items-center justify-between text-xs border-b border-purple-950/15 pb-2">
+                        <span className="text-slate-400">Fundo de Avarias:</span>
+                        <span className="font-semibold text-white font-mono">{formatBRL(Number(rentalDamageMonthly))}</span>
+                      </div>
+                    )}
+                    {Number(rentalCleaningMonthly) > 0 && (
+                      <div className="flex items-center justify-between text-xs border-b border-purple-950/15 pb-2">
+                        <span className="text-slate-400">Limpeza e Higienização:</span>
+                        <span className="font-semibold text-white font-mono">{formatBRL(Number(rentalCleaningMonthly))}</span>
+                      </div>
+                    )}
                     {weeklyKmLimit && (
                       <div className="flex items-center justify-between text-xs border-b border-purple-950/15 pb-2">
                         <span className="text-slate-400">Franquia Semanal:</span>
