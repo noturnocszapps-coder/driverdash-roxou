@@ -58,14 +58,18 @@ export const VehicleProvider: React.FC<{ children: React.ReactNode }> = ({ child
     const item: Vehicle = {
       ...vehicleData,
       user_id: user.id,
-      created_at: new Date().toISOString()
+      created_at: vehicle?.created_at || new Date().toISOString()
     };
+    if (vehicle?.id) {
+      item.id = vehicle.id;
+    }
 
     if (dbStatus === 'connected') {
       try {
         await vehicleService.upsertVehicle(item);
       } catch (err) {
-        console.error('Remote save vehicle missed. Storing locally.', err);
+        console.error('Remote save vehicle missed.', err);
+        throw err;
       }
     }
 
@@ -90,7 +94,8 @@ export const VehicleProvider: React.FC<{ children: React.ReactNode }> = ({ child
         localStorage.setItem(`${STORAGE_PREFIX}costs_${user.id}`, JSON.stringify(saved));
         return;
       } catch (err) {
-        console.error('Remote save cost settings missed. Storing locally.', err);
+        console.error('Remote save cost settings missed.', err);
+        throw err;
       }
     }
 

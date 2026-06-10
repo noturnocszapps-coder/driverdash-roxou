@@ -510,6 +510,19 @@ CREATE INDEX IF NOT EXISTS idx_audit_logs_created ON public.audit_logs (created_
 CREATE INDEX IF NOT EXISTS idx_health_snapshots_created ON public.system_health_snapshots (created_at DESC);
 
 
+-- ==========================================
+-- 10. FASE 5.3 - ALTERAÇÕES DE TABELAS (VEÍCULO)
+-- ==========================================
+
+-- Alter table dynamic additions for rented vehicles
+ALTER TABLE IF EXISTS public.vehicles ADD COLUMN IF NOT EXISTS rental_amount NUMERIC DEFAULT 0;
+ALTER TABLE IF EXISTS public.vehicles ADD COLUMN IF NOT EXISTS rental_period TEXT CHECK (rental_period IN ('weekly', 'monthly')) DEFAULT 'weekly';
+
+-- Alter table dynamic additions for financed/own vehicle support inside cost settings
+ALTER TABLE IF EXISTS public.vehicle_cost_settings ADD COLUMN IF NOT EXISTS financing_monthly NUMERIC DEFAULT 0;
+ALTER TABLE IF EXISTS public.vehicle_cost_settings ADD COLUMN IF NOT EXISTS maintenance_monthly NUMERIC DEFAULT 0;
+
+
 
 
 

@@ -29,6 +29,8 @@ export interface Vehicle {
   ownership_type: OwnershipType;
   weekly_km_limit?: number;
   monthly_km_limit?: number;
+  rental_amount?: number;
+  rental_period?: 'weekly' | 'monthly';
   created_at?: string;
 }
 
@@ -149,6 +151,8 @@ export interface VehicleCostSettings {
   ipva_yearly: number;
   licensing_yearly: number;
   emergency_reserve_monthly: number;
+  financing_monthly?: number;
+  maintenance_monthly?: number;
   created_at?: string;
 }
 
