@@ -52,6 +52,10 @@ export interface Earning {
   waiting_minutes: number;
   rides_count: number;
   notes?: string;
+  entry_mode?: 'single_ride' | 'shift_close';
+  shift_period?: 'morning' | 'afternoon' | 'night' | 'dawn' | 'full_day' | null;
+  closure_reported_gross_amount?: number;
+  closure_deducted_single_rides_amount?: number;
   created_at?: string;
 }
 

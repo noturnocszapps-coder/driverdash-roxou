@@ -31,6 +31,8 @@ export const FinancePage: React.FC = () => {
   const [earnWaitingMin, setEarnWaitingMin] = useState('');
   const [earnRides, setEarnRides] = useState('');
   const [earnNotes, setEarnNotes] = useState('');
+  const [earnEntryMode, setEarnEntryMode] = useState<'single_ride' | 'shift_close'>('single_ride');
+  const [earnShiftPeriod, setEarnShiftPeriod] = useState<'morning' | 'afternoon' | 'night' | 'dawn' | 'full_day' | null>('full_day');
   const [earnSuccess, setEarnSuccess] = useState(false);
 
   // Expense form state
@@ -88,6 +90,33 @@ export const FinancePage: React.FC = () => {
     return new Intl.NumberFormat('pt-BR', { style: 'currency', currency: 'BRL' }).format(val);
   };
 
+  const reconciliationData = React.useMemo(() => {
+    if (earnEntryMode !== 'shift_close') return null;
+
+    const gross = Number(earnGross) || 0;
+    const matchPeriod = (!earnShiftPeriod || earnShiftPeriod === 'full_day') ? 'full_day' : earnShiftPeriod;
+    
+    const singleRides = earnings.filter(e => {
+      if (e.date !== earnDate || e.platform !== earnPlatform) return false;
+      
+      const mode = e.entry_mode || 'single_ride';
+      if (mode !== 'single_ride') return false;
+      
+      const itemPeriod = (!e.shift_period || e.shift_period === 'full_day') ? 'full_day' : e.shift_period;
+      return itemPeriod === matchPeriod;
+    });
+
+    const individualTotal = singleRides.reduce((sum, e) => sum + Number(e.gross_amount), 0);
+    const netClosureAmount = gross - individualTotal;
+
+    return {
+      gross,
+      individualTotal,
+      netClosureAmount,
+      hasIndividualRides: individualTotal > 0
+    };
+  }, [earnEntryMode, earnGross, earnDate, earnPlatform, earnShiftPeriod, earnings]);
+
   const handleAddEarning = async (e: React.FormEvent) => {
     e.preventDefault();
     setEarnError(null);
@@ -140,18 +169,53 @@ export const FinancePage: React.FC = () => {
       return;
     }
 
+    // Shift close deduction and validation calculations
+    let finalGross = gross;
+    let closureReportedGross = 0;
+    let closureDeductedSingleRides = 0;
+
+    if (earnEntryMode === 'shift_close') {
+      const matchPeriod = (!earnShiftPeriod || earnShiftPeriod === 'full_day') ? 'full_day' : earnShiftPeriod;
+      
+      const singleRides = earnings.filter(e => {
+        if (e.date !== earnDate || e.platform !== earnPlatform) return false;
+        
+        const mode = e.entry_mode || 'single_ride';
+        if (mode !== 'single_ride') return false;
+        
+        const itemPeriod = (!e.shift_period || e.shift_period === 'full_day') ? 'full_day' : e.shift_period;
+        return itemPeriod === matchPeriod;
+      });
+
+      const individualTotal = singleRides.reduce((sum, e) => sum + Number(e.gross_amount), 0);
+      const netClosureAmount = gross - individualTotal;
+
+      if (netClosureAmount < 0) {
+        setEarnError('O total das corridas individuais já lançadas é maior que o valor informado no fechamento.');
+        return;
+      }
+
+      finalGross = netClosureAmount;
+      closureReportedGross = gross;
+      closureDeductedSingleRides = individualTotal;
+    }
+
     try {
       await addEarning({
         date: earnDate,
         platform: earnPlatform,
-        gross_amount: gross,
+        gross_amount: finalGross,
         total_km: tKm,
         passenger_km: pKm,
         empty_km: eKm,
         online_minutes: onlineMin,
         waiting_minutes: waitingMin,
         rides_count: rides,
-        notes: earnNotes
+        notes: earnNotes,
+        entry_mode: earnEntryMode,
+        shift_period: earnShiftPeriod,
+        closure_reported_gross_amount: closureReportedGross,
+        closure_deducted_single_rides_amount: closureDeductedSingleRides
       });
 
       // Clear Form Fields
@@ -163,6 +227,8 @@ export const FinancePage: React.FC = () => {
       setEarnWaitingMin('');
       setEarnRides('');
       setEarnNotes('');
+      setEarnEntryMode('single_ride');
+      setEarnShiftPeriod('full_day');
       
       setEarnSuccess(true);
       setTimeout(() => setEarnSuccess(false), 3000);
@@ -318,6 +384,34 @@ export const FinancePage: React.FC = () => {
               )}
 
               <form onSubmit={handleAddEarning} className="space-y-4 text-xs">
+                <div className="grid grid-cols-2 gap-3 pb-2 border-b border-purple-950/20">
+                  <div>
+                    <label className="block text-slate-400 mb-1">Modo de Lançamento</label>
+                    <select
+                      value={earnEntryMode}
+                      onChange={(e) => setEarnEntryMode(e.target.value as 'single_ride' | 'shift_close')}
+                      className="w-full bg-[#04010a] border border-purple-950/50 rounded-xl p-2.5 text-slate-100 focus:outline-none focus:border-purple-600 cursor-pointer"
+                    >
+                      <option value="single_ride">Corrida Individual</option>
+                      <option value="shift_close">Fechamento de Turno/Dia</option>
+                    </select>
+                  </div>
+                  <div>
+                    <label className="block text-slate-400 mb-1">Período / Turno</label>
+                    <select
+                      value={earnShiftPeriod || 'full_day'}
+                      onChange={(e) => setEarnShiftPeriod(e.target.value === 'full_day' ? 'full_day' : e.target.value as any)}
+                      className="w-full bg-[#04010a] border border-purple-950/50 rounded-xl p-2.5 text-slate-100 focus:outline-none focus:border-purple-600 cursor-pointer"
+                    >
+                      <option value="full_day">Dia Inteiro / Geral</option>
+                      <option value="morning">Manhã</option>
+                      <option value="afternoon">Tarde</option>
+                      <option value="night">Noite</option>
+                      <option value="dawn">Madrugada</option>
+                    </select>
+                  </div>
+                </div>
+
                 <div className="grid grid-cols-2 gap-3">
                   <div>
                     <label className="block text-slate-400 mb-1">Data</label>
@@ -440,9 +534,54 @@ export const FinancePage: React.FC = () => {
                   />
                 </div>
 
+                {reconciliationData && (
+                  <div className="p-4 bg-purple-950/20 border border-purple-900/30 rounded-xl space-y-3 animate-fadeIn text-xs">
+                    <div className="flex items-center gap-2 text-purple-300 font-bold border-b border-purple-900/10 pb-2">
+                      <Layers className="w-4 h-4 text-purple-400" />
+                      <span>Resumo do Fechamento</span>
+                    </div>
+
+                    <div className="space-y-1.5 font-mono text-slate-300">
+                      <div className="flex justify-between">
+                        <span>Valor informado pelo motorista:</span>
+                        <span className="font-semibold text-white">{formatCurrency(reconciliationData.gross)}</span>
+                      </div>
+                      <div className="flex justify-between text-yellow-400/95">
+                        <span>Corridas avulsas neste período:</span>
+                        <span>-{formatCurrency(reconciliationData.individualTotal)}</span>
+                      </div>
+                      <div className="flex justify-between border-t border-purple-950/30 pt-1.5 text-emerald-400 font-semibold">
+                        <span>Valor registrado no fechamento:</span>
+                        <span>{formatCurrency(Math.max(0, reconciliationData.netClosureAmount))}</span>
+                      </div>
+                      <div className="flex justify-between text-indigo-300 text-[10px] pt-1">
+                        <span>Total final do período:</span>
+                        <span className="font-semibold">{formatCurrency(reconciliationData.gross)}</span>
+                      </div>
+                    </div>
+
+                    {reconciliationData.hasIndividualRides && (
+                      <p className="text-[10px] text-purple-300/60 leading-relaxed bg-[#05020c] p-2 rounded-lg border border-purple-950/40">
+                        "Detectamos corridas individuais já lançadas para este mesmo aplicativo, data e período. Para evitar duplicidade, vamos descontar esses valores do fechamento."
+                      </p>
+                    )}
+
+                    {reconciliationData.netClosureAmount < 0 && (
+                      <div className="p-2.5 bg-rose-950/60 border border-rose-900/40 text-rose-300 font-semibold text-[10px] rounded-lg">
+                        ⚠️ O total das corridas individuais já lançadas é maior que o valor informado no fechamento.
+                      </div>
+                    )}
+                  </div>
+                )}
+
                 <button
                   type="submit"
-                  className="w-full font-semibold py-3 px-4 bg-gradient-to-r from-emerald-600 to-teal-500 hover:from-emerald-500 hover:to-teal-400 text-white rounded-xl transition-all cursor-pointer shadow-[0_4px_15px_rgba(16,185,129,0.25)]"
+                  disabled={reconciliationData !== null && reconciliationData.netClosureAmount < 0}
+                  className={`w-full font-semibold py-3 px-4 rounded-xl transition-all cursor-pointer shadow-[0_4px_15px_rgba(16,185,129,0.25)] ${
+                    reconciliationData !== null && reconciliationData.netClosureAmount < 0
+                      ? 'bg-slate-800 text-slate-500 cursor-not-allowed border border-slate-700 shadow-none'
+                      : 'bg-gradient-to-r from-emerald-600 to-teal-500 hover:from-emerald-500 hover:to-teal-400 text-white'
+                  }`}
                 >
                   Confirmar Ganho
                 </button>
@@ -762,8 +901,30 @@ export const FinancePage: React.FC = () => {
                           {earnings.map((e, idx) => (
                             <tr key={e.id || idx} className="hover:bg-purple-950/5">
                               <td className="py-3 px-2 font-mono text-white">{new Date(e.date + 'T00:00:00').toLocaleDateString('pt-BR')}</td>
-                              <td className="py-3 px-2 capitalize font-semibold text-purple-300">{e.platform}</td>
-                              <td className="py-3 px-2 text-emerald-400 font-bold">{formatCurrency(e.gross_amount)}</td>
+                              <td className="py-3 px-2 capitalize font-semibold text-purple-300">
+                                <div>{e.platform}</div>
+                                {e.entry_mode === 'shift_close' ? (
+                                  <span className="text-[9px] text-yellow-400/90 font-mono">
+                                    Fechamento ({e.shift_period === 'morning' ? 'Manhã' : e.shift_period === 'afternoon' ? 'Tarde' : e.shift_period === 'night' ? 'Noite' : e.shift_period === 'dawn' ? 'Madrugada' : 'Dia Inteiro'})
+                                  </span>
+                                ) : (
+                                  <span className="text-[9px] text-slate-500 font-mono">
+                                    Corrida Individual {e.shift_period && e.shift_period !== 'full_day' && `(${e.shift_period === 'morning' ? 'Manhã' : e.shift_period === 'afternoon' ? 'Tarde' : e.shift_period === 'night' ? 'Noite' : e.shift_period === 'dawn' ? 'Madrugada' : 'Dia Inteiro'})`}
+                                  </span>
+                                )}
+                              </td>
+                              <td className="py-3 px-2 text-emerald-400 font-bold">
+                                <div>{formatCurrency(e.gross_amount)}</div>
+                                {e.entry_mode === 'shift_close' && e.closure_reported_gross_amount && Number(e.closure_reported_gross_amount) > 0 ? (
+                                  <div className="text-[9px] text-slate-400 font-normal mt-0.5 space-y-px leading-tight">
+                                    <div>Fechamento informado: {formatCurrency(Number(e.closure_reported_gross_amount))}</div>
+                                    {Number(e.closure_deducted_single_rides_amount) > 0 && (
+                                      <div className="text-amber-400/80">Corridas avulsas abatidas: -{formatCurrency(Number(e.closure_deducted_single_rides_amount))}</div>
+                                    )}
+                                    <div className="text-emerald-500/80 font-semibold">Registrado no fechamento: {formatCurrency(e.gross_amount)}</div>
+                                  </div>
+                                ) : null}
+                              </td>
                               <td className="py-3 px-2 font-mono text-slate-300">{e.total_km} km</td>
                               <td className="py-3 px-2 font-mono text-slate-300">{e.rides_count}</td>
                               <td className="py-3 px-2 text-right">

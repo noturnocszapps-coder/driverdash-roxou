@@ -47,6 +47,10 @@ CREATE TABLE IF NOT EXISTS public.earnings (
     waiting_minutes INTEGER NOT NULL DEFAULT 0,
     rides_count INTEGER NOT NULL DEFAULT 0,
     notes TEXT,
+    entry_mode TEXT CHECK (entry_mode IN ('single_ride', 'shift_close')) DEFAULT 'single_ride'::TEXT NOT NULL,
+    shift_period TEXT CHECK (shift_period IN ('morning', 'afternoon', 'night', 'dawn', 'full_day')),
+    closure_reported_gross_amount NUMERIC DEFAULT 0.0,
+    closure_deducted_single_rides_amount NUMERIC DEFAULT 0.0,
     created_at TIMESTAMP WITH TIME ZONE DEFAULT TIMEZONE('utc'::TEXT, NOW()) NOT NULL
 );
 
@@ -524,6 +528,12 @@ ALTER TABLE IF EXISTS public.vehicles ADD COLUMN IF NOT EXISTS rental_cleaning_m
 -- Alter table dynamic additions for financed/own vehicle support inside cost settings
 ALTER TABLE IF EXISTS public.vehicle_cost_settings ADD COLUMN IF NOT EXISTS financing_monthly NUMERIC DEFAULT 0;
 ALTER TABLE IF EXISTS public.vehicle_cost_settings ADD COLUMN IF NOT EXISTS maintenance_monthly NUMERIC DEFAULT 0;
+
+-- Alter table dynamic additions for earnings closing and entry mode logic
+ALTER TABLE IF EXISTS public.earnings ADD COLUMN IF NOT EXISTS entry_mode TEXT CHECK (entry_mode IN ('single_ride', 'shift_close')) DEFAULT 'single_ride';
+ALTER TABLE IF EXISTS public.earnings ADD COLUMN IF NOT EXISTS shift_period TEXT CHECK (shift_period IN ('morning', 'afternoon', 'night', 'dawn', 'full_day'));
+ALTER TABLE IF EXISTS public.earnings ADD COLUMN IF NOT EXISTS closure_reported_gross_amount NUMERIC DEFAULT 0;
+ALTER TABLE IF EXISTS public.earnings ADD COLUMN IF NOT EXISTS closure_deducted_single_rides_amount NUMERIC DEFAULT 0;
 
 
 
