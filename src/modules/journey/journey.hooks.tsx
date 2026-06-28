@@ -11,6 +11,8 @@ import { DriverSession, RoutePoint, JourneyContextType, GpsTestResult } from './
 import { journeyService } from './journey.service';
 import { trackingSync } from '../tracking/tracking.sync';
 import { auditLogger } from '../observability/auditLogger';
+import { telemetrySyncService } from './telemetrySync.service';
+import { calculateHaversineDistanceMeters } from './utils/calculateDistance';
 
 export const JourneyContext = createContext<JourneyContextType | undefined>(undefined);
 
@@ -29,6 +31,22 @@ export const JourneyProvider: React.FC<{ children: React.ReactNode }> = ({ child
   const [routePoints, setRoutePoints] = useState<RoutePoint[]>([]);
   const [unsyncedPointsCount, setUnsyncedPointsCount] = useState<number>(0);
 
+  // Telemetry Sync States
+  const [pendingPointsCount, setPendingPointsCount] = useState<number>(0);
+  const [syncedPointsCount, setSyncedPointsCount] = useState<number>(0);
+  const [failedPointsCount, setFailedPointsCount] = useState<number>(0);
+  const [lastSyncTime, setLastSyncTime] = useState<string | null>(null);
+  const [lastSyncError, setLastSyncError] = useState<string | null>(null);
+  const [syncStatus, setSyncStatus] = useState<'sincronizando' | 'sincronizado' | 'aguardando internet' | 'erro' | 'ocioso'>('ocioso');
+
+  // Distance Engine States
+  const [totalDistanceMeters, setTotalDistanceMeters] = useState<number>(0);
+  const totalDistanceKm = Number((totalDistanceMeters / 1000).toFixed(2));
+  const [lastAddedDistanceMeters, setLastAddedDistanceMeters] = useState<number>(0);
+  const [currentAccuracy, setCurrentAccuracy] = useState<number | null>(null);
+  const [discardedPointsCount, setDiscardedPointsCount] = useState<number>(0);
+  const [lastDiscardReason, setLastDiscardReason] = useState<string | null>(null);
+
   // GPS Engine States
   const [gpsStatus, setGpsStatus] = useState<'Aguardando permissão' | 'Solicitando primeira posição' | 'GPS ativo' | 'GPS sem sinal' | 'GPS erro' | 'GPS negado' | 'Sensor inativo'>('Sensor inativo');
   const [permissionState, setPermissionState] = useState<'granted' | 'prompt' | 'denied' | 'unknown'>('unknown');
@@ -42,7 +60,30 @@ export const JourneyProvider: React.FC<{ children: React.ReactNode }> = ({ child
   const recoveryTimeoutRef = useRef<any>(null);
 
   useEffect(() => {
-    setUnsyncedPointsCount(trackingSync.getUnsyncedPoints().length);
+    const updateLocalSyncStates = () => {
+      const points = telemetrySyncService.getPoints();
+      const stats = telemetrySyncService.getStats();
+      
+      const pending = points.filter(p => p.status === 'pending').length;
+      const synced = points.filter(p => p.status === 'synced').length;
+      const failed = points.filter(p => p.status === 'failed').length;
+      
+      setPendingPointsCount(pending);
+      setSyncedPointsCount(synced);
+      setFailedPointsCount(failed);
+      setUnsyncedPointsCount(pending + failed);
+      
+      setLastSyncTime(stats.lastSyncTime);
+      setLastSyncError(stats.lastSyncError);
+      setSyncStatus(stats.syncStatus);
+    };
+
+    updateLocalSyncStates();
+
+    const unsubscribe = telemetrySyncService.subscribe(updateLocalSyncStates);
+    return () => {
+      unsubscribe();
+    };
   }, []);
 
   useEffect(() => {
@@ -84,9 +125,8 @@ export const JourneyProvider: React.FC<{ children: React.ReactNode }> = ({ child
   }, [user, dbStatus]);
 
   const syncOfflineQueue = async (): Promise<number> => {
-    const isConnected = dbStatus === 'connected';
-    const count = await trackingSync.flushUnsyncedPoints(isConnected);
-    setUnsyncedPointsCount(trackingSync.getUnsyncedPoints().length);
+    if (dbStatus !== 'connected') return 0;
+    const count = await telemetrySyncService.sync();
     return count;
   };
 
@@ -99,10 +139,13 @@ export const JourneyProvider: React.FC<{ children: React.ReactNode }> = ({ child
     window.addEventListener('online', handleOnline);
 
     const interval = setInterval(() => {
-      if (navigator.onLine) {
+      // Executar a cada 10 segundos se houver jornada ativa
+      const hasActiveSession = activeSessionRef.current !== null;
+      if (hasActiveSession && navigator.onLine) {
+        console.log("[TelemetrySync] Periodic 10s automatic sync check...");
         syncOfflineQueue();
       }
-    }, 15000); // Poll more frequently (15s) in background dev server
+    }, 10000); // Executar a cada 10 segundos enquanto houver jornada ativa
 
     return () => {
       window.removeEventListener('online', handleOnline);
@@ -117,6 +160,60 @@ export const JourneyProvider: React.FC<{ children: React.ReactNode }> = ({ child
   useEffect(() => {
     activeSessionRef.current = activeSession || null;
   }, [activeSession]);
+
+  // Load and sync totalDistanceMeters from sessionStorage/fallback on active session load
+  useEffect(() => {
+    if (!activeSessionId) {
+      setTotalDistanceMeters(0);
+      setLastAddedDistanceMeters(0);
+      setCurrentAccuracy(null);
+      setDiscardedPointsCount(0);
+      setLastDiscardReason(null);
+      return;
+    }
+
+    const storedMeters = sessionStorage.getItem(`total_distance_${activeSessionId}`);
+    if (storedMeters) {
+      const parsedMeters = Number(storedMeters);
+      setTotalDistanceMeters(parsedMeters);
+      console.log(`[DistanceEngine] Loaded total distance from sessionStorage: ${parsedMeters} meters`);
+    } else {
+      // Fallback calculation using current session's route points
+      const points = routePoints
+        .filter(p => p.session_id === activeSessionId)
+        .sort((a, b) => new Date(a.recorded_at).getTime() - new Date(b.recorded_at).getTime());
+      
+      let dist = 0;
+      for (let i = 1; i < points.length; i++) {
+        const p1 = points[i - 1];
+        const p2 = points[i];
+        const m = calculateHaversineDistanceMeters(p1.latitude, p1.longitude, p2.latitude, p2.longitude);
+        if (m >= 3) {
+          dist += m;
+        }
+      }
+      setTotalDistanceMeters(dist);
+      sessionStorage.setItem(`total_distance_${activeSessionId}`, dist.toString());
+      console.log(`[DistanceEngine] Initialized total distance from ${points.length} points: ${dist} meters`);
+    }
+
+    const storedDiscarded = sessionStorage.getItem(`discarded_points_${activeSessionId}`);
+    if (storedDiscarded) {
+      setDiscardedPointsCount(Number(storedDiscarded));
+    } else {
+      setDiscardedPointsCount(0);
+    }
+
+    const storedReason = sessionStorage.getItem(`last_discard_reason_${activeSessionId}`);
+    if (storedReason) {
+      setLastDiscardReason(storedReason);
+    } else {
+      setLastDiscardReason(null);
+    }
+
+    setCurrentAccuracy(null);
+    setLastAddedDistanceMeters(0);
+  }, [activeSessionId, routePoints]);
 
   const scheduleRecovery = () => {
     if (recoveryTimeoutRef.current) return;
@@ -419,11 +516,30 @@ export const JourneyProvider: React.FC<{ children: React.ReactNode }> = ({ child
     if (dbStatus === 'connected') {
       try {
         const id = await journeyService.insertSession(userId, startTime);
+        sessionStorage.removeItem(`total_distance_${newSession.id}`);
+        sessionStorage.removeItem(`last_position_${newSession.id}`);
+        sessionStorage.removeItem(`discarded_points_${newSession.id}`);
+        sessionStorage.removeItem(`last_discard_reason_${newSession.id}`);
         newSession.id = id;
+        sessionStorage.removeItem(`total_distance_${id}`);
+        sessionStorage.removeItem(`last_position_${id}`);
+        sessionStorage.removeItem(`discarded_points_${id}`);
+        sessionStorage.removeItem(`last_discard_reason_${id}`);
       } catch (err) {
         console.error("Supabase startSession error:", err);
       }
+    } else {
+      sessionStorage.removeItem(`total_distance_${newSession.id}`);
+      sessionStorage.removeItem(`last_position_${newSession.id}`);
+      sessionStorage.removeItem(`discarded_points_${newSession.id}`);
+      sessionStorage.removeItem(`last_discard_reason_${newSession.id}`);
     }
+
+    setTotalDistanceMeters(0);
+    setDiscardedPointsCount(0);
+    setLastDiscardReason(null);
+    setCurrentAccuracy(null);
+    setLastAddedDistanceMeters(0);
 
     const updatedSessions = [newSession, ...driverSessions];
     setDriverSessions(updatedSessions);
@@ -541,11 +657,83 @@ export const JourneyProvider: React.FC<{ children: React.ReactNode }> = ({ child
     auditLogger.logJourneyAction('completed', { sessionId, userId, totalDistanceKm, totalDurationMinutes });
   };
 
-  const addRoutePoint = async (pointData: Omit<RoutePoint, 'id' | 'recorded_at'>) => {
+  const addRoutePoint = async (pointData: Omit<RoutePoint, 'id' | 'recorded_at'> & { accuracy?: number }) => {
     if (!user) return;
     const userId = user.id;
     const recordedAt = new Date().toISOString();
 
+    const MIN_MOVEMENT_METERS = 3;
+
+    const accuracy = pointData.accuracy;
+    if (accuracy !== undefined && accuracy !== null) {
+      setCurrentAccuracy(accuracy);
+    }
+
+    // 1. Validar precisão do GPS: Ignorar pontos com accuracy maior que 30 metros
+    if (accuracy !== undefined && accuracy !== null && accuracy > 30) {
+      setDiscardedPointsCount(prev => {
+        const updated = prev + 1;
+        sessionStorage.setItem(`discarded_points_${pointData.session_id}`, updated.toString());
+        return updated;
+      });
+      const reason = `Precisão ruim: ${accuracy.toFixed(1)}m (máx: 30m)`;
+      setLastDiscardReason(reason);
+      sessionStorage.setItem(`last_discard_reason_${pointData.session_id}`, reason);
+      console.log("[DistanceEngine] point ignored (bad accuracy)");
+      return;
+    }
+
+    // Retrieve previous position
+    const storedLastPos = sessionStorage.getItem(`last_position_${pointData.session_id}`);
+    const lastPosition = storedLastPos ? JSON.parse(storedLastPos) : null;
+
+    let distMeters = 0;
+
+    if (lastPosition) {
+      distMeters = calculateHaversineDistanceMeters(
+        lastPosition.latitude,
+        lastPosition.longitude,
+        pointData.latitude,
+        pointData.longitude
+      );
+
+      // 2. Filtrar saltos impossíveis: velocidade superior a 180 km/h entre duas leituras consecutivas
+      const prevTime = lastPosition.timestamp || new Date(lastPosition.recorded_at || "").getTime();
+      const currTime = new Date(recordedAt).getTime();
+      const timeDiffSec = (currTime - prevTime) / 1000;
+
+      if (timeDiffSec > 0.5) {
+        const calculatedSpeedKmh = (distMeters / timeDiffSec) * 3.6;
+        if (calculatedSpeedKmh > 180) {
+          setDiscardedPointsCount(prev => {
+            const updated = prev + 1;
+            sessionStorage.setItem(`discarded_points_${pointData.session_id}`, updated.toString());
+            return updated;
+          });
+          const reason = `Salto impossível: ${calculatedSpeedKmh.toFixed(1)} km/h`;
+          setLastDiscardReason(reason);
+          sessionStorage.setItem(`last_discard_reason_${pointData.session_id}`, reason);
+          console.log("[DistanceEngine] point ignored (impossible jump)");
+          return;
+        }
+      }
+    }
+
+    // Também validar se a velocidade fornecida no ponto supera 180 km/h
+    if (pointData.speed_kmh !== undefined && pointData.speed_kmh > 180) {
+      setDiscardedPointsCount(prev => {
+        const updated = prev + 1;
+        sessionStorage.setItem(`discarded_points_${pointData.session_id}`, updated.toString());
+        return updated;
+      });
+      const reason = `Velocidade excessiva: ${pointData.speed_kmh.toFixed(1)} km/h`;
+      setLastDiscardReason(reason);
+      sessionStorage.setItem(`last_discard_reason_${pointData.session_id}`, reason);
+      console.log("[DistanceEngine] point ignored (impossible jump)");
+      return;
+    }
+
+    // Ponto válido e aceito
     const newPoint: RoutePoint = {
       id: 'pt-' + Math.random().toString(36).substring(2, 11),
       session_id: pointData.session_id,
@@ -555,31 +743,69 @@ export const JourneyProvider: React.FC<{ children: React.ReactNode }> = ({ child
       recorded_at: recordedAt
     };
 
-    let successfullyInserted = false;
-
-    if (dbStatus === 'connected' && navigator.onLine) {
-      try {
-        await journeyService.insertRoutePoint(
-          pointData.session_id,
-          pointData.latitude,
-          pointData.longitude,
-          pointData.speed_kmh || 0,
-          recordedAt
-        );
-        successfullyInserted = true;
-      } catch (err) {
-        console.error("Failed to add route point to Supabase directly, buffering locally:", err);
-      }
-    }
-
-    if (!successfullyInserted) {
-      trackingSync.queuePoint(newPoint);
-      setUnsyncedPointsCount(trackingSync.getUnsyncedPoints().length);
-    }
+    // Queue point in the central telemetry synchronization service
+    telemetrySyncService.queuePoint({
+      session_id: pointData.session_id,
+      latitude: pointData.latitude,
+      longitude: pointData.longitude,
+      speed_kmh: pointData.speed_kmh || 0,
+      recorded_at: recordedAt
+    });
 
     const updatedPoints = [...routePoints, newPoint];
     setRoutePoints(updatedPoints);
     localStorage.setItem(`${STORAGE_PREFIX}route_points_${userId}`, JSON.stringify(updatedPoints));
+
+    let addedMeters = 0;
+    if (lastPosition) {
+      // 3. Filtro de movimento: ignorar deslocamentos menores que 3 metros
+      if (distMeters >= MIN_MOVEMENT_METERS) {
+        addedMeters = distMeters;
+        setLastAddedDistanceMeters(addedMeters);
+        console.log("[DistanceEngine] point accepted");
+      } else {
+        setLastAddedDistanceMeters(0);
+        console.log("[DistanceEngine] point ignored (low movement)");
+      }
+    } else {
+      setLastAddedDistanceMeters(0);
+      console.log("[DistanceEngine] point accepted");
+    }
+
+    // Atualizar sempre a última posição persistida
+    const newPosition = { 
+      latitude: pointData.latitude, 
+      longitude: pointData.longitude, 
+      timestamp: new Date(recordedAt).getTime(),
+      recorded_at: recordedAt
+    };
+    sessionStorage.setItem(`last_position_${pointData.session_id}`, JSON.stringify(newPosition));
+
+    if (addedMeters > 0) {
+      setTotalDistanceMeters(prev => {
+        const updatedMeters = prev + addedMeters;
+        const updatedKm = Number((updatedMeters / 1000).toFixed(2));
+        sessionStorage.setItem(`total_distance_${pointData.session_id}`, updatedMeters.toString());
+        console.log("[DistanceEngine] total updated");
+
+        // Real-time update to active session in driverSessions list
+        setDriverSessions(prevSessions => {
+          const updated = prevSessions.map(s => {
+            if (s.id === pointData.session_id) {
+              return {
+                ...s,
+                total_distance_km: updatedKm
+              };
+            }
+            return s;
+          });
+          localStorage.setItem(`${STORAGE_PREFIX}driver_sessions_${userId}`, JSON.stringify(updated));
+          return updated;
+        });
+
+        return updatedMeters;
+      });
+    }
   };
 
   return (
@@ -592,6 +818,18 @@ export const JourneyProvider: React.FC<{ children: React.ReactNode }> = ({ child
         addRoutePoint,
         unsyncedPointsCount,
         syncOfflineQueue,
+        pendingPointsCount,
+        syncedPointsCount,
+        failedPointsCount,
+        lastSyncTime,
+        lastSyncError,
+        syncStatus,
+        totalDistanceMeters,
+        totalDistanceKm,
+        lastAddedDistanceMeters,
+        currentAccuracy,
+        discardedPointsCount,
+        lastDiscardReason,
         gpsStatus,
         permissionState,
         lastCoord,

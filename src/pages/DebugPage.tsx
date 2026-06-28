@@ -29,10 +29,23 @@ export const DebugPage: React.FC = () => {
     gpsTestResult,
     gpsTestLoading,
     testGps,
-    clearGpsTestResult
+    clearGpsTestResult,
+    pendingPointsCount,
+    syncedPointsCount,
+    failedPointsCount,
+    lastSyncTime,
+    lastSyncError,
+    syncStatus,
+    totalDistanceMeters,
+    totalDistanceKm,
+    lastAddedDistanceMeters,
+    currentAccuracy,
+    discardedPointsCount,
+    lastDiscardReason
   } = useApp();
 
   const [simulatedOnline, setSimulatedOnline] = useState(navigator.onLine);
+  const [isRealOnline, setIsRealOnline] = useState(typeof window !== 'undefined' ? navigator.onLine : true);
   const [wakeLockEnabled, setWakeLockEnabled] = useState(false);
   const [isSyncing, setIsSyncing] = useState(false);
   const [sessionPointsCount, setSessionPointsCount] = useState(0);
@@ -55,8 +68,14 @@ export const DebugPage: React.FC = () => {
 
   // Sync simulated state with window's online state
   useEffect(() => {
-    const handleOnline = () => setSimulatedOnline(true);
-    const handleOffline = () => setSimulatedOnline(false);
+    const handleOnline = () => {
+      setSimulatedOnline(true);
+      setIsRealOnline(true);
+    };
+    const handleOffline = () => {
+      setSimulatedOnline(false);
+      setIsRealOnline(false);
+    };
 
     window.addEventListener('online', handleOnline);
     window.addEventListener('offline', handleOffline);
@@ -209,29 +228,42 @@ export const DebugPage: React.FC = () => {
           </p>
         </div>
 
-        {/* Manual offline simulating toggle with Simulado Badge */}
-        <button
-          onClick={() => setSimulatedOnline(!simulatedOnline)}
-          className={`flex items-center gap-2 px-4 py-2 text-xs font-mono font-semibold rounded-xl border cursor-pointer transition-all ${
-            simulatedOnline 
-              ? 'bg-emerald-950/40 text-emerald-400 border-emerald-900/50 hover:bg-emerald-900/10' 
-              : 'bg-rose-950/40 text-rose-400 border-rose-900/50 hover:bg-rose-900/10'
-          }`}
-        >
-          {simulatedOnline ? (
-            <>
-              <Wifi className="w-3.5 h-3.5 text-emerald-400" />
-              <span>Internet: ONLINE</span>
-              <span className="px-1.5 py-0.2 bg-emerald-900/60 text-emerald-300 text-[8px] font-bold rounded uppercase">SIMULADO</span>
-            </>
-          ) : (
-            <>
-              <WifiOff className="w-3.5 h-3.5 text-rose-400 animate-pulse" />
-              <span>Internet: OFFLINE</span>
-              <span className="px-1.5 py-0.2 bg-rose-900/60 text-rose-300 text-[8px] font-bold rounded uppercase animate-pulse">SIMULADO</span>
-            </>
-          )}
-        </button>
+        {/* Dual real + simulated connection layout */}
+        <div className="flex flex-wrap items-center gap-3">
+          {/* Real Internet Badge */}
+          <div className={`flex items-center gap-1.5 px-3 py-1.5 text-xs font-mono font-semibold rounded-xl border ${
+            isRealOnline 
+              ? 'bg-emerald-950/25 text-emerald-400 border-emerald-900/30' 
+              : 'bg-rose-950/25 text-rose-400 border-rose-900/30'
+          }`}>
+            <span className={`w-1.5 h-1.5 rounded-full ${isRealOnline ? 'bg-emerald-500 animate-pulse' : 'bg-rose-500'}`} />
+            <span>Rede Real: {isRealOnline ? 'ONLINE' : 'OFFLINE'}</span>
+          </div>
+
+          {/* Manual offline simulating toggle with Simulado Badge */}
+          <button
+            onClick={() => setSimulatedOnline(!simulatedOnline)}
+            className={`flex items-center gap-2 px-4 py-2 text-xs font-mono font-semibold rounded-xl border cursor-pointer transition-all ${
+              simulatedOnline 
+                ? 'bg-purple-950/40 text-purple-400 border-purple-900/50 hover:bg-purple-900/20' 
+                : 'bg-amber-950/40 text-amber-400 border-amber-900/50 hover:bg-amber-900/20'
+            }`}
+          >
+            {simulatedOnline ? (
+              <>
+                <Wifi className="w-3.5 h-3.5 text-purple-400" />
+                <span>Simulação: ONLINE</span>
+                <span className="px-1.5 py-0.2 bg-purple-900/60 text-purple-300 text-[8px] font-bold rounded uppercase">SIMULADO</span>
+              </>
+            ) : (
+              <>
+                <WifiOff className="w-3.5 h-3.5 text-amber-400 animate-pulse" />
+                <span>Simulação: OFFLINE</span>
+                <span className="px-1.5 py-0.2 bg-amber-900/60 text-amber-300 text-[8px] font-bold rounded uppercase animate-pulse">SIMULADO</span>
+              </>
+            )}
+          </button>
+        </div>
       </div>
 
       <div className="grid grid-cols-1 md:grid-cols-3 gap-6">
@@ -258,7 +290,7 @@ export const DebugPage: React.FC = () => {
               </div>
             </div>
 
-            <div className="grid grid-cols-2 md:grid-cols-3 gap-4">
+            <div className="grid grid-cols-2 md:grid-cols-4 gap-4">
               <div className="p-4 rounded-2xl bg-purple-950/15 border border-purple-950/35">
                 <span className="text-[10px] text-purple-400 font-mono block mb-1">Última Coordenada</span>
                 <span className="text-xs font-bold text-white font-mono block">
@@ -283,7 +315,7 @@ export const DebugPage: React.FC = () => {
                 </span>
               </div>
 
-              <div className="p-4 rounded-2xl bg-purple-950/15 border border-purple-950/35 col-span-2 md:col-span-1">
+              <div className="p-4 rounded-2xl bg-purple-950/15 border border-purple-950/35">
                 <span className="text-[10px] text-purple-400 font-mono block mb-1">Velocidade & Direção</span>
                 <span className="text-xs font-bold text-white font-mono block">
                   {lastCoord ? `${lastCoord.speed.toFixed(1)} km/h` : '0.0 km/h'}
@@ -292,6 +324,78 @@ export const DebugPage: React.FC = () => {
                   {lastCoord ? getCardinalDirection(lastCoord.heading) : 'Sem Direção'}
                 </span>
               </div>
+
+              <div className="p-4 rounded-2xl bg-purple-950/15 border border-purple-950/35">
+                <span className="text-[10px] text-purple-400 font-mono block mb-1">Distância (Engine)</span>
+                <span className="text-xs font-bold text-purple-300 font-mono block">
+                  {totalDistanceKm.toFixed(2)} km
+                </span>
+                <span className="text-[10px] text-slate-400 font-mono block mt-0.5 truncate">
+                  {totalDistanceMeters.toFixed(0)}m acumulado
+                </span>
+              </div>
+            </div>
+
+            {/* Auditoria da Engine de Distância (Roxou V3) */}
+            <div className="mt-6 border-t border-purple-950/20 pt-5">
+              <h4 className="text-xs font-bold text-purple-400 font-mono uppercase mb-3 flex items-center gap-1.5">
+                <span className="w-1.5 h-1.5 rounded-full bg-purple-400 animate-pulse" />
+                Auditoria da Engine de Distância (Roxou V3)
+              </h4>
+              
+              <div className="grid grid-cols-2 md:grid-cols-4 gap-4">
+                <div className="p-4 rounded-2xl bg-purple-950/5 border border-purple-950/15">
+                  <span className="text-[10px] text-purple-400 font-mono block mb-1">Distância Total</span>
+                  <span className="text-sm font-extrabold text-white font-mono block">
+                    {totalDistanceKm.toFixed(2)} km
+                  </span>
+                  <span className="text-[10px] text-slate-400 font-mono block mt-0.5">
+                    {totalDistanceMeters.toFixed(1)}m acumulados
+                  </span>
+                </div>
+
+                <div className="p-4 rounded-2xl bg-purple-950/5 border border-purple-950/15">
+                  <span className="text-[10px] text-purple-400 font-mono block mb-1">Última Adicionada</span>
+                  <span className={`text-sm font-extrabold font-mono block ${lastAddedDistanceMeters > 0 ? 'text-emerald-400' : 'text-slate-400'}`}>
+                    {lastAddedDistanceMeters > 0 ? `+${lastAddedDistanceMeters.toFixed(1)}m` : '0.0m'}
+                  </span>
+                  <span className="text-[10px] text-slate-400 font-mono block mt-0.5">
+                    Filtro: ≥ 3.0m
+                  </span>
+                </div>
+
+                <div className="p-4 rounded-2xl bg-purple-950/5 border border-purple-950/15">
+                  <span className="text-[10px] text-purple-400 font-mono block mb-1">Precisão Atual (GPS)</span>
+                  <span className={`text-sm font-extrabold font-mono block ${
+                    currentAccuracy === null ? 'text-slate-400' :
+                    currentAccuracy <= 30 ? 'text-emerald-400' : 'text-rose-400'
+                  }`}>
+                    {currentAccuracy !== null ? `${currentAccuracy.toFixed(1)}m` : 'N/D'}
+                  </span>
+                  <span className="text-[10px] text-slate-400 font-mono block mt-0.5">
+                    Limite Profissional: 30m
+                  </span>
+                </div>
+
+                <div className="p-4 rounded-2xl bg-purple-950/5 border border-purple-950/15">
+                  <span className="text-[10px] text-purple-400 font-mono block mb-1">Pontos Descartados</span>
+                  <span className={`text-sm font-extrabold font-mono block ${discardedPointsCount > 0 ? 'text-rose-400 font-bold' : 'text-slate-400'}`}>
+                    {discardedPointsCount} pontos
+                  </span>
+                  <span className="text-[10px] text-slate-400 font-mono block mt-0.5 truncate">
+                    Ruídos / Saltos filtrados
+                  </span>
+                </div>
+              </div>
+
+              {lastDiscardReason && (
+                <div className="mt-3 p-3 rounded-xl bg-rose-950/5 border border-rose-950/15 flex items-start gap-2">
+                  <span className="text-[10px] text-rose-400 font-mono uppercase font-bold mt-0.5 bg-rose-950/30 px-1.5 py-0.5 rounded border border-rose-950/40">Último Descarte</span>
+                  <div className="flex-1">
+                    <p className="text-xs text-rose-300 font-mono font-medium">{lastDiscardReason}</p>
+                  </div>
+                </div>
+              )}
             </div>
 
             {/* Real browser error display */}
@@ -507,11 +611,49 @@ export const DebugPage: React.FC = () => {
                 <Database className="w-4 h-4 text-purple-400" />
               </div>
 
-              <div className="p-4 rounded-2xl bg-purple-950/15 border border-purple-950/40 text-center mb-4">
-                <span className="text-3xl font-mono font-extrabold text-white block">
-                  {unsyncedPointsCount}
+              {/* Status Badge */}
+              <div className="flex justify-between items-center mb-4">
+                <span className="text-[10px] text-slate-400 font-mono">STATUS DA ENGINE</span>
+                <span className={`px-2 py-0.5 text-[9px] font-mono rounded-md font-bold uppercase ${
+                  syncStatus === 'sincronizando' ? 'bg-purple-950 text-purple-400 animate-pulse border border-purple-900/40' :
+                  syncStatus === 'sincronizado' ? 'bg-emerald-950 text-emerald-400 border border-emerald-900/40' :
+                  syncStatus === 'aguardando internet' ? 'bg-amber-950 text-amber-500 border border-amber-900/40' :
+                  syncStatus === 'erro' ? 'bg-rose-950 text-rose-400 border border-rose-900/40' :
+                  'bg-slate-900 text-slate-400 border border-slate-800'
+                }`}>
+                  {syncStatus === 'ocioso' ? 'ocioso' : syncStatus}
                 </span>
-                <span className="text-[9px] text-slate-400 uppercase tracking-widest block mt-1">Pontos Acumulados no Cache</span>
+              </div>
+
+              {/* Counts Grid */}
+              <div className="grid grid-cols-3 gap-2 mb-4 text-center">
+                <div className="p-2 rounded-xl bg-purple-950/10 border border-purple-950/20">
+                  <span className="text-lg font-bold font-mono text-white block">{pendingPointsCount}</span>
+                  <span className="text-[8px] text-slate-400 uppercase font-semibold">Pendentes</span>
+                </div>
+                <div className="p-2 rounded-xl bg-emerald-950/10 border border-emerald-950/20">
+                  <span className="text-lg font-bold font-mono text-emerald-400 block">{syncedPointsCount}</span>
+                  <span className="text-[8px] text-slate-400 uppercase font-semibold">Sincronizados</span>
+                </div>
+                <div className="p-2 rounded-xl bg-rose-950/10 border border-rose-950/20">
+                  <span className="text-lg font-bold font-mono text-rose-400 block">{failedPointsCount}</span>
+                  <span className="text-[8px] text-slate-400 uppercase font-semibold">Falhos</span>
+                </div>
+              </div>
+
+              {/* Last Sync Info */}
+              <div className="space-y-1 text-[10px] font-mono text-slate-400 bg-black/30 p-3 rounded-xl border border-purple-950/15 mb-4">
+                <div className="flex justify-between">
+                  <span>Última Sinc:</span>
+                  <span className="text-slate-200 font-bold">
+                    {lastSyncTime ? new Date(lastSyncTime).toLocaleTimeString('pt-BR') : 'Nunca'}
+                  </span>
+                </div>
+                {lastSyncError && (
+                  <div className="text-rose-400 font-semibold text-[9px] mt-1 break-words">
+                    Erro: {lastSyncError}
+                  </div>
+                )}
               </div>
 
               <p className="text-[11px] text-slate-400 leading-relaxed mb-6">
@@ -521,9 +663,9 @@ export const DebugPage: React.FC = () => {
 
             <button
               onClick={handleForceSync}
-              disabled={unsyncedPointsCount === 0 || isSyncing}
+              disabled={(pendingPointsCount === 0 && failedPointsCount === 0) || isSyncing}
               className={`w-full py-3 rounded-2xl font-semibold text-white flex items-center justify-center gap-2 text-xs transition-all shadow-md ${
-                unsyncedPointsCount === 0 
+                (pendingPointsCount === 0 && failedPointsCount === 0) 
                   ? 'bg-purple-950/20 border border-purple-950/40 text-slate-500 cursor-not-allowed' 
                   : isSyncing 
                     ? 'bg-purple-600/50 cursor-wait' 

@@ -12,6 +12,7 @@ import {
   AlertTriangle, Milestone, Activity, Compass, Flame, Info
 } from 'lucide-react';
 import { motion, AnimatePresence } from 'motion/react';
+import { telemetrySyncService } from '../modules/journey/telemetrySync.service';
 
 // Haversine Formula helper
 export function calculateHaversineDistance(lat1: number, lon1: number, lat2: number, lon2: number): number {
@@ -38,7 +39,8 @@ export const JornadaPage: React.FC = () => {
     gpsStatus,
     permissionState,
     lastCoord,
-    gpsError
+    gpsError,
+    totalDistanceKm
   } = useApp();
 
   const [elapsedTime, setElapsedTime] = useState<string>('00:00:00');
@@ -121,15 +123,7 @@ export const JornadaPage: React.FC = () => {
   }, [wakeLockObj]);
 
   // Haversine KM Calculation
-  const totalKmToday = useMemo(() => {
-    let distance = 0;
-    for (let i = 1; i < currentSessionPoints.length; i++) {
-      const p1 = currentSessionPoints[i - 1];
-      const p2 = currentSessionPoints[i];
-      distance += calculateHaversineDistance(p1.latitude, p1.longitude, p2.latitude, p2.longitude);
-    }
-    return Number(distance.toFixed(2));
-  }, [currentSessionPoints]);
+  const totalKmToday = totalDistanceKm;
 
   // Mathematical "Tempo Parado Hoje" speed calculation
   // "Considerar parado when: velocidade estimada < 5 km/h for more than 3 minutes"
@@ -206,6 +200,17 @@ export const JornadaPage: React.FC = () => {
   const handleStopTracking = async () => {
     if (!activeSession) return;
     
+    // Tenta sincronizar todos os pontos pendentes
+    const result = await telemetrySyncService.finalFlushBeforeEnd();
+    if (result.pendingCount > 0) {
+      const confirmEnd = window.confirm(
+        `Ainda existem ${result.pendingCount} pontos aguardando sincronização. Deseja encerrar mesmo assim?`
+      );
+      if (!confirmEnd) {
+        return; // Mantém a jornada e não finaliza
+      }
+    }
+
     // Estimate total minutes
     const runningTimeMinutes = Math.max(1, Math.round(
       (new Date().getTime() - new Date(activeSession.start_time).getTime()) / 60000

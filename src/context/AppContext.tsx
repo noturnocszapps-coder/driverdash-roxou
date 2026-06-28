@@ -84,6 +84,22 @@ interface AppContextType {
   testGps: () => Promise<GpsTestResult>;
   clearGpsTestResult: () => void;
   
+  // Telemetry Sync States
+  pendingPointsCount: number;
+  syncedPointsCount: number;
+  failedPointsCount: number;
+  lastSyncTime: string | null;
+  lastSyncError: string | null;
+  syncStatus: 'sincronizando' | 'sincronizado' | 'aguardando internet' | 'erro' | 'ocioso';
+  
+  // Distance Engine States
+  totalDistanceMeters: number;
+  totalDistanceKm: number;
+  lastAddedDistanceMeters: number;
+  currentAccuracy: number | null;
+  discardedPointsCount: number;
+  lastDiscardReason: string | null;
+  
   // Commercial & admin updates
   updateUserPlan: (userId: string, plan: UserPlan) => Promise<void>;
   updateSubscriptionStatus: (userId: string, plan: UserPlan, status: 'active' | 'inactive' | 'pending') => Promise<void>;
@@ -341,6 +357,19 @@ const LegacyAppBridgeProvider: React.FC<{ children: React.ReactNode }> = ({ chil
         gpsTestLoading: journey.gpsTestLoading,
         testGps: journey.testGps,
         clearGpsTestResult: journey.clearGpsTestResult,
+
+        pendingPointsCount: journey.pendingPointsCount,
+        syncedPointsCount: journey.syncedPointsCount,
+        failedPointsCount: journey.failedPointsCount,
+        lastSyncTime: journey.lastSyncTime,
+        lastSyncError: journey.lastSyncError,
+        syncStatus: journey.syncStatus,
+        totalDistanceMeters: journey.totalDistanceMeters,
+        totalDistanceKm: journey.totalDistanceKm,
+        lastAddedDistanceMeters: journey.lastAddedDistanceMeters,
+        currentAccuracy: journey.currentAccuracy,
+        discardedPointsCount: journey.discardedPointsCount,
+        lastDiscardReason: journey.lastDiscardReason,
 
         updateUserPlan,
         updateSubscriptionStatus: subscriptions.updateSubscriptionStatus,

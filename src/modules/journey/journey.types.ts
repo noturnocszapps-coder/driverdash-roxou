@@ -29,9 +29,25 @@ export interface JourneyContextType {
   routePoints: RoutePoint[];
   startSession: () => Promise<void>;
   endSession: (sessionId: string, totalDistanceKm: number, totalDurationMinutes: number) => Promise<void>;
-  addRoutePoint: (point: Omit<RoutePoint, 'id' | 'recorded_at'>) => Promise<void>;
+  addRoutePoint: (point: Omit<RoutePoint, 'id' | 'recorded_at'> & { accuracy?: number }) => Promise<void>;
   unsyncedPointsCount: number;
   syncOfflineQueue: () => Promise<number>;
+  
+  // Telemetry Sync States
+  pendingPointsCount: number;
+  syncedPointsCount: number;
+  failedPointsCount: number;
+  lastSyncTime: string | null;
+  lastSyncError: string | null;
+  syncStatus: 'sincronizando' | 'sincronizado' | 'aguardando internet' | 'erro' | 'ocioso';
+  
+  // Distance Engine States
+  totalDistanceMeters: number;
+  totalDistanceKm: number;
+  lastAddedDistanceMeters: number;
+  currentAccuracy: number | null;
+  discardedPointsCount: number;
+  lastDiscardReason: string | null;
   
   // GPS Engine States
   gpsStatus: 'Aguardando permissão' | 'Solicitando primeira posição' | 'GPS ativo' | 'GPS sem sinal' | 'GPS erro' | 'GPS negado' | 'Sensor inativo';
