@@ -574,6 +574,8 @@ CREATE TABLE IF NOT EXISTS public.driver_uber_pass_settings (
 
 ALTER TABLE public.driver_uber_pass_settings ENABLE ROW LEVEL SECURITY;
 
+ALTER TABLE IF EXISTS public.driver_uber_pass_settings ADD COLUMN IF NOT EXISTS detailed_vehicle_config JSONB DEFAULT '{}'::jsonb;
+
 CREATE POLICY "Drivers manage their own uber pass settings"
     ON public.driver_uber_pass_settings FOR ALL
     USING (auth.uid() = user_id OR public.is_admin())

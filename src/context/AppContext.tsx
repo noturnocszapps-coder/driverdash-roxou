@@ -163,7 +163,7 @@ const LegacyAppBridgeProvider: React.FC<{ children: React.ReactNode }> = ({ chil
       }
     }
 
-    auth.setProfile(updatedProfile);
+    auth.setProfileState(updatedProfile);
     localStorage.setItem(`${STORAGE_PREFIX}profile`, JSON.stringify(updatedProfile));
 
     const updatedUsers = users.map(u => u.id === auth.profile?.id ? { ...u, onboarding_completed: true } : u);
@@ -189,7 +189,7 @@ const LegacyAppBridgeProvider: React.FC<{ children: React.ReactNode }> = ({ chil
 
     if (auth.profile && auth.profile.id === userId) {
       const updatedProfile = { ...auth.profile, role: newRole };
-      auth.setProfile(updatedProfile);
+      auth.setProfileState(updatedProfile);
       localStorage.setItem(`${STORAGE_PREFIX}profile`, JSON.stringify(updatedProfile));
     }
 

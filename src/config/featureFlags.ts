@@ -1,70 +1,36 @@
 /**
- * Feature Flags Configuration - FASE 5.2
- * Location: src/config/featureFlags.ts
- * Description: Manages application-wide feature flags with persistent runtime overrides.
+ * Feature Flags Configuration for DriverDash Roxou V3.
+ * Configurable via Vite environment variables (e.g. VITE_ENABLE_DRIVER_AI).
+ * Defaults to true if the variable is not set.
  */
 
-import { STORAGE_PREFIX } from '../modules/shared/constants';
-
-export interface FeatureFlags {
-  ENABLE_GPS: boolean;
-  ENABLE_HEATMAP: boolean;
-  ENABLE_DEMAND: boolean;
-  ENABLE_ROXOU_INTEGRATION: boolean;
-  ENABLE_DEBUG: boolean;
-  ENABLE_OBSERVABILITY: boolean;
-  ENABLE_BETA_MODE: boolean;
-}
-
-// Default values for standard setup
-const DEFAULT_FLAGS: FeatureFlags = {
-  ENABLE_GPS: true,
-  ENABLE_HEATMAP: true,
-  ENABLE_DEMAND: true,
-  ENABLE_ROXOU_INTEGRATION: true, // Let we enable the UI area but with functional adapters in mock/disabled state
-  ENABLE_DEBUG: true,
-  ENABLE_OBSERVABILITY: true,
-  ENABLE_BETA_MODE: true, // We activate this to test the restricted beta gate
-};
-
-const CACHE_KEY = `${STORAGE_PREFIX}feature_flags`;
-
-export const featureFlagsManager = {
-  /**
-   * Retrieves all feature flags, merging factory defaults with localized overrides.
-   */
-  getAll(): FeatureFlags {
-    const cached = localStorage.getItem(CACHE_KEY);
-    if (cached) {
-      try {
-        return { ...DEFAULT_FLAGS, ...JSON.parse(cached) };
-      } catch (e) {
-        console.warn('Error fetching custom feature flags, falling back', e);
-      }
+// Helper to safely parse a boolean string from env
+const getEnvFlag = (key: string, defaultValue: boolean = true): boolean => {
+  if (typeof import.meta !== 'undefined' && import.meta.env) {
+    const val = import.meta.env[key];
+    if (val !== undefined) {
+      return val === 'true' || val === true;
     }
-    return DEFAULT_FLAGS;
-  },
-
-  /**
-   * Reads a single feature flag
-   */
-  get(key: keyof FeatureFlags): boolean {
-    return this.getAll()[key];
-  },
-
-  /**
-   * Toggles or updates a single feature flag
-   */
-  set(key: keyof FeatureFlags, value: boolean): void {
-    const current = this.getAll();
-    current[key] = value;
-    localStorage.setItem(CACHE_KEY, JSON.stringify(current));
-  },
-
-  /**
-   * Resets all feature flags to defaults
-   */
-  resetAll(): void {
-    localStorage.removeItem(CACHE_KEY);
   }
+  return defaultValue;
 };
+
+export const FEATURE_FLAGS = {
+  ENABLE_DRIVER_AI: getEnvFlag('VITE_ENABLE_DRIVER_AI', true),
+  ENABLE_DRIVER_SCORE: getEnvFlag('VITE_ENABLE_DRIVER_SCORE', true),
+  ENABLE_SMART_GOALS: getEnvFlag('VITE_ENABLE_SMART_GOALS', true),
+  ENABLE_DEMAND_MAP: getEnvFlag('VITE_ENABLE_DEMAND_MAP', true),
+  ENABLE_MAINTENANCE_AI: getEnvFlag('VITE_ENABLE_MAINTENANCE_AI', true),
+  ENABLE_PLATFORM_COMPARISON: getEnvFlag('VITE_ENABLE_PLATFORM_COMPARISON', true),
+  ENABLE_UBER_PASS_AI: getEnvFlag('VITE_ENABLE_UBER_PASS_AI', true),
+  ENABLE_DATA_SOURCE_BADGES: getEnvFlag('VITE_ENABLE_DATA_SOURCE_BADGES', true),
+};
+
+export type FeatureFlagName = keyof typeof FEATURE_FLAGS;
+
+/**
+ * Checks if a specific feature flag is enabled.
+ */
+export function isFeatureEnabled(flag: FeatureFlagName): boolean {
+  return FEATURE_FLAGS[flag] === true;
+}

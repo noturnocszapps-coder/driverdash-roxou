@@ -253,6 +253,7 @@ export interface UberPassSettings {
   average_ticket: number;
   cost_per_km: number;
   estimated_km: number;
+  detailed_vehicle_config?: any;
   created_at?: string;
   updated_at?: string;
 }

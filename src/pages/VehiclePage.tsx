@@ -487,7 +487,7 @@ export const VehiclePage: React.FC = () => {
                               onChange={(e) => setElectricityPriceKwh(e.target.value)}
                               placeholder="Ex: 0.85"
                               className="w-full bg-[#04010a] border border-purple-950/50 rounded-xl py-2 pl-8 pr-3 text-slate-100 font-mono font-bold"
-                              required={isElectric && chargingType !== 'mixed'}
+                              required={isElectric}
                             />
                           </div>
                         </div>
