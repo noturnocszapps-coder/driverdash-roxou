@@ -535,7 +535,46 @@ ALTER TABLE IF EXISTS public.earnings ADD COLUMN IF NOT EXISTS shift_period TEXT
 ALTER TABLE IF EXISTS public.earnings ADD COLUMN IF NOT EXISTS closure_reported_gross_amount NUMERIC DEFAULT 0;
 ALTER TABLE IF EXISTS public.earnings ADD COLUMN IF NOT EXISTS closure_deducted_single_rides_amount NUMERIC DEFAULT 0;
 
+-- Alter table dynamic additions for electric vehicles (EV Support)
+ALTER TABLE IF EXISTS public.vehicles ADD COLUMN IF NOT EXISTS electric_consumption_kwh_100km NUMERIC DEFAULT 15.0;
+ALTER TABLE IF EXISTS public.vehicles ADD COLUMN IF NOT EXISTS electricity_price_kwh NUMERIC DEFAULT 0.0;
+ALTER TABLE IF EXISTS public.vehicles ADD COLUMN IF NOT EXISTS charging_type TEXT DEFAULT 'residential';
+ALTER TABLE IF EXISTS public.vehicles ADD COLUMN IF NOT EXISTS home_electricity_price_kwh NUMERIC DEFAULT 0.0;
+ALTER TABLE IF EXISTS public.vehicles ADD COLUMN IF NOT EXISTS public_electricity_price_kwh NUMERIC DEFAULT 0.0;
+ALTER TABLE IF EXISTS public.vehicles ADD COLUMN IF NOT EXISTS home_charging_percent NUMERIC DEFAULT 100;
+ALTER TABLE IF EXISTS public.vehicles ADD COLUMN IF NOT EXISTS public_charging_percent NUMERIC DEFAULT 0;
+ALTER TABLE IF EXISTS public.vehicles ADD COLUMN IF NOT EXISTS battery_replacement_cost NUMERIC DEFAULT 0;
+ALTER TABLE IF EXISTS public.vehicles ADD COLUMN IF NOT EXISTS battery_life_km NUMERIC DEFAULT 0;
+
+ALTER TABLE IF EXISTS public.vehicles DROP CONSTRAINT IF EXISTS check_vehicles_charging_type;
+ALTER TABLE IF EXISTS public.vehicles ADD CONSTRAINT check_vehicles_charging_type CHECK (charging_type IN ('residential', 'public', 'mixed'));
 
 
+-- ==========================================
+-- 11. FASE 5.4 - UBER PASS INTELLIGENCE
+-- ==========================================
 
+CREATE TABLE IF NOT EXISTS public.driver_uber_pass_settings (
+    id UUID DEFAULT gen_random_uuid() PRIMARY KEY,
+    user_id UUID REFERENCES auth.users ON DELETE CASCADE NOT NULL,
+    pass_type TEXT,
+    pass_price NUMERIC,
+    earnings_limit NUMERIC,
+    old_fee_percent NUMERIC DEFAULT 20,
+    target_profit_per_hour NUMERIC,
+    target_daily_revenue NUMERIC,
+    planned_hours NUMERIC,
+    average_ticket NUMERIC,
+    cost_per_km NUMERIC,
+    estimated_km NUMERIC,
+    created_at TIMESTAMP WITH TIME ZONE DEFAULT TIMEZONE('utc'::TEXT, NOW()) NOT NULL,
+    updated_at TIMESTAMP WITH TIME ZONE DEFAULT TIMEZONE('utc'::TEXT, NOW()) NOT NULL,
+    CONSTRAINT unique_user_uber_pass_settings UNIQUE (user_id)
+);
 
+ALTER TABLE public.driver_uber_pass_settings ENABLE ROW LEVEL SECURITY;
+
+CREATE POLICY "Drivers manage their own uber pass settings"
+    ON public.driver_uber_pass_settings FOR ALL
+    USING (auth.uid() = user_id OR public.is_admin())
+    WITH CHECK (auth.uid() = user_id OR public.is_admin());

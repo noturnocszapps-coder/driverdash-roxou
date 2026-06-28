@@ -34,6 +34,15 @@ export interface Vehicle {
   rental_food_daily?: number;
   rental_damage_monthly?: number;
   rental_cleaning_monthly?: number;
+  electric_consumption_kwh_100km?: number;
+  electricity_price_kwh?: number;
+  charging_type?: 'residential' | 'public' | 'mixed' | null;
+  home_electricity_price_kwh?: number;
+  public_electricity_price_kwh?: number;
+  home_charging_percent?: number;
+  public_charging_percent?: number;
+  battery_replacement_cost?: number;
+  battery_life_km?: number;
   created_at?: string;
 }
 
@@ -231,6 +240,19 @@ export interface DemandSignal {
   is_active: boolean;
 }
 
-
-
-
+export interface UberPassSettings {
+  id?: string;
+  user_id: string;
+  pass_type: string;
+  pass_price: number;
+  earnings_limit?: number;
+  old_fee_percent: number;
+  target_profit_per_hour: number;
+  target_daily_revenue: number;
+  planned_hours: number;
+  average_ticket: number;
+  cost_per_km: number;
+  estimated_km: number;
+  created_at?: string;
+  updated_at?: string;
+}

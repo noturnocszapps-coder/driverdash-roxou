@@ -6,6 +6,27 @@
 
 import { Vehicle, VehicleCostSettings } from './vehicle.types';
 
+export const isElectricVehicle = (vehicle: Vehicle | null): boolean => {
+  if (!vehicle) return false;
+  const ft = vehicle.fuel_type?.toLowerCase() || '';
+  return ft === 'electric' || ft === 'elétrico' || ft === 'eletrico';
+};
+
+export const calculateElectricityPriceKwh = (vehicle: Vehicle | null): number => {
+  if (!vehicle) return 0;
+  if (vehicle.charging_type === 'mixed') {
+    const priceHome = vehicle.home_electricity_price_kwh || 0;
+    const percentHome = vehicle.home_charging_percent ?? 100;
+    const pricePublic = vehicle.public_electricity_price_kwh || 0;
+    const percentPublic = vehicle.public_charging_percent ?? 0;
+    return (priceHome * percentHome / 100) + (pricePublic * percentPublic / 100);
+  } else if (vehicle.charging_type === 'public') {
+    return vehicle.public_electricity_price_kwh || vehicle.electricity_price_kwh || 0;
+  } else {
+    return vehicle.home_electricity_price_kwh || vehicle.electricity_price_kwh || 0;
+  }
+};
+
 /**
  * Calculates the exact dynamic maintenance + fuel cost per km.
  */
@@ -15,7 +36,36 @@ export const calculateCostPerKmEstimate = (
 ): number => {
   if (!vehicle) return 0;
 
-  // 1. Fuel cost per KM
+  // Handle Electric Vehicles
+  if (isElectricVehicle(vehicle)) {
+    const consumptionKwh100 = vehicle.electric_consumption_kwh_100km || 0;
+    const priceKwh = calculateElectricityPriceKwh(vehicle);
+    const energyCostPerKm = (consumptionKwh100 * priceKwh) / 100;
+
+    if (vehicle.ownership_type === 'rented') {
+      const monthlyFixed = calculateMonthlyFixedCost(vehicle, costSettings);
+      const kmsMensais = vehicle.monthly_km_limit 
+        || (vehicle.weekly_km_limit ? vehicle.weekly_km_limit * 4.33 : 4330);
+      const fixedCostPerKm = kmsMensais > 0 ? monthlyFixed / kmsMensais : 0;
+      return energyCostPerKm + fixedCostPerKm;
+    }
+
+    if (!costSettings) return energyCostPerKm;
+
+    const tireCostPerKm = costSettings.tire_lifespan_km > 0 ? costSettings.tire_cost / costSettings.tire_lifespan_km : 0;
+    const brakeCostPerKm = costSettings.brake_interval_km > 0 ? costSettings.brake_cost / costSettings.brake_interval_km : 0;
+    
+    const batteryCostPerKm = (vehicle.battery_life_km && vehicle.battery_life_km > 0) 
+      ? (vehicle.battery_replacement_cost || 0) / vehicle.battery_life_km 
+      : 0;
+
+    const monthlyFixed = calculateMonthlyFixedCost(vehicle, costSettings);
+    const fixedCostPerKm = monthlyFixed > 0 ? (monthlyFixed / 4.33) / 1000 : 0;
+
+    return energyCostPerKm + tireCostPerKm + brakeCostPerKm + batteryCostPerKm + fixedCostPerKm;
+  }
+
+  // 1. Fuel cost per KM (Combustion Engines)
   const kmPerLiter = vehicle.km_per_liter || 10;
   const fuelPrice = costSettings?.fuel_price || 0;
   const fuelCostPerKm = kmPerLiter > 0 ? fuelPrice / kmPerLiter : 0;

@@ -6,7 +6,7 @@ import {
 } from 'lucide-react';
 import { motion } from 'motion/react';
 import { OwnershipType, Vehicle, VehicleCostSettings } from '../types';
-import { calculateMonthlyFixedCost, calculateCostPerKmEstimate } from '../modules/vehicle/vehicle.calculations';
+import { calculateMonthlyFixedCost, calculateCostPerKmEstimate, isElectricVehicle, calculateElectricityPriceKwh } from '../modules/vehicle/vehicle.calculations';
 import { observabilityService } from '../modules/observability/observability.service';
 
 export const VehiclePage: React.FC = () => {
@@ -27,6 +27,17 @@ export const VehiclePage: React.FC = () => {
   const [ownershipType, setOwnershipType] = useState<OwnershipType>('own');
   const [weeklyKmLimit, setWeeklyKmLimit] = useState('');
   const [monthlyKmLimit, setMonthlyKmLimit] = useState('');
+
+  // Electric specifications states
+  const [electricConsumptionKwh100, setElectricConsumptionKwh100] = useState('');
+  const [electricityPriceKwh, setElectricityPriceKwh] = useState('');
+  const [chargingType, setChargingType] = useState<'residential' | 'public' | 'mixed'>('residential');
+  const [homeElectricityPriceKwh, setHomeElectricityPriceKwh] = useState('');
+  const [publicElectricityPriceKwh, setPublicElectricityPriceKwh] = useState('');
+  const [homeChargingPercent, setHomeChargingPercent] = useState('100');
+  const [publicChargingPercent, setPublicChargingPercent] = useState('0');
+  const [batteryReplacementCost, setBatteryReplacementCost] = useState('');
+  const [batteryLifeKm, setBatteryLifeKm] = useState('');
 
   // Rented specific states
   const [rentalAmount, setRentalAmount] = useState('');
@@ -71,6 +82,17 @@ export const VehiclePage: React.FC = () => {
       setRentalFoodDaily(vehicle.rental_food_daily?.toString() || '');
       setRentalDamageMonthly(vehicle.rental_damage_monthly?.toString() || '');
       setRentalCleaningMonthly(vehicle.rental_cleaning_monthly?.toString() || '');
+      
+      // EV states
+      setElectricConsumptionKwh100(vehicle.electric_consumption_kwh_100km?.toString() || '');
+      setElectricityPriceKwh(vehicle.electricity_price_kwh?.toString() || '');
+      setChargingType((vehicle.charging_type as any) || 'residential');
+      setHomeElectricityPriceKwh(vehicle.home_electricity_price_kwh?.toString() || '');
+      setPublicElectricityPriceKwh(vehicle.public_electricity_price_kwh?.toString() || '');
+      setHomeChargingPercent(vehicle.home_charging_percent?.toString() ?? '100');
+      setPublicChargingPercent(vehicle.public_charging_percent?.toString() ?? '0');
+      setBatteryReplacementCost(vehicle.battery_replacement_cost?.toString() || '');
+      setBatteryLifeKm(vehicle.battery_life_km?.toString() || '');
     }
   }, [vehicle]);
 
@@ -97,10 +119,62 @@ export const VehiclePage: React.FC = () => {
     setErrorMsg(null);
     setSuccess(false);
 
+    const isElectric = fuelType === 'electric' || fuelType === 'elétrico' || fuelType === 'eletrico';
+
     // Basic Validations
-    if (!brand || !model || !year || !kmPerLiter) {
-      setErrorMsg('Preencha ao menos marca, modelo, ano e consumo médio!');
+    if (!brand || !model || !year) {
+      setErrorMsg('Preencha ao menos marca, modelo e ano!');
       return;
+    }
+
+    if (!isElectric && !kmPerLiter) {
+      setErrorMsg('Preencha o consumo médio (KM por Litro)!');
+      return;
+    }
+
+    if (isElectric) {
+      const consumption = Number(electricConsumptionKwh100);
+      if (!consumption || consumption <= 0) {
+        setErrorMsg('O consumo médio kWh/100km deve ser maior que 0!');
+        return;
+      }
+
+      if (chargingType === 'mixed') {
+        const homePrice = Number(homeElectricityPriceKwh) || 0;
+        const publicPrice = Number(publicElectricityPriceKwh) || 0;
+        const homePct = Number(homeChargingPercent) || 0;
+        const publicPct = Number(publicChargingPercent) || 0;
+
+        if (homePrice <= 0 && publicPrice <= 0) {
+          setErrorMsg('Pelo menos um dos preços de eletricidade (residencial ou público) deve ser maior que 0!');
+          return;
+        }
+
+        if (homePct + publicPct !== 100) {
+          setErrorMsg('A soma do percentual de recarga residencial e pública deve ser exatamente 100%!');
+          return;
+        }
+      } else {
+        const directPrice = Number(electricityPriceKwh);
+        const homePrice = Number(homeElectricityPriceKwh);
+        const publicPrice = Number(publicElectricityPriceKwh);
+        
+        let validPrice = directPrice;
+        if (chargingType === 'residential' && homePrice > 0) validPrice = homePrice;
+        if (chargingType === 'public' && publicPrice > 0) validPrice = publicPrice;
+
+        if (validPrice <= 0) {
+          setErrorMsg('O preço médio do kWh deve ser maior que 0!');
+          return;
+        }
+      }
+
+      const batCost = Number(batteryReplacementCost) || 0;
+      const batLife = Number(batteryLifeKm) || 0;
+      if (batCost > 0 && batLife <= 0) {
+        setErrorMsg('Se o custo de substituição da bateria for informado, a vida útil da bateria precisa ser maior que 0!');
+        return;
+      }
     }
 
     if (ownershipType === 'rented' && !rentalAmount) {
@@ -118,7 +192,7 @@ export const VehiclePage: React.FC = () => {
         year: Number(year),
         plate_optional: plate,
         fuel_type: fuelType,
-        km_per_liter: Number(kmPerLiter),
+        km_per_liter: isElectric ? 0 : Number(kmPerLiter),
         ownership_type: ownershipType,
         weekly_km_limit: weeklyKmLimit ? Number(weeklyKmLimit) : undefined,
         monthly_km_limit: monthlyKmLimit ? Number(monthlyKmLimit) : undefined,
@@ -126,16 +200,25 @@ export const VehiclePage: React.FC = () => {
         rental_period: rentalPeriod,
         rental_food_daily: rentalFoodDaily ? Number(rentalFoodDaily) : 0,
         rental_damage_monthly: rentalDamageMonthly ? Number(rentalDamageMonthly) : 0,
-        rental_cleaning_monthly: rentalCleaningMonthly ? Number(rentalCleaningMonthly) : 0
+        rental_cleaning_monthly: rentalCleaningMonthly ? Number(rentalCleaningMonthly) : 0,
+        electric_consumption_kwh_100km: isElectric ? Number(electricConsumptionKwh100) : undefined,
+        electricity_price_kwh: isElectric ? Number(electricityPriceKwh) : undefined,
+        charging_type: isElectric ? chargingType : undefined,
+        home_electricity_price_kwh: isElectric ? Number(homeElectricityPriceKwh) : undefined,
+        public_electricity_price_kwh: isElectric ? Number(publicElectricityPriceKwh) : undefined,
+        home_charging_percent: isElectric ? Number(homeChargingPercent) : undefined,
+        public_charging_percent: isElectric ? Number(publicChargingPercent) : undefined,
+        battery_replacement_cost: isElectric ? Number(batteryReplacementCost) : undefined,
+        battery_life_km: isElectric ? Number(batteryLifeKm) : undefined,
       });
 
       // 2. Upsert Cost Settings
       await upsertVehicleCostSettings({
-        fuel_price: vehicleCostSettings?.fuel_price || 0,
+        fuel_price: isElectric ? 0 : (vehicleCostSettings?.fuel_price || 0),
         tire_cost: tireCost ? Number(tireCost) : 0,
         tire_lifespan_km: tireLifespanKm ? Number(tireLifespanKm) : 0,
-        oil_change_cost: oilCost ? Number(oilCost) : 0,
-        oil_change_interval_km: oilIntervalKm ? Number(oilIntervalKm) : 0,
+        oil_change_cost: isElectric ? 0 : (oilCost ? Number(oilCost) : 0),
+        oil_change_interval_km: isElectric ? 0 : (oilIntervalKm ? Number(oilIntervalKm) : 0),
         brake_cost: brakeCost ? Number(brakeCost) : 0,
         brake_interval_km: brakeIntervalKm ? Number(brakeIntervalKm) : 0,
         insurance_yearly: insuranceYearly ? Number(insuranceYearly) : 0,
@@ -169,6 +252,8 @@ export const VehiclePage: React.FC = () => {
     }
   };
 
+  const isElectric = fuelType === 'electric' || fuelType === 'elétrico' || fuelType === 'eletrico';
+
   // Build live temporary objects for real-time calculations
   const tempVehicle: Vehicle = {
     user_id: vehicle?.user_id || '',
@@ -176,22 +261,31 @@ export const VehiclePage: React.FC = () => {
     model,
     year: Number(year) || 0,
     fuel_type: fuelType,
-    km_per_liter: Number(kmPerLiter) || 10,
+    km_per_liter: isElectric ? 0 : (Number(kmPerLiter) || 10),
     ownership_type: ownershipType,
     rental_amount: rentalAmount ? Number(rentalAmount) : 0,
     rental_period: rentalPeriod as 'weekly' | 'monthly',
     rental_food_daily: rentalFoodDaily ? Number(rentalFoodDaily) : 0,
     rental_damage_monthly: rentalDamageMonthly ? Number(rentalDamageMonthly) : 0,
-    rental_cleaning_monthly: rentalCleaningMonthly ? Number(rentalCleaningMonthly) : 0
+    rental_cleaning_monthly: rentalCleaningMonthly ? Number(rentalCleaningMonthly) : 0,
+    electric_consumption_kwh_100km: isElectric ? (Number(electricConsumptionKwh100) || 0) : undefined,
+    electricity_price_kwh: isElectric ? (Number(electricityPriceKwh) || 0) : undefined,
+    charging_type: isElectric ? chargingType : undefined,
+    home_electricity_price_kwh: isElectric ? (Number(homeElectricityPriceKwh) || 0) : undefined,
+    public_electricity_price_kwh: isElectric ? (Number(publicElectricityPriceKwh) || 0) : undefined,
+    home_charging_percent: isElectric ? (Number(homeChargingPercent) || 0) : undefined,
+    public_charging_percent: isElectric ? (Number(publicChargingPercent) || 0) : undefined,
+    battery_replacement_cost: isElectric ? (Number(batteryReplacementCost) || 0) : undefined,
+    battery_life_km: isElectric ? (Number(batteryLifeKm) || 0) : undefined
   };
 
   const tempCostSettings: VehicleCostSettings = {
     user_id: vehicleCostSettings?.user_id || '',
-    fuel_price: vehicleCostSettings?.fuel_price || 0,
+    fuel_price: isElectric ? 0 : (vehicleCostSettings?.fuel_price || 0),
     tire_cost: tireCost ? Number(tireCost) : 0,
     tire_lifespan_km: tireLifespanKm ? Number(tireLifespanKm) : 0,
-    oil_change_cost: oilCost ? Number(oilCost) : 0,
-    oil_change_interval_km: oilIntervalKm ? Number(oilIntervalKm) : 0,
+    oil_change_cost: isElectric ? 0 : (oilCost ? Number(oilCost) : 0),
+    oil_change_interval_km: isElectric ? 0 : (oilIntervalKm ? Number(oilIntervalKm) : 0),
     brake_cost: brakeCost ? Number(brakeCost) : 0,
     brake_interval_km: brakeIntervalKm ? Number(brakeIntervalKm) : 0,
     insurance_yearly: insuranceYearly ? Number(insuranceYearly) : 0,
@@ -322,23 +416,183 @@ export const VehiclePage: React.FC = () => {
               </div>
 
               <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
-                <div>
-                  <label className="block text-purple-300 font-semibold mb-1.5 font-sans">Consumo Médio (KM por Litro) *</label>
-                  <div className="relative">
-                    <span className="absolute inset-y-0 left-3 flex items-center text-purple-400">
-                      <Fuel className="w-4 h-4" />
-                    </span>
-                    <input 
-                      type="number" 
-                      step="0.1"
-                      value={kmPerLiter} 
-                      onChange={(e) => setKmPerLiter(e.target.value)}
-                      placeholder="Ex: 8.0"
-                      className="w-full bg-[#04010a] border border-purple-950/50 rounded-xl py-3 pl-10 pr-4 text-slate-100 font-bold focus:outline-none focus:border-purple-600 font-mono"
-                      required
-                    />
+                {!isElectric ? (
+                  <div>
+                    <label className="block text-purple-300 font-semibold mb-1.5 font-sans">Consumo Médio (KM por Litro) *</label>
+                    <div className="relative">
+                      <span className="absolute inset-y-0 left-3 flex items-center text-purple-400">
+                        <Fuel className="w-4 h-4" />
+                      </span>
+                      <input 
+                        type="number" 
+                        step="0.1"
+                        value={kmPerLiter} 
+                        onChange={(e) => setKmPerLiter(e.target.value)}
+                        placeholder="Ex: 8.0"
+                        className="w-full bg-[#04010a] border border-purple-950/50 rounded-xl py-3 pl-10 pr-4 text-slate-100 font-bold focus:outline-none focus:border-purple-600 font-mono"
+                        required={!isElectric}
+                      />
+                    </div>
                   </div>
-                </div>
+                ) : (
+                  <div className="sm:col-span-2">
+                    <motion.div 
+                      initial={{ opacity: 0, height: 0 }}
+                      animate={{ opacity: 1, height: 'auto' }}
+                      className="bg-indigo-950/15 border border-indigo-900/30 rounded-xl p-4 space-y-4"
+                    >
+                      <h4 className="text-xs font-bold text-indigo-400 font-mono uppercase tracking-wider flex items-center gap-1.5 select-none">
+                        <span className="w-2 h-2 rounded-full bg-indigo-500 animate-pulse" />
+                        Especificações de Energia (Veículo Elétrico)
+                      </h4>
+
+                      <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
+                        <div>
+                          <label className="block text-[11px] text-slate-400 mb-1">Consumo Médio kWh/100km *</label>
+                          <input 
+                            type="number" 
+                            step="0.1"
+                            value={electricConsumptionKwh100} 
+                            onChange={(e) => setElectricConsumptionKwh100(e.target.value)}
+                            placeholder="Ex: 15.5"
+                            className="w-full bg-[#04010a] border border-purple-950/50 rounded-xl p-2.5 text-slate-100 font-mono"
+                            required={isElectric}
+                          />
+                          <p className="text-[9px] text-slate-500 mt-1">Consumo padrão por 100km (KWh)</p>
+                        </div>
+
+                        <div>
+                          <label className="block text-[11px] text-slate-400 mb-1">Tipo de Recarga</label>
+                          <select
+                            value={chargingType}
+                            onChange={(e) => setChargingType(e.target.value as any)}
+                            className="w-full bg-[#04010a] border border-purple-950/50 rounded-xl p-2.5 text-slate-100 font-sans cursor-pointer focus:outline-none"
+                          >
+                            <option value="residential">Residencial</option>
+                            <option value="public">Pública</option>
+                            <option value="mixed">Mista (Residencial + Pública)</option>
+                          </select>
+                        </div>
+                      </div>
+
+                      {chargingType !== 'mixed' ? (
+                        <div>
+                          <label className="block text-[11px] text-slate-400 mb-1">Preço Médio do kWh (R$) *</label>
+                          <div className="relative">
+                            <span className="absolute inset-y-0 left-3 flex items-center text-slate-500 font-mono text-[11px]">R$</span>
+                            <input 
+                              type="number" 
+                              step="0.01"
+                              value={electricityPriceKwh} 
+                              onChange={(e) => setElectricityPriceKwh(e.target.value)}
+                              placeholder="Ex: 0.85"
+                              className="w-full bg-[#04010a] border border-purple-950/50 rounded-xl py-2 pl-8 pr-3 text-slate-100 font-mono font-bold"
+                              required={isElectric && chargingType !== 'mixed'}
+                            />
+                          </div>
+                        </div>
+                      ) : (
+                        <div className="space-y-3 p-3 bg-slate-950/40 rounded-xl border border-indigo-950/30">
+                          <p className="text-[10px] text-indigo-300 font-medium">Configure a proporção da sua recarga diária:</p>
+                          
+                          <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
+                            <div>
+                              <label className="block text-[11px] text-slate-400 mb-1">Preço kWh Residencial (R$)</label>
+                              <div className="relative">
+                                <span className="absolute inset-y-0 left-3 flex items-center text-slate-500 font-mono text-[11px]">R$</span>
+                                <input 
+                                  type="number" 
+                                  step="0.01"
+                                  value={homeElectricityPriceKwh} 
+                                  onChange={(e) => setHomeElectricityPriceKwh(e.target.value)}
+                                  placeholder="Ex: 0.70"
+                                  className="w-full bg-[#04010a] border border-purple-950/50 rounded-xl py-2 pl-8 pr-3 text-slate-100 font-mono"
+                                />
+                              </div>
+                            </div>
+                            <div>
+                              <label className="block text-[11px] text-slate-400 mb-1">Percentual Residencial (%)</label>
+                              <input 
+                                type="number" 
+                                value={homeChargingPercent} 
+                                onChange={(e) => {
+                                  setHomeChargingPercent(e.target.value);
+                                  const val = 100 - (Number(e.target.value) || 0);
+                                  setPublicChargingPercent(Math.max(0, val).toString());
+                                }}
+                                placeholder="Ex: 70"
+                                className="w-full bg-[#04010a] border border-purple-950/50 rounded-xl p-2 text-slate-100 font-bold font-mono"
+                              />
+                            </div>
+                          </div>
+
+                          <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
+                            <div>
+                              <label className="block text-[11px] text-slate-400 mb-1">Preço kWh Público / Rápido (R$)</label>
+                              <div className="relative">
+                                <span className="absolute inset-y-0 left-3 flex items-center text-slate-500 font-mono text-[11px]">R$</span>
+                                <input 
+                                  type="number" 
+                                  step="0.01"
+                                  value={publicElectricityPriceKwh} 
+                                  onChange={(e) => setPublicElectricityPriceKwh(e.target.value)}
+                                  placeholder="Ex: 1.90"
+                                  className="w-full bg-[#04010a] border border-purple-950/50 rounded-xl py-2 pl-8 pr-3 text-slate-100 font-mono"
+                                />
+                              </div>
+                            </div>
+                            <div>
+                              <label className="block text-[11px] text-slate-400 mb-1">Percentual Público (%)</label>
+                              <input 
+                                type="number" 
+                                value={publicChargingPercent} 
+                                onChange={(e) => {
+                                  setPublicChargingPercent(e.target.value);
+                                  const val = 100 - (Number(e.target.value) || 0);
+                                  setHomeChargingPercent(Math.max(0, val).toString());
+                                }}
+                                placeholder="Ex: 30"
+                                className="w-full bg-[#04010a] border border-purple-950/50 rounded-xl p-2 text-slate-100 font-bold font-mono"
+                              />
+                            </div>
+                          </div>
+                        </div>
+                      )}
+
+                      {ownershipType !== 'rented' && (
+                        <div className="space-y-3 p-3 bg-slate-950/40 rounded-xl border border-indigo-950/30">
+                          <p className="text-[10px] text-indigo-300 font-medium">Depreciação de Bateria (Opcional):</p>
+                          <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
+                            <div>
+                              <label className="block text-[11px] text-slate-400 mb-1">Custo de Troca da Bateria (R$)</label>
+                              <div className="relative">
+                                <span className="absolute inset-y-0 left-3 flex items-center text-slate-500 font-mono text-[11px]">R$</span>
+                                <input 
+                                  type="number" 
+                                  value={batteryReplacementCost} 
+                                  onChange={(e) => setBatteryReplacementCost(e.target.value)}
+                                  placeholder="Ex: 45000"
+                                  className="w-full bg-[#04010a] border border-purple-950/50 rounded-xl py-2 pl-8 pr-3 text-slate-100 font-mono font-bold"
+                                />
+                              </div>
+                            </div>
+                            <div>
+                              <label className="block text-[11px] text-slate-400 mb-1">Vida Útil Estimada (KM)</label>
+                              <input 
+                                type="number" 
+                                value={batteryLifeKm} 
+                                onChange={(e) => setBatteryLifeKm(e.target.value)}
+                                placeholder="Ex: 240000"
+                                className="w-full bg-[#04010a] border border-purple-950/50 rounded-xl p-2 text-slate-100 font-mono font-bold"
+                              />
+                            </div>
+                          </div>
+                          <p className="text-[9px] text-purple-300/40 font-mono">Depreciação estimada: {Number(batteryLifeKm) > 0 ? formatBRL((Number(batteryReplacementCost) || 0) / Number(batteryLifeKm)) : 'R$ 0,00'} por KM</p>
+                        </div>
+                      )}
+                    </motion.div>
+                  </div>
+                )}
 
                 <div>
                   <label className="block text-slate-400 mb-1.5 font-sans">Contrato / Tipo de Posse *</label>
@@ -604,24 +858,26 @@ export const VehiclePage: React.FC = () => {
                     />
                   </div>
 
-                  <div className="space-y-1.5">
-                    <label className="block text-slate-400 font-medium">Troca de Óleo + Filtro (R$)</label>
-                    <input 
-                      type="number" 
-                      value={oilCost} 
-                      onChange={(e) => setOilCost(e.target.value)}
-                      placeholder="Ex: 220"
-                      className="w-full bg-[#04010a] border border-purple-950/50 rounded-xl p-2.5 text-slate-105 font-mono"
-                    />
-                    <label className="block text-[10px] text-slate-500">Intervalo de troca (KM)</label>
-                    <input 
-                      type="number" 
-                      value={oilIntervalKm} 
-                      onChange={(e) => setOilIntervalKm(e.target.value)}
-                      placeholder="Ex: 10000"
-                      className="w-full bg-[#04010a] border border-purple-950/50 rounded-xl p-2 text-slate-105 font-mono"
-                    />
-                  </div>
+                  {!isElectric && (
+                    <div className="space-y-1.5">
+                      <label className="block text-slate-400 font-medium">Troca de Óleo + Filtro (R$)</label>
+                      <input 
+                        type="number" 
+                        value={oilCost} 
+                        onChange={(e) => setOilCost(e.target.value)}
+                        placeholder="Ex: 220"
+                        className="w-full bg-[#04010a] border border-purple-950/50 rounded-xl p-2.5 text-slate-105 font-mono"
+                      />
+                      <label className="block text-[10px] text-slate-500">Intervalo de troca (KM)</label>
+                      <input 
+                        type="number" 
+                        value={oilIntervalKm} 
+                        onChange={(e) => setOilIntervalKm(e.target.value)}
+                        placeholder="Ex: 10000"
+                        className="w-full bg-[#04010a] border border-purple-950/50 rounded-xl p-2 text-slate-105 font-mono"
+                      />
+                    </div>
+                  )}
 
                   <div className="space-y-1.5">
                     <label className="block text-slate-400 font-medium">Pastilhas / Freios (Custo R$)</label>
@@ -762,13 +1018,70 @@ export const VehiclePage: React.FC = () => {
               {/* ESTIMATED VARIABLE COST */}
               <div className="border-t border-purple-950/20 pt-4 mt-2">
                 <span className="text-[10px] text-indigo-400/50 block font-mono uppercase tracking-wider">Custo Otimizado por KM</span>
-                <div className="text-md font-bold text-slate-100 font-mono tracking-tight mt-1 flex items-baseline gap-1.5">
+                <div className="text-md font-bold text-slate-100 font-mono tracking-tight mt-1 flex items-baseline gap-1.5 font-mono">
                   <span>{formatBRL(costPerKm)}</span>
-                  <span className="text-[10px] text-slate-500 font-sans font-normal">por quilômetro rodado</span>
+                  <span className="text-[10px] text-slate-550 font-sans font-normal">por quilômetro rodado</span>
                 </div>
-                <p className="text-[10px] text-purple-300/20 leading-snug mt-1.5">
-                  Combina consumo relativo ({tempVehicle.km_per_liter} km/l), preço do combustível, amortecimento de componentes de desgaste (pneus, óleo, freios) e rateio quilométrico de custos fixos.
-                </p>
+
+                {isElectric ? (
+                  <div className="mt-3 bg-[#05020d] border border-indigo-950/50 rounded-xl p-3 space-y-2 text-[11px] text-slate-300 font-sans">
+                    <div className="flex justify-between border-b border-purple-950/10 pb-1.5 font-medium text-slate-200 select-none">
+                      <span>Composição Reativa:</span>
+                    </div>
+                    <div className="flex justify-between font-mono text-[10px]">
+                      <span className="text-slate-400">Energia por km:</span>
+                      <span className="text-indigo-300">
+                        {formatBRL(((Number(electricConsumptionKwh100) || 0) * calculateElectricityPriceKwh(tempVehicle)) / 100)}
+                      </span>
+                    </div>
+                    {ownershipType !== 'rented' && (
+                      <>
+                        {Number(tireLifespanKm) > 0 && (
+                          <div className="flex justify-between font-mono text-[10px]">
+                            <span className="text-slate-400">Pneus por km:</span>
+                            <span className="text-slate-300">
+                              {formatBRL((Number(tireCost) || 0) / Number(tireLifespanKm))}
+                            </span>
+                          </div>
+                        )}
+                        {Number(brakeIntervalKm) > 0 && (
+                          <div className="flex justify-between font-mono text-[10px]">
+                            <span className="text-slate-400">Pastilhas por km:</span>
+                            <span className="text-slate-300">
+                              {formatBRL((Number(brakeCost) || 0) / Number(brakeIntervalKm))}
+                            </span>
+                          </div>
+                        )}
+                        {Number(batteryLifeKm) > 0 && (
+                          <div className="flex justify-between font-mono text-[10px]">
+                            <span className="text-slate-400">Depreciação Bateria:</span>
+                            <span className="text-slate-300">
+                              {formatBRL((Number(batteryReplacementCost) || 0) / Number(batteryLifeKm))}
+                            </span>
+                          </div>
+                        )}
+                      </>
+                    )}
+                    <div className="flex justify-between font-mono text-[10px] border-t border-purple-950/10 pt-1.5">
+                      <span className="text-slate-400">Rateio Custo Fixo/km:</span>
+                      <span className="text-slate-300">
+                        {formatBRL(
+                          ownershipType === 'rented'
+                            ? (monthlyFixedCost / (Number(monthlyKmLimit) || (Number(weeklyKmLimit) ? Number(weeklyKmLimit) * 4.33 : 4330)))
+                            : (monthlyFixedCost / 4330)
+                        )}
+                      </span>
+                    </div>
+
+                    <p className="text-[9px] text-indigo-300/40 leading-relaxed bg-indigo-950/10 p-2 border border-indigo-950/20 rounded-lg font-sans mt-2">
+                      Para veículos elétricos, o DriverDash substitui combustível por energia em kWh e remove custos de óleo/filtros. O cálculo considera energia, pneus, freios, bateria quando aplicável e custos fixos.
+                    </p>
+                  </div>
+                ) : (
+                  <p className="text-[10px] text-purple-300/20 leading-snug mt-1.5 font-sans">
+                    Combina consumo relativo ({tempVehicle.km_per_liter} km/l), preço do combustível, amortecimento de componentes de desgaste (pneus, óleo, freios) e rateio quilométrico de custos fixos.
+                  </p>
+                )}
               </div>
 
             </div>

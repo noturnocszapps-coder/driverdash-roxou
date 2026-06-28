@@ -21,6 +21,7 @@ import { JornadasHistoryPage } from './pages/JornadasHistoryPage';
 import { JornadaDetailPage } from './pages/JornadaDetailPage';
 import { DemandaPage } from './pages/DemandaPage';
 import { StatusPage } from './pages/StatusPage';
+import { UberPassPage } from './pages/UberPassPage';
 
 export default function App() {
   return (
@@ -118,6 +119,16 @@ export default function App() {
               <ProtectedRoute>
                 <AppLayout>
                   <VehiclePage />
+                </AppLayout>
+              </ProtectedRoute>
+            }
+          />
+          <Route
+            path="/uber-pass"
+            element={
+              <ProtectedRoute>
+                <AppLayout>
+                  <UberPassPage />
                 </AppLayout>
               </ProtectedRoute>
             }

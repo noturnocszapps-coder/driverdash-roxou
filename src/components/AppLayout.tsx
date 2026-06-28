@@ -3,7 +3,8 @@ import { NavLink, useNavigate, useLocation } from 'react-router-dom';
 import { useApp } from '../context/AppContext';
 import { 
   LayoutDashboard, DollarSign, Car, AlertTriangle, Users, 
-  LogOut, Menu, X, Database, ShieldAlert, Award, Copy, Check, TrendingUp, Sparkles, Bell, MapPin, Map
+  LogOut, Menu, X, Database, ShieldAlert, Award, Copy, Check, TrendingUp, Sparkles, Bell, MapPin, Map,
+  Ticket
 } from 'lucide-react';
 import { motion, AnimatePresence } from 'motion/react';
 
@@ -83,6 +84,7 @@ export const AppLayout: React.FC<{ children: React.ReactNode }> = ({ children })
     { name: 'Inteligência', path: '/insights', icon: TrendingUp, role: 'driver' },
     { name: 'Central de Alertas', path: '/alertas', icon: Bell, role: 'driver' },
     { name: 'Meu Veículo', path: '/veiculo', icon: Car, role: 'driver' },
+    { name: 'Passe Uber', path: '/uber-pass', icon: Ticket, role: 'driver' },
     { name: 'Relatos de Passageiro', path: '/relatorios', icon: AlertTriangle, role: 'driver' },
     { name: 'Planos & Assinatura', path: '/planos', icon: Sparkles, role: 'driver' },
     { name: 'Admin Roxou', path: '/admin', icon: Users, role: 'admin' },
@@ -231,7 +233,7 @@ ALTER TABLE IF EXISTS public.profiles ENABLE ROW LEVEL SECURITY;
       </aside>
 
       {/* Top Header & Header - Mobile */}
-      <header className="md:hidden flex items-center justify-between bg-[#0a061b] border-b border-purple-950/30 px-6 py-4 z-20 shrink-0">
+      <header className="md:hidden flex items-center justify-between bg-[#0a061b] border-b border-purple-950/30 px-6 h-16 z-20 shrink-0">
         <div className="flex items-center gap-2">
           <div className="w-8 h-8 rounded-lg bg-gradient-to-tr from-purple-600 to-indigo-500 shadow-[0_0_10px_rgba(168,85,247,0.4)] flex items-center justify-center font-bold text-white text-md font-mono">
             R
@@ -271,9 +273,9 @@ ALTER TABLE IF EXISTS public.profiles ENABLE ROW LEVEL SECURITY;
             initial={{ opacity: 0, y: -10 }}
             animate={{ opacity: 1, y: 0 }}
             exit={{ opacity: 0, y: -10 }}
-            className="md:hidden fixed top-[69px] bottom-0 left-0 right-0 h-[calc(100vh-69px)] h-[calc(100dvh-69px)] bg-[#0a061b]/95 backdrop-blur-xl border-b border-purple-950/40 p-6 z-20 flex flex-col shadow-2xl"
+            className="md:hidden fixed top-16 bottom-0 left-0 right-0 w-full h-[calc(100dvh-64px)] bg-[#0a061b]/95 backdrop-blur-xl border-b border-purple-950/40 p-6 z-20 flex flex-col min-h-0 overflow-y-auto overscroll-contain shadow-2xl pb-[calc(1.5rem+env(safe-area-inset-bottom))]"
           >
-            <nav className="space-y-1 mb-6 flex-1 overflow-y-auto pr-1">
+            <nav className="space-y-1 mb-6 flex-1 overflow-y-auto pr-1 min-h-0">
               {allowedNavigations.map((item) => {
                 const Icon = item.icon;
                 const isActive = location.pathname === item.path;
@@ -291,7 +293,7 @@ ALTER TABLE IF EXISTS public.profiles ENABLE ROW LEVEL SECURITY;
               })}
             </nav>
 
-            <div className="border-t border-purple-950/30 pt-4 mt-auto flex items-center justify-between shrink-0">
+            <div className="border-t border-purple-950/30 pt-4 mt-auto flex items-center justify-between shrink-0 sticky bottom-0 bg-[#0a061b]/95 backdrop-blur-md pb-2">
               {profile && (
                 <div className="flex items-center gap-2">
                   <img 
