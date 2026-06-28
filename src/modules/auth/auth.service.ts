@@ -16,10 +16,15 @@ export const authService = {
     if (!isSupabaseConfigured()) {
       throw new Error('Supabase is not configured yet. Use Local Sandbox Mode instead.');
     }
+    const isProdDomain = window.location.origin.includes('motorista.roxou.com.br');
+    const redirectTo = isProdDomain 
+      ? 'https://motorista.roxou.com.br/dashboard'
+      : window.location.origin + '/dashboard';
+
     const { error } = await supabase.auth.signInWithOAuth({
       provider: 'google',
       options: {
-        redirectTo: window.location.origin + '/dashboard',
+        redirectTo,
       }
     });
     if (error) throw error;

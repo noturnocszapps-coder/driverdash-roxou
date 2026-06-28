@@ -1,6 +1,7 @@
 import React, { useState, useEffect } from 'react';
 import { NavLink, useNavigate, useLocation } from 'react-router-dom';
 import { useApp } from '../context/AppContext';
+import { supabase } from '../modules/shared/supabase.helpers';
 import { 
   LayoutDashboard, DollarSign, Car, AlertTriangle, Users, 
   LogOut, Menu, X, Database, ShieldAlert, Award, Copy, Check, TrendingUp, Sparkles, Bell, MapPin, Map,
@@ -9,7 +10,7 @@ import {
 import { motion, AnimatePresence } from 'motion/react';
 
 export const AppLayout: React.FC<{ children: React.ReactNode }> = ({ children }) => {
-  const { profile, logout, dbStatus, driverSessions, routePoints, endSession } = useApp();
+  const { user, profile, logout, dbStatus, driverSessions, routePoints, endSession } = useApp();
   const navigate = useNavigate();
   const location = useLocation();
   const [isMobileMenuOpen, setIsMobileMenuOpen] = useState(false);
@@ -40,10 +41,11 @@ export const AppLayout: React.FC<{ children: React.ReactNode }> = ({ children })
 
   const handleEndSession = async () => {
     if (!activeSessionRef) return;
+    const sessionToClose = activeSessionRef;
     
     // Calculate distance
     const currentPoints = routePoints
-      .filter(p => p.session_id === activeSessionRef.id)
+      .filter(p => p.session_id === sessionToClose.id)
       .sort((a, b) => new Date(a.recorded_at).getTime() - new Date(b.recorded_at).getTime());
     
     let distance = 0;
@@ -67,12 +69,41 @@ export const AppLayout: React.FC<{ children: React.ReactNode }> = ({ children })
     }
     
     const runningTimeMinutes = Math.max(1, Math.round(
-      (new Date().getTime() - new Date(activeSessionRef.start_time).getTime()) / 60000
+      (new Date().getTime() - new Date(sessionToClose.start_time).getTime()) / 60000
     ));
     
-    await endSession(activeSessionRef.id, Number(distance.toFixed(2)), runningTimeMinutes);
-    sessionStorage.setItem(`recovery_checked_${activeSessionRef.id}`, 'true');
-    setShowSessionRecovery(false);
+    await endSession(sessionToClose.id, Number(distance.toFixed(2)), runningTimeMinutes);
+    sessionStorage.setItem(`recovery_checked_${sessionToClose.id}`, 'true');
+    
+    // 11. Depois de finalizar, fazer uma verificação final no Supabase:
+    if (dbStatus === 'connected' && user?.id) {
+      try {
+        const { data: activeSessions, error: checkError } = await supabase
+          .from('driver_sessions')
+          .select('id, status')
+          .eq('user_id', user.id)
+          .eq('status', 'active');
+        
+        if (checkError) throw checkError;
+        
+        const hasActive = activeSessions && activeSessions.length > 0;
+        console.log("[Jornada-Reset] Resultado da verificação final de jornada ativa:", hasActive ? "Ainda ativa!" : "Nenhuma ativa");
+        
+        if (hasActive) {
+          const activeIds = activeSessions.map(s => s.id).join(', ');
+          console.error(`[Jornada-Reset] Erro: Jornada ativa ainda existe no banco! IDs: ${activeIds}`);
+          alert(`Erro: Não foi possível encerrar a jornada ativa no banco de dados. IDs: ${activeIds}. Por favor, tente novamente.`);
+        } else {
+          setShowSessionRecovery(false);
+        }
+      } catch (checkErr) {
+        console.error("[Jornada-Reset] Falha na verificação final de jornada ativa:", checkErr);
+        setShowSessionRecovery(false); // Fechar mesmo se falhar a verificação de segurança secundária
+      }
+    } else {
+      console.log("[Jornada-Reset] Resultado da verificação final de jornada ativa: Nenhuma ativa (Modo Local)");
+      setShowSessionRecovery(false);
+    }
   };
 
   const navigations = [

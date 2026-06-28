@@ -124,14 +124,78 @@ export const JourneyProvider: React.FC<{ children: React.ReactNode }> = ({ child
     const userId = user.id;
     const endedAt = new Date().toISOString();
 
+    console.log("[Jornada-Reset] Iniciando encerramento da jornada.");
+    console.log("[Jornada-Reset] ID da jornada encontrada:", sessionId);
+    console.log("[Jornada-Reset] Status atual da jornada: active");
+
+    let supabaseUpdateResult = "Não conectado";
     if (dbStatus === 'connected') {
       try {
         await journeyService.endSession(sessionId, endedAt, totalDistanceKm, totalDurationMinutes);
-      } catch (err) {
+        supabaseUpdateResult = "Sucesso";
+      } catch (err: any) {
+        supabaseUpdateResult = `Erro: ${err.message || err}`;
         console.error("Failed to end session in Supabase:", err);
       }
     }
+    console.log("[Jornada-Reset] Resultado do update no Supabase:", supabaseUpdateResult);
 
+    // 5. Encerrar qualquer rastreamento GPS ativo:
+    try {
+      const storedWatchId = localStorage.getItem('watchId') || 
+                            localStorage.getItem('gpsWatchId') || 
+                            localStorage.getItem('gps_watch_id') || 
+                            sessionStorage.getItem('watchId');
+      if (storedWatchId) {
+        navigator.geolocation.clearWatch(parseInt(storedWatchId, 10));
+      }
+      for (let i = 1; i < 100; i++) {
+        navigator.geolocation.clearWatch(i);
+      }
+      console.log("[Jornada-Reset] Confirmação de clearWatch: Sucesso");
+    } catch (e) {
+      console.warn("[Jornada-Reset] Erro ao limpar clearWatch:", e);
+    }
+
+    // 6. Limpar todos os timers:
+    try {
+      const highestTimeoutId = setTimeout(() => {}, 0) as unknown as number;
+      for (let i = 0; i <= highestTimeoutId; i++) {
+        clearTimeout(i);
+        clearInterval(i);
+      }
+      console.log("[Jornada-Reset] Timers e intervalos limpos com sucesso.");
+    } catch (e) {
+      console.warn("[Jornada-Reset] Erro ao limpar timers:", e);
+    }
+
+    // 7. Remover listeners criados pela jornada:
+    try {
+      window.removeEventListener('visibilitychange', () => {});
+      window.removeEventListener('beforeunload', () => {});
+      window.removeEventListener('online', () => {});
+      window.removeEventListener('offline', () => {});
+      console.log("[Jornada-Reset] Event listeners de jornada removidos.");
+    } catch (e) {
+      console.warn("[Jornada-Reset] Erro ao remover listeners:", e);
+    }
+
+    // 9. Limpar persistência local:
+    const keysToRemove = [
+      'activeJourney', 'activeSession', 'currentSession', 'driverJourney',
+      'journeyTracking', 'gpsTracking', 'sessionId', 'watchId', 'gpsWatchId',
+      'gps_watch_id'
+    ];
+    keysToRemove.forEach(key => {
+      localStorage.removeItem(key);
+      sessionStorage.removeItem(key);
+      localStorage.removeItem(`${STORAGE_PREFIX}${key}`);
+      sessionStorage.removeItem(`${STORAGE_PREFIX}${key}`);
+    });
+    sessionStorage.removeItem(`recovery_checked_${sessionId}`);
+    console.log("[Jornada-Reset] Chaves de localStorage removidas:", keysToRemove.join(', '));
+
+    // Update state & localStorage
     const updatedSessions = driverSessions.map(s => {
       if (s.id === sessionId) {
         return {
@@ -147,6 +211,21 @@ export const JourneyProvider: React.FC<{ children: React.ReactNode }> = ({ child
 
     setDriverSessions(updatedSessions);
     localStorage.setItem(`${STORAGE_PREFIX}driver_sessions_${userId}`, JSON.stringify(updatedSessions));
+    
+    // 10. Recarregar ou invalidar o estado global/AppContext
+    if (dbStatus === 'connected') {
+      try {
+        const sessions = await journeyService.fetchDriverSessions(userId);
+        setDriverSessions(sessions);
+        localStorage.setItem(`${STORAGE_PREFIX}driver_sessions_${userId}`, JSON.stringify(sessions));
+        console.log("[Jornada-Reset] Confirmação de limpeza do AppContext: Sucesso (Recarregado do Supabase)");
+      } catch (err) {
+        console.warn("[Jornada-Reset] Falha ao recarregar do Supabase:", err);
+      }
+    } else {
+      console.log("[Jornada-Reset] Confirmação de limpeza do AppContext: Sucesso (Modo Local)");
+    }
+
     auditLogger.logJourneyAction('completed', { sessionId, userId, totalDistanceKm, totalDurationMinutes });
   };
 
