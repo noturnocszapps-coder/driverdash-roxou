@@ -4,21 +4,42 @@
  * When to edit: When updating session listeners, logging states, or coordinate bindings.
  */
 
-import React, { createContext, useContext, useState, useEffect } from 'react';
+import React, { createContext, useContext, useState, useEffect, useRef } from 'react';
 import { useAuth } from '../auth/auth.hooks';
 import { STORAGE_PREFIX } from '../shared/constants';
-import { DriverSession, RoutePoint, JourneyContextType } from './journey.types';
+import { DriverSession, RoutePoint, JourneyContextType, GpsTestResult } from './journey.types';
 import { journeyService } from './journey.service';
 import { trackingSync } from '../tracking/tracking.sync';
 import { auditLogger } from '../observability/auditLogger';
 
 export const JourneyContext = createContext<JourneyContextType | undefined>(undefined);
 
+const getErrorName = (code: number) => {
+  switch (code) {
+    case 1: return 'PERMISSION_DENIED';
+    case 2: return 'POSITION_UNAVAILABLE';
+    case 3: return 'TIMEOUT';
+    default: return 'UNKNOWN_ERROR';
+  }
+};
+
 export const JourneyProvider: React.FC<{ children: React.ReactNode }> = ({ children }) => {
   const { user, dbStatus } = useAuth();
   const [driverSessions, setDriverSessions] = useState<DriverSession[]>([]);
   const [routePoints, setRoutePoints] = useState<RoutePoint[]>([]);
   const [unsyncedPointsCount, setUnsyncedPointsCount] = useState<number>(0);
+
+  // GPS Engine States
+  const [gpsStatus, setGpsStatus] = useState<'Aguardando permissão' | 'Solicitando primeira posição' | 'GPS ativo' | 'GPS sem sinal' | 'GPS erro' | 'GPS negado' | 'Sensor inativo'>('Sensor inativo');
+  const [permissionState, setPermissionState] = useState<'granted' | 'prompt' | 'denied' | 'unknown'>('unknown');
+  const [lastCoord, setLastCoord] = useState<{ lat: number; lng: number; accuracy: number; speed: number; heading: number | null; altitude: number | null; timestamp: number } | null>(null);
+  const [gpsError, setGpsError] = useState<{ code: number; name: string; message: string; timestamp: number } | null>(null);
+  const [gpsTestResult, setGpsTestResult] = useState<GpsTestResult | null>(null);
+  const [gpsTestLoading, setGpsTestLoading] = useState<boolean>(false);
+
+  const watchIdRef = useRef<number | null>(null);
+  const activeSessionRef = useRef<DriverSession | null>(null);
+  const recoveryTimeoutRef = useRef<any>(null);
 
   useEffect(() => {
     setUnsyncedPointsCount(trackingSync.getUnsyncedPoints().length);
@@ -88,6 +109,297 @@ export const JourneyProvider: React.FC<{ children: React.ReactNode }> = ({ child
       clearInterval(interval);
     };
   }, [dbStatus]);
+
+  // Sync activeSession reference and run the GPS engine
+  const activeSession = driverSessions.find(s => s.status === 'active');
+  const activeSessionId = activeSession?.id;
+
+  useEffect(() => {
+    activeSessionRef.current = activeSession || null;
+  }, [activeSession]);
+
+  const scheduleRecovery = () => {
+    if (recoveryTimeoutRef.current) return;
+    console.log("[GPS] Scheduling automatic recovery in 5 seconds...");
+    recoveryTimeoutRef.current = setTimeout(() => {
+      recoveryTimeoutRef.current = null;
+      if (activeSessionRef.current) {
+        console.log("[GPS] Attempting automatic recovery...");
+        startGpsTracking();
+      }
+    }, 5000);
+  };
+
+  const startWatcher = () => {
+    // Clear any existing watcher first
+    if (watchIdRef.current !== null) {
+      console.log("[GPS] clearWatch (before restarting)", watchIdRef.current);
+      try {
+        navigator.geolocation.clearWatch(watchIdRef.current);
+      } catch (e) {
+        console.warn("[GPS] error clearing watch:", e);
+      }
+      watchIdRef.current = null;
+    }
+
+    console.log("[GPS] watchPosition start");
+    const id = navigator.geolocation.watchPosition(
+      (pos) => {
+        console.log("[GPS] watchPosition success", pos.coords);
+        const lat = pos.coords.latitude;
+        const lng = pos.coords.longitude;
+        const accuracy = pos.coords.accuracy;
+        const speed = pos.coords.speed !== null ? pos.coords.speed * 3.6 : 0;
+        const heading = pos.coords.heading;
+        const altitude = pos.coords.altitude;
+        const timestamp = pos.timestamp;
+
+        setLastCoord({ lat, lng, accuracy, speed, heading, altitude, timestamp });
+        setGpsStatus('GPS ativo');
+        setGpsError(null);
+
+        if (activeSessionRef.current) {
+          addRoutePoint({
+            session_id: activeSessionRef.current.id,
+            latitude: lat,
+            longitude: lng,
+            speed_kmh: Number(speed.toFixed(1))
+          });
+        }
+      },
+      (err) => {
+        console.error("[GPS] watchPosition error", err);
+        const errName = getErrorName(err.code);
+        setGpsError({
+          code: err.code,
+          name: errName,
+          message: err.message,
+          timestamp: Date.now()
+        });
+
+        if (err.code === 1) {
+          setGpsStatus('GPS negado');
+        } else if (err.code === 2 || err.code === 3) {
+          setGpsStatus('GPS sem sinal');
+          // Automatically trigger recovery for TIMEOUT/POSITION_UNAVAILABLE
+          scheduleRecovery();
+        } else {
+          setGpsStatus('GPS erro');
+        }
+      },
+      { enableHighAccuracy: true, timeout: 30000, maximumAge: 0 }
+    );
+
+    watchIdRef.current = id;
+    localStorage.setItem('watchId', id.toString());
+    localStorage.setItem('gpsWatchId', id.toString());
+  };
+
+  const startGpsTracking = async () => {
+    console.log("[GPS] starting GPS tracking...");
+    if (recoveryTimeoutRef.current) {
+      clearTimeout(recoveryTimeoutRef.current);
+      recoveryTimeoutRef.current = null;
+    }
+
+    // 1. Check support
+    if (!navigator.geolocation) {
+      console.log("[GPS] geolocation supported: false");
+      setGpsStatus('GPS erro');
+      setGpsError({
+        code: 0,
+        name: 'GEOLOCATION_NOT_SUPPORTED',
+        message: 'Geolocalização não suportada neste navegador.',
+        timestamp: Date.now()
+      });
+      return;
+    }
+    console.log("[GPS] geolocation supported: true");
+
+    // 2. Query permission
+    let currentPermission: 'granted' | 'prompt' | 'denied' | 'unknown' = 'unknown';
+    try {
+      if (navigator.permissions && navigator.permissions.query) {
+        const pStatus = await navigator.permissions.query({ name: 'geolocation' as PermissionName });
+        console.log("[GPS] permission state:", pStatus.state);
+        currentPermission = pStatus.state as any;
+        setPermissionState(pStatus.state as any);
+      }
+    } catch (e) {
+      console.warn("[GPS] error querying permission state:", e);
+    }
+
+    if (currentPermission === 'denied') {
+      setGpsStatus('GPS negado');
+      setGpsError({
+        code: 1,
+        name: 'PERMISSION_DENIED',
+        message: 'Permissão negada. Ative a localização nas permissões do Chrome para motorista.roxou.com.br.',
+        timestamp: Date.now()
+      });
+      return;
+    }
+
+    if (currentPermission === 'prompt') {
+      setGpsStatus('Aguardando permissão');
+    } else {
+      setGpsStatus('Solicitando primeira posição');
+    }
+
+    // 3. Executar primeiro getCurrentPosition
+    console.log("[GPS] getCurrentPosition start");
+    navigator.geolocation.getCurrentPosition(
+      (pos) => {
+        console.log("[GPS] getCurrentPosition success", pos.coords);
+        const lat = pos.coords.latitude;
+        const lng = pos.coords.longitude;
+        const accuracy = pos.coords.accuracy;
+        const speed = pos.coords.speed !== null ? pos.coords.speed * 3.6 : 0;
+        const heading = pos.coords.heading;
+        const altitude = pos.coords.altitude;
+        const timestamp = pos.timestamp;
+
+        setLastCoord({ lat, lng, accuracy, speed, heading, altitude, timestamp });
+        setGpsStatus('GPS ativo');
+        setGpsError(null);
+
+        // Record point in session
+        if (activeSessionRef.current) {
+          addRoutePoint({
+            session_id: activeSessionRef.current.id,
+            latitude: lat,
+            longitude: lng,
+            speed_kmh: Number(speed.toFixed(1))
+          });
+        }
+
+        // Start watchPosition
+        startWatcher();
+      },
+      (err) => {
+        console.error("[GPS] getCurrentPosition error", err);
+        const errName = getErrorName(err.code);
+        setGpsError({
+          code: err.code,
+          name: errName,
+          message: err.message,
+          timestamp: Date.now()
+        });
+
+        if (err.code === 1) {
+          setGpsStatus('GPS negado');
+        } else if (err.code === 2 || err.code === 3) {
+          setGpsStatus('GPS sem sinal');
+          // Trigger recovery
+          scheduleRecovery();
+        } else {
+          setGpsStatus('GPS erro');
+        }
+      },
+      { enableHighAccuracy: true, timeout: 30000, maximumAge: 0 }
+    );
+  };
+
+  const stopGpsTracking = () => {
+    if (watchIdRef.current !== null) {
+      console.log("[GPS] clearWatch", watchIdRef.current);
+      try {
+        navigator.geolocation.clearWatch(watchIdRef.current);
+      } catch (e) {
+        console.warn("[GPS] error clearing watch:", e);
+      }
+      watchIdRef.current = null;
+    }
+    if (recoveryTimeoutRef.current) {
+      clearTimeout(recoveryTimeoutRef.current);
+      recoveryTimeoutRef.current = null;
+    }
+    setGpsStatus('Sensor inativo');
+  };
+
+  // Start or stop tracking based on active session existence
+  useEffect(() => {
+    if (activeSessionId) {
+      startGpsTracking();
+    } else {
+      stopGpsTracking();
+    }
+
+    return () => {
+      stopGpsTracking();
+    };
+  }, [activeSessionId]);
+
+  const testGps = async (): Promise<GpsTestResult> => {
+    setGpsTestLoading(true);
+    setGpsTestResult(null);
+    console.log("[GPS] testGps start");
+
+    if (!navigator.geolocation) {
+      console.warn("[GPS] geolocation not supported");
+      const errRes: GpsTestResult = {
+        error: {
+          code: 0,
+          name: 'GEOLOCATION_NOT_SUPPORTED',
+          message: 'Geolocalização não suportada neste navegador.',
+          timestamp: Date.now()
+        }
+      };
+      setGpsTestResult(errRes);
+      setGpsTestLoading(false);
+      return errRes;
+    }
+
+    try {
+      if (navigator.permissions && navigator.permissions.query) {
+        const status = await navigator.permissions.query({ name: 'geolocation' as PermissionName });
+        console.log("[GPS] permission state in testGps:", status.state);
+        setPermissionState(status.state as any);
+      }
+    } catch (e) {
+      console.warn("[GPS] error querying permission state in testGps:", e);
+    }
+
+    return new Promise<GpsTestResult>((resolve) => {
+      navigator.geolocation.getCurrentPosition(
+        (pos) => {
+          console.log("[GPS] testGps success", pos.coords);
+          const result: GpsTestResult = {
+            latitude: pos.coords.latitude,
+            longitude: pos.coords.longitude,
+            accuracy: pos.coords.accuracy,
+            speed: pos.coords.speed !== null ? pos.coords.speed * 3.6 : null,
+            heading: pos.coords.heading,
+            altitude: pos.coords.altitude,
+            timestamp: pos.timestamp,
+            error: null
+          };
+          setGpsTestResult(result);
+          setGpsTestLoading(false);
+          resolve(result);
+        },
+        (err) => {
+          console.error("[GPS] testGps error", err);
+          const result: GpsTestResult = {
+            error: {
+              code: err.code,
+              name: getErrorName(err.code),
+              message: err.message,
+              timestamp: Date.now()
+            }
+          };
+          setGpsTestResult(result);
+          setGpsTestLoading(false);
+          resolve(result);
+        },
+        { enableHighAccuracy: true, timeout: 30000, maximumAge: 0 }
+      );
+    });
+  };
+
+  const clearGpsTestResult = () => {
+    setGpsTestResult(null);
+  };
 
   const startSession = async () => {
     if (!user) return;
@@ -279,7 +591,15 @@ export const JourneyProvider: React.FC<{ children: React.ReactNode }> = ({ child
         endSession,
         addRoutePoint,
         unsyncedPointsCount,
-        syncOfflineQueue
+        syncOfflineQueue,
+        gpsStatus,
+        permissionState,
+        lastCoord,
+        gpsError,
+        gpsTestResult,
+        gpsTestLoading,
+        testGps,
+        clearGpsTestResult
       }}
     >
       {children}

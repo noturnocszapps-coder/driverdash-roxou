@@ -16,6 +16,7 @@ import { GoalsProvider, useGoals } from '../modules/goals/goals.hooks';
 import { InsightsProvider, useInsights } from '../modules/insights/insights.hooks';
 import { SubscriptionsProvider, useSubscriptions } from '../modules/subscriptions/subscriptions.hooks';
 import { JourneyProvider, useJourney } from '../modules/journey/journey.hooks';
+import { GpsTestResult } from '../modules/journey/journey.types';
 import { DemandProvider, useDemand } from '../modules/demand/demand.hooks';
 import { AlertsProvider, useAlerts } from '../modules/alerts/alerts.hooks';
 
@@ -72,6 +73,16 @@ interface AppContextType {
   endSession: (sessionId: string, totalDistanceKm: number, totalDurationMinutes: number) => Promise<void>;
   addRoutePoint: (point: Omit<RoutePoint, 'id' | 'recorded_at'>) => Promise<void>;
   addSmartAlert: (alertData: { type: 'goal' | 'fuel' | 'profit' | 'rental'; title: string; description: string; severity: 'low' | 'medium' | 'high' }) => Promise<void>;
+  
+  // GPS Engine States
+  gpsStatus: 'Aguardando permissão' | 'Solicitando primeira posição' | 'GPS ativo' | 'GPS sem sinal' | 'GPS erro' | 'GPS negado' | 'Sensor inativo';
+  permissionState: 'granted' | 'prompt' | 'denied' | 'unknown';
+  lastCoord: { lat: number; lng: number; accuracy: number; speed: number; heading: number | null; altitude: number | null; timestamp: number } | null;
+  gpsError: { code: number; name: string; message: string; timestamp: number } | null;
+  gpsTestResult: GpsTestResult | null;
+  gpsTestLoading: boolean;
+  testGps: () => Promise<GpsTestResult>;
+  clearGpsTestResult: () => void;
   
   // Commercial & admin updates
   updateUserPlan: (userId: string, plan: UserPlan) => Promise<void>;
@@ -321,6 +332,15 @@ const LegacyAppBridgeProvider: React.FC<{ children: React.ReactNode }> = ({ chil
         endSession: journey.endSession,
         addRoutePoint: journey.addRoutePoint,
         addSmartAlert: alerts.addSmartAlert,
+
+        gpsStatus: journey.gpsStatus,
+        permissionState: journey.permissionState,
+        lastCoord: journey.lastCoord,
+        gpsError: journey.gpsError,
+        gpsTestResult: journey.gpsTestResult,
+        gpsTestLoading: journey.gpsTestLoading,
+        testGps: journey.testGps,
+        clearGpsTestResult: journey.clearGpsTestResult,
 
         updateUserPlan,
         updateSubscriptionStatus: subscriptions.updateSubscriptionStatus,

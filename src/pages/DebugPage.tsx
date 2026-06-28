@@ -21,18 +21,22 @@ export const DebugPage: React.FC = () => {
     syncOfflineQueue, 
     addRoutePoint, 
     addSmartAlert,
-    dbStatus
+    dbStatus,
+    gpsStatus,
+    permissionState,
+    lastCoord,
+    gpsError,
+    gpsTestResult,
+    gpsTestLoading,
+    testGps,
+    clearGpsTestResult
   } = useApp();
 
   const [simulatedOnline, setSimulatedOnline] = useState(navigator.onLine);
-  const [gpsReady, setGpsReady] = useState(false);
-  const [lastCoord, setLastCoord] = useState<{ lat: number; lng: number; accuracy: number; speed: number; heading: number | null } | null>(null);
   const [wakeLockEnabled, setWakeLockEnabled] = useState(false);
   const [isSyncing, setIsSyncing] = useState(false);
   const [sessionPointsCount, setSessionPointsCount] = useState(0);
-
-  // Simulation controls state
-  const [simulationActive, setSimulationActive] = useState(false);
+  const [hasGeneratedSimulated, setHasGeneratedSimulated] = useState(false);
 
   // Active driver session reference
   const activeSession = useMemo(() => {
@@ -78,57 +82,13 @@ export const DebugPage: React.FC = () => {
     };
   }, [simulatedOnline]);
 
-  // Monitor coordinates and WakeLock status
+  // Check WakeLock mockup (we assume screen keeps ON since tracked)
   useEffect(() => {
-    let watchId: number | null = null;
-
     if (activeSession) {
-      setGpsReady(true);
-      if (navigator.geolocation) {
-        watchId = navigator.geolocation.watchPosition(
-          (pos) => {
-            setLastCoord({
-              lat: pos.coords.latitude,
-              lng: pos.coords.longitude,
-              accuracy: pos.coords.accuracy,
-              speed: pos.coords.speed ? pos.coords.speed * 3.6 : Math.random() * 40 + 20, // speed in kmh
-              heading: pos.coords.heading // in degrees
-            });
-
-            // Trigger technical alerts for bad GPS accuracy
-            if (pos.coords.accuracy > 50) {
-              addSmartAlert({
-                type: 'goal',
-                title: 'Precisão fraca de GPS',
-                description: `A precisão atual do GPS é de ${pos.coords.accuracy.toFixed(0)} metros, o que pode comprometer suas métricas de KM.`,
-                severity: 'medium'
-              });
-            }
-          },
-          (err) => {
-            console.error(err);
-            addSmartAlert({
-              type: 'goal',
-              title: 'GPS desligado ou inativo',
-              description: 'Aviso recebido da telemetria: Sem acesso ao sinal de satélite ou permissão de posicionamento.',
-              severity: 'high'
-            });
-          },
-          { enableHighAccuracy: true, timeout: 10000, maximumAge: 0 }
-        );
-      }
-
-      // Check WakeLock mockup (we assume screen keeps ON since tracked)
       setWakeLockEnabled(true);
     } else {
-      setGpsReady(false);
       setWakeLockEnabled(false);
-      if (watchId !== null) navigator.geolocation.clearWatch(watchId);
     }
-
-    return () => {
-      if (watchId !== null) navigator.geolocation.clearWatch(watchId);
-    };
   }, [activeSession]);
 
   // Track lost WakeLock technical alerts
@@ -144,7 +104,7 @@ export const DebugPage: React.FC = () => {
 
   // Convert Heading of degrees to friendly human cardinal orientation
   const getCardinalDirection = (deg: number | null) => {
-    if (deg === null) return 'N/D';
+    if (deg === null || deg === undefined) return 'N/D';
     const directions = ['Norte 🧭', 'Nordeste ↗️', 'Leste ➡️', 'Sudeste ↘️', 'Sul ⬇️', 'Sudoeste ↙️', 'Oeste ⬅️', 'Noroeste ↖️'];
     const idx = Math.round(((deg % 360) / 45)) % 8;
     return directions[idx];
@@ -204,7 +164,6 @@ export const DebugPage: React.FC = () => {
     const nextLat = baseLat + (Math.random() - 0.5) * 0.0015;
     const nextLng = baseLng + (Math.random() - 0.5) * 0.0015;
     const speed = Math.round(15 + Math.random() * 55);
-    const accuracy = Math.round(5 + Math.random() * 12);
 
     addRoutePoint({
       session_id: activeSession.id,
@@ -213,14 +172,28 @@ export const DebugPage: React.FC = () => {
       speed_kmh: speed
     });
 
-    setLastCoord({
-      lat: nextLat,
-      lng: nextLng,
-      accuracy,
-      speed,
-      heading: Math.floor(Math.random() * 360)
-    });
+    setHasGeneratedSimulated(true);
   };
+
+  // Map sensor states to elegant badge colors
+  const getGpsStatusStyle = (status: string) => {
+    switch (status) {
+      case 'GPS ativo':
+        return { color: 'text-emerald-400', dot: 'bg-emerald-500 animate-ping shadow-[0_0_8px_#10b981]' };
+      case 'Aguardando permissão':
+      case 'Solicitando primeira posição':
+        return { color: 'text-yellow-400', dot: 'bg-yellow-500 animate-pulse shadow-[0_0_8px_#f59e0b]' };
+      case 'GPS sem sinal':
+        return { color: 'text-amber-500', dot: 'bg-amber-500 animate-pulse shadow-[0_0_8px_#f59e0b]' };
+      case 'GPS erro':
+      case 'GPS negado':
+        return { color: 'text-rose-400', dot: 'bg-rose-500 animate-pulse shadow-[0_0_8px_#ef4444]' };
+      default:
+        return { color: 'text-slate-400', dot: 'bg-slate-600' };
+    }
+  };
+
+  const statusStyle = getGpsStatusStyle(gpsStatus);
 
   return (
     <div className="space-y-6 max-w-4xl mx-auto font-sans">
@@ -236,7 +209,7 @@ export const DebugPage: React.FC = () => {
           </p>
         </div>
 
-        {/* Manual offline simulating toggle */}
+        {/* Manual offline simulating toggle with Simulado Badge */}
         <button
           onClick={() => setSimulatedOnline(!simulatedOnline)}
           className={`flex items-center gap-2 px-4 py-2 text-xs font-mono font-semibold rounded-xl border cursor-pointer transition-all ${
@@ -248,12 +221,14 @@ export const DebugPage: React.FC = () => {
           {simulatedOnline ? (
             <>
               <Wifi className="w-3.5 h-3.5 text-emerald-400" />
-              <span>Internet: ONLINE (Simulada)</span>
+              <span>Internet: ONLINE</span>
+              <span className="px-1.5 py-0.2 bg-emerald-900/60 text-emerald-300 text-[8px] font-bold rounded uppercase">SIMULADO</span>
             </>
           ) : (
             <>
               <WifiOff className="w-3.5 h-3.5 text-rose-400 animate-pulse" />
-              <span>Internet: OFFLINE (Simulada)</span>
+              <span>Internet: OFFLINE</span>
+              <span className="px-1.5 py-0.2 bg-rose-900/60 text-rose-300 text-[8px] font-bold rounded uppercase animate-pulse">SIMULADO</span>
             </>
           )}
         </button>
@@ -273,10 +248,13 @@ export const DebugPage: React.FC = () => {
             <div className="flex items-center justify-between mb-6">
               <span className="text-xs font-mono font-semibold tracking-wider text-purple-400 uppercase">Status dos Sensores GPS</span>
               <div className="flex items-center gap-2">
-                <span className={`h-2.5 w-2.5 rounded-full ${activeSession ? 'bg-emerald-500 animate-ping shadow-[0_0_8px_#10b981]' : 'bg-slate-600'}`} />
-                <span className="text-xs font-semibold font-mono text-slate-300">
-                  {activeSession ? 'RASTREAMENTO ATIVO' : 'SENSOR INATIVO'}
+                <span className={`h-2.5 w-2.5 rounded-full ${statusStyle.dot}`} />
+                <span className={`text-xs font-semibold font-mono uppercase ${statusStyle.color}`}>
+                  {gpsStatus}
                 </span>
+                {hasGeneratedSimulated && (
+                  <span className="ml-1 px-1.5 py-0.5 bg-purple-950 border border-purple-900 text-[8px] font-extrabold rounded text-purple-400 uppercase">SIMULADO</span>
+                )}
               </div>
             </div>
 
@@ -286,7 +264,7 @@ export const DebugPage: React.FC = () => {
                 <span className="text-xs font-bold text-white font-mono block">
                   {lastCoord ? `${lastCoord.lat.toFixed(6)}` : 'Aguardando...'}
                 </span>
-                <span className="text-[10px] text-slate-400 font-mono block 0.5">
+                <span className="text-[10px] text-slate-400 font-mono block mt-0.5">
                   {lastCoord ? `${lastCoord.lng.toFixed(6)}` : ''}
                 </span>
               </div>
@@ -300,7 +278,7 @@ export const DebugPage: React.FC = () => {
                 }`}>
                   {lastCoord ? `${lastCoord.accuracy.toFixed(1)}m` : 'N/D'}
                 </span>
-                <span className="text-[10px] text-slate-400 font-mono block mt-0.5">
+                <span className="text-[10px] text-slate-400 font-mono block mt-0.5 truncate">
                   {lastCoord ? (lastCoord.accuracy <= 15 ? 'Excelente (HD)' : lastCoord.accuracy <= 50 ? 'Intermediário' : 'Fraco / Urban Noise') : ''}
                 </span>
               </div>
@@ -316,8 +294,31 @@ export const DebugPage: React.FC = () => {
               </div>
             </div>
 
+            {/* Real browser error display */}
+            {gpsError && (
+              <div className="mt-4 p-4 rounded-2xl bg-rose-950/15 border border-rose-950/35 font-mono text-[11px] space-y-1">
+                <p className="text-rose-400 font-bold flex items-center gap-1.5">
+                  <AlertTriangle className="w-3.5 h-3.5" /> Erro de Localização Real Detectado
+                </p>
+                <div className="grid grid-cols-2 gap-2 mt-2 pt-2 border-t border-rose-950/40">
+                  <div>
+                    <span className="text-[10px] text-rose-300 block">Código</span>
+                    <span className="text-xs font-bold text-white block">{gpsError.code} ({gpsError.name})</span>
+                  </div>
+                  <div>
+                    <span className="text-[10px] text-rose-300 block">Horário</span>
+                    <span className="text-xs font-bold text-white block">{new Date(gpsError.timestamp).toLocaleTimeString('pt-BR')}</span>
+                  </div>
+                </div>
+                <div className="pt-2">
+                  <span className="text-[10px] text-rose-300 block">Mensagem original</span>
+                  <span className="text-xs text-slate-300 block break-words">{gpsError.message}</span>
+                </div>
+              </div>
+            )}
+
             {/* Simulated Live Compass Heading Visualizer */}
-            {lastCoord && (
+            {lastCoord && lastCoord.heading !== null && (
               <div className="mt-6 p-4 rounded-2xl bg-indigo-950/10 border border-purple-950/20 flex items-center justify-between">
                 <div className="flex items-center gap-3">
                   <div 
@@ -335,6 +336,99 @@ export const DebugPage: React.FC = () => {
                   GPS LOCK OK
                 </div>
               </div>
+            )}
+          </div>
+
+          {/* GPS TESTING PANEL */}
+          <div className="p-6 bg-[#0a061d]/80 border border-purple-950/50 rounded-3xl">
+            <div className="flex items-center justify-between mb-4">
+              <span className="text-xs font-mono font-semibold tracking-wider text-purple-400 uppercase">Diagnóstico e Teste de GPS</span>
+              <button
+                onClick={testGps}
+                disabled={gpsTestLoading}
+                className={`px-4 py-2 bg-purple-600 hover:bg-purple-500 disabled:bg-purple-950/40 text-white font-semibold rounded-xl text-xs flex items-center gap-1.5 transition-all shadow-md cursor-pointer`}
+              >
+                {gpsTestLoading ? (
+                  <>
+                    <RefreshCw className="w-3.5 h-3.5 animate-spin" />
+                    <span>Testando...</span>
+                  </>
+                ) : (
+                  <>
+                    <Play className="w-3.5 h-3.5" />
+                    <span>Testar GPS</span>
+                  </>
+                )}
+              </button>
+            </div>
+
+            {/* Test result section */}
+            {gpsTestResult && (
+              <motion.div 
+                initial={{ opacity: 0, y: 10 }}
+                animate={{ opacity: 1, y: 0 }}
+                className="p-4 rounded-2xl bg-purple-950/10 border border-purple-950/30 space-y-3"
+              >
+                <div className="flex items-center justify-between">
+                  <span className="text-xs font-bold text-slate-300">Resultado do Teste</span>
+                  {gpsTestResult.error ? (
+                    <span className="px-2 py-0.5 text-[9px] font-mono rounded bg-rose-950/50 text-rose-400 border border-rose-900/45 uppercase font-bold">Erro de Sinal</span>
+                  ) : (
+                    <span className="px-2 py-0.5 text-[9px] font-mono rounded bg-emerald-950/50 text-emerald-400 border border-emerald-900/45 uppercase font-bold">Sucesso</span>
+                  )}
+                </div>
+
+                {gpsTestResult.error ? (
+                  <div className="p-3 rounded-xl bg-rose-950/15 border border-rose-950/35 space-y-1 font-mono text-[11px]">
+                    <p className="text-rose-400 font-bold">Código: {gpsTestResult.error.code} ({gpsTestResult.error.name})</p>
+                    <p className="text-slate-300">Mensagem: {gpsTestResult.error.message}</p>
+                    <p className="text-slate-400 text-[10px]">Timestamp: {new Date(gpsTestResult.error.timestamp).toLocaleTimeString('pt-BR')}</p>
+                  </div>
+                ) : (
+                  <div className="grid grid-cols-2 sm:grid-cols-3 gap-3 font-mono text-[11px]">
+                    <div className="p-2 bg-purple-950/15 rounded-lg">
+                      <span className="text-[10px] text-purple-400 block">Latitude</span>
+                      <span className="text-xs font-bold text-white block">{gpsTestResult.latitude?.toFixed(6) || 'N/D'}</span>
+                    </div>
+                    <div className="p-2 bg-purple-950/15 rounded-lg">
+                      <span className="text-[10px] text-purple-400 block">Longitude</span>
+                      <span className="text-xs font-bold text-white block">{gpsTestResult.longitude?.toFixed(6) || 'N/D'}</span>
+                    </div>
+                    <div className="p-2 bg-purple-950/15 rounded-lg">
+                      <span className="text-[10px] text-purple-400 block">Precisão</span>
+                      <span className="text-xs font-bold text-emerald-400 block">
+                        {gpsTestResult.accuracy !== undefined ? `${gpsTestResult.accuracy.toFixed(1)}m` : 'N/D'}
+                      </span>
+                    </div>
+                    <div className="p-2 bg-purple-950/15 rounded-lg">
+                      <span className="text-[10px] text-purple-400 block">Velocidade</span>
+                      <span className="text-xs font-bold text-white block">
+                        {gpsTestResult.speed !== undefined && gpsTestResult.speed !== null ? `${gpsTestResult.speed.toFixed(1)} km/h` : '0.0 km/h'}
+                      </span>
+                    </div>
+                    <div className="p-2 bg-purple-950/15 rounded-lg">
+                      <span className="text-[10px] text-purple-400 block">Direção</span>
+                      <span className="text-xs font-bold text-white block truncate">{getCardinalDirection(gpsTestResult.heading)}</span>
+                    </div>
+                    <div className="p-2 bg-purple-950/15 rounded-lg">
+                      <span className="text-[10px] text-purple-400 block">Altitude</span>
+                      <span className="text-xs font-bold text-white block truncate">
+                        {gpsTestResult.altitude !== undefined && gpsTestResult.altitude !== null ? `${gpsTestResult.altitude.toFixed(1)}m` : 'N/D'}
+                      </span>
+                    </div>
+                  </div>
+                )}
+                <div className="flex justify-between items-center text-[9px] font-mono text-slate-500">
+                  <span>Enviado via navigator.geolocation</span>
+                  <span>{gpsTestResult.timestamp ? new Date(gpsTestResult.timestamp).toLocaleTimeString('pt-BR') : ''}</span>
+                </div>
+              </motion.div>
+            )}
+
+            {!gpsTestResult && !gpsTestLoading && (
+              <p className="text-[11px] text-slate-400">
+                Pressione "Testar GPS" para realizar um diagnóstico instantâneo de localização e checar se o navegador está recebendo as coordenadas e permissões adequadas do dispositivo real.
+              </p>
             )}
           </div>
 
@@ -368,11 +462,12 @@ export const DebugPage: React.FC = () => {
                   </div>
                 </div>
 
-                {/* Simulated Telemetry Controls for Developers */}
+                {/* Simulated Telemetry Controls for Developers with Simulado Badge */}
                 <div className="pt-4 border-t border-purple-950/30">
                   <div className="flex items-center justify-between mb-3 columns-reverse">
-                    <span className="text-[11px] font-sans text-slate-300">
+                    <span className="text-[11px] font-sans text-slate-300 flex items-center gap-1.5">
                       🛰️ <strong>Simulador de Movimento GPS</strong>
+                      <span className="px-1 py-0.2 bg-purple-950 text-purple-300 border border-purple-900 text-[8px] font-bold rounded uppercase">SIMULADO</span>
                     </span>
                     <span className="text-[9px] text-purple-400 font-mono font-bold uppercase bg-purple-950/50 px-2 py-0.5 rounded border border-purple-900/30">
                       Ambiente de Testes Real

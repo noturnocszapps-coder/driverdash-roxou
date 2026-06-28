@@ -1,3 +1,9 @@
+/**
+ * Premium Active Journey Tracker Screen
+ * Route: /jornada
+ * Responsibility: Initiates tracking, displays active ride statistics, and monitors real-time GPS state.
+ */
+
 import React, { useState, useEffect, useMemo } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { useApp } from '../context/AppContext';
@@ -27,13 +33,14 @@ export const JornadaPage: React.FC = () => {
     routePoints, 
     startSession, 
     endSession, 
-    addRoutePoint, 
     addSmartAlert,
-    smartAlerts
+    smartAlerts,
+    gpsStatus,
+    permissionState,
+    lastCoord,
+    gpsError
   } = useApp();
 
-  const [trackingGpsStatus, setTrackingGpsStatus] = useState<'idle' | 'tracking' | 'error'>('idle');
-  const [gpsErrorMsg, setGpsErrorMsg] = useState<string | null>(null);
   const [elapsedTime, setElapsedTime] = useState<string>('00:00:00');
   const [wakeLockActive, setWakeLockActive] = useState(false);
   const [wakeLockObj, setWakeLockObj] = useState<any | null>(null);
@@ -125,7 +132,7 @@ export const JornadaPage: React.FC = () => {
   }, [currentSessionPoints]);
 
   // Mathematical "Tempo Parado Hoje" speed calculation
-  // "Considerar parado quando: velocidade estimada < 5 km/h por mais de 3 minutos"
+  // "Considerar parado when: velocidade estimada < 5 km/h for more than 3 minutes"
   const totalStoppedDurationMs = useMemo(() => {
     if (currentSessionPoints.length < 2) return 0;
 
@@ -191,103 +198,6 @@ export const JornadaPage: React.FC = () => {
     return `${mins} min`;
   }, [totalStoppedDurationMs]);
 
-  // Real-time loop capturing GPS coordinate details
-  useEffect(() => {
-    if (!activeSession) {
-      setTrackingGpsStatus('idle');
-      return;
-    }
-
-    setTrackingGpsStatus('tracking');
-    
-    // Core capturing handler
-    const captureGps = () => {
-      if (!navigator.geolocation) {
-        const errorMsg = 'Geolocalização não é suportada por seu navegador.';
-        setGpsErrorMsg(errorMsg);
-        setTrackingGpsStatus('error');
-        return;
-      }
-
-      navigator.geolocation.getCurrentPosition(
-        (position) => {
-          const { latitude, longitude, speed } = position.coords;
-          
-          // Speed is initially delivered in m/s, convert to km/h if valid or default calculate
-          let currentSpeedKmh = speed ? speed * 3.6 : 0;
-          
-          // If browser didn't give speed, estimate using the last point time & coordinates:
-          if (!speed && currentSessionPoints.length > 0) {
-            const lastPt = currentSessionPoints[currentSessionPoints.length - 1];
-            const t1 = new Date(lastPt.recorded_at).getTime();
-            const t2 = new Date().getTime();
-            const dtMs = t2 - t1;
-            
-            if (dtMs > 0) {
-              const lastDist = calculateHaversineDistance(
-                lastPt.latitude, 
-                lastPt.longitude, 
-                latitude, 
-                longitude
-              );
-              currentSpeedKmh = lastDist / (dtMs / 3600000);
-            }
-          }
-
-          // Add coordinate
-          addRoutePoint({
-            session_id: activeSession.id,
-            latitude,
-            longitude,
-            speed_kmh: Number(currentSpeedKmh.toFixed(1))
-          });
-
-          setGpsErrorMsg(null);
-          setTrackingGpsStatus('tracking');
-        },
-        (error) => {
-          let genericErr = 'Falha ao obter sinal do GPS.';
-          if (error.code === error.PERMISSION_DENIED) {
-            genericErr = 'Permissão de Localização Negada.';
-            // Trigger Roxou alerts
-            const hasAlert = smartAlerts.some(a => a.title === 'Permissão negada');
-            if (!hasAlert) {
-              addSmartAlert({
-                type: 'goal',
-                title: 'Permissão negada',
-                description: 'A permissão de localização é fundamental para computar seu trajeto, KM e estimativa de custos.',
-                severity: 'high'
-              });
-            }
-          } else if (error.code === error.POSITION_UNAVAILABLE || error.code === error.TIMEOUT) {
-            genericErr = 'Sinal de GPS inativo ou desligado.';
-            // Trigger Roxou alerts
-            const hasAlert = smartAlerts.some(a => a.title === 'GPS desligado');
-            if (!hasAlert) {
-              addSmartAlert({
-                type: 'goal',
-                title: 'GPS desligado',
-                description: 'Verifique se o seu dispositivo está com o sinal de localização e rede de dados móvel ligados.',
-                severity: 'high'
-              });
-            }
-          }
-          setGpsErrorMsg(genericErr);
-          setTrackingGpsStatus('error');
-        },
-        { enableHighAccuracy: true, timeout: 15000, maximumAge: 0 }
-      );
-    };
-
-    // First initial capture
-    captureGps();
-
-    // Loop interval set to 30 seconds
-    const intervalTimer = setInterval(captureGps, 30000);
-
-    return () => clearInterval(intervalTimer);
-  }, [activeSession, currentSessionPoints.length]);
-
   const handleStartTracking = async () => {
     await startSession();
     await requestWakeLock();
@@ -304,6 +214,61 @@ export const JornadaPage: React.FC = () => {
     await endSession(activeSession.id, totalKmToday, runningTimeMinutes);
     releaseWakeLock();
   };
+
+  // Map sensor states to elegant ui descriptions
+  const getGpsUiState = () => {
+    switch (gpsStatus) {
+      case 'GPS ativo':
+        return {
+          title: 'Sinal de Rastreamento Ativo',
+          desc: 'Transmitindo coordenadas GPS reais em tempo real...',
+          color: 'text-emerald-400',
+          badgeBg: 'bg-emerald-950/40 text-emerald-400',
+          dot: 'bg-emerald-500 animate-ping shadow-[0_0_8px_#10b981]',
+          isError: false
+        };
+      case 'Aguardando permissão':
+      case 'Solicitando primeira posição':
+        return {
+          title: 'Iniciando Rastreamento...',
+          desc: 'Aguardando permissões ou primeira resposta do sensor...',
+          color: 'text-yellow-400',
+          badgeBg: 'bg-yellow-950/40 text-yellow-400',
+          dot: 'bg-yellow-500 animate-pulse shadow-[0_0_8px_#f59e0b]',
+          isError: false
+        };
+      case 'GPS sem sinal':
+        return {
+          title: 'Sinal de GPS Fraco ou Inativo',
+          desc: 'Sem conexão com satélites ou sinal de dados temporariamente indisponível.',
+          color: 'text-amber-500',
+          badgeBg: 'bg-amber-950/40 text-amber-500',
+          dot: 'bg-amber-500 animate-pulse shadow-[0_0_8px_#f59e0b]',
+          isError: true
+        };
+      case 'GPS erro':
+      case 'GPS negado':
+        return {
+          title: 'Problemas na Detecção (Erro)',
+          desc: gpsError ? `Falha: ${gpsError.message}` : 'Verifique se a permissão de GPS está concedida no Chrome.',
+          color: 'text-rose-400',
+          badgeBg: 'bg-rose-950/40 text-rose-400',
+          dot: 'bg-rose-500 animate-pulse shadow-[0_0_8px_#ef4444]',
+          isError: true
+        };
+      default:
+        return {
+          title: 'Rastreamento em Espera',
+          desc: 'Inicie a jornada para ativar a telemetria do GPS.',
+          color: 'text-slate-400',
+          badgeBg: 'bg-slate-950/40 text-slate-400',
+          dot: 'bg-slate-600',
+          isError: false
+        };
+    }
+  };
+
+  const gpsUi = getGpsUiState();
 
   return (
     <div className="space-y-6">
@@ -360,7 +325,7 @@ export const JornadaPage: React.FC = () => {
                   <div>
                     <h2 className="text-xl font-bold text-white mb-2">Pronto para rodar?</h2>
                     <p className="text-xs text-slate-400 leading-relaxed">
-                      Inicie sua jornada operacional para computar distâncias percorridas de forma passiva através de telemetria inteligente de 30 segundos.
+                      Inicie sua jornada operacional para computar distâncias percorridas de forma passiva através de telemetria inteligente e automatizada por GPS real.
                     </p>
                   </div>
 
@@ -423,22 +388,12 @@ export const JornadaPage: React.FC = () => {
                   {/* Geolocation Telemetry status pill */}
                   <div className="p-4 rounded-2xl bg-[#09051d] border border-purple-950/30 flex items-center justify-between text-left">
                     <div className="flex items-center gap-3">
-                      <div className={`p-2 rounded-xl ${trackingGpsStatus === 'error' ? 'bg-rose-950/40 text-rose-400' : 'bg-purple-950/60 text-purple-400'} flex items-center justify-center`}>
-                        <Compass className={`w-5 h-5 ${trackingGpsStatus === 'tracking' ? 'animate-spin' : ''}`} style={{ animationDuration: '4s' }} />
+                      <div className={`p-2 rounded-xl ${gpsUi.isError ? 'bg-rose-950/40 text-rose-400' : 'bg-purple-950/60 text-purple-400'} flex items-center justify-center`}>
+                        <Compass className={`w-5 h-5 ${gpsStatus === 'GPS ativo' ? 'animate-spin' : ''}`} style={{ animationDuration: '4s' }} />
                       </div>
                       <div>
-                        {trackingGpsStatus === 'tracking' && (
-                          <>
-                            <p className="text-xs font-bold text-[#e1e1e6]">Sinal de Rastreamento Ativo</p>
-                            <p className="text-[10px] text-emerald-400 font-mono">Transmitindo coordenadas GPS a 30s...</p>
-                          </>
-                        )}
-                        {trackingGpsStatus === 'error' && (
-                          <>
-                            <p className="text-xs font-bold text-rose-400">Problemas na Detecção</p>
-                            <p className="text-[10px] text-rose-300/80 font-mono">{gpsErrorMsg || 'Verifique as permissões de geolocalização'}</p>
-                          </>
-                        )}
+                        <p className={`text-xs font-bold ${gpsUi.isError ? 'text-rose-400' : 'text-[#e1e1e6]'}`}>{gpsUi.title}</p>
+                        <p className="text-[10px] text-slate-400 font-mono mt-0.5">{gpsUi.desc}</p>
                       </div>
                     </div>
 
@@ -463,13 +418,13 @@ export const JornadaPage: React.FC = () => {
         <div className="space-y-6">
           
           {/* Active Status Alerts warnings */}
-          {trackingGpsStatus === 'error' && (
+          {gpsUi.isError && (
             <div className="p-5 rounded-2xl bg-rose-950/20 border border-rose-900/30 text-rose-200 flex items-start gap-3">
               <ShieldAlert className="w-5 h-5 text-rose-400 shrink-0 mt-0.5" />
               <div>
                 <h4 className="text-xs font-bold text-white">Anomalia de Telemetria</h4>
                 <p className="text-[11px] text-rose-300 leading-relaxed mt-1">
-                  Não foi possível obter uma leitura de sinal GPS válida. Verifique se as configurações de localização estão liberadas no navegador e ativas no smartphone.
+                  Não foi possível obter uma leitura de sinal GPS válida. {gpsUi.desc} Ative o "Local Exato" nas configurações do Chrome se estiver no celular Android/iOS.
                 </p>
               </div>
             </div>
@@ -484,7 +439,7 @@ export const JornadaPage: React.FC = () => {
             <ul className="space-y-3 text-xs text-slate-400 leading-relaxed list-none pl-0">
               <li className="flex items-start gap-2">
                 <span className="text-purple-500 shrink-0 font-bold">•</span>
-                <span>O sistema economiza bateria transmitindo em batimentos cardíacos lentos de <strong>30 segundos</strong>. No sinal, o motorista não consome internet desnecessária.</span>
+                <span>O sistema economiza bateria capturando de forma real por telemetria baseada em variação de deslocamento no navegador de maneira inteligente.</span>
               </li>
               <li className="flex items-start gap-2">
                 <span className="text-purple-500 shrink-0 font-bold">•</span>
@@ -500,7 +455,7 @@ export const JornadaPage: React.FC = () => {
           {/* Session logs summary */}
           <div className="p-5 rounded-2xl bg-[#0d0926]/40 border border-purple-950/25 space-y-4">
             <h3 className="text-xs font-bold uppercase font-mono tracking-wider text-slate-400 flex items-center justify-between">
-              Como foi hoje <span>Ultimos logs</span>
+              Como foi hoje <span>Últimos logs</span>
             </h3>
 
             {driverSessions.length === 0 ? (
