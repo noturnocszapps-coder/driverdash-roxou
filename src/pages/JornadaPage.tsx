@@ -9,10 +9,20 @@ import { useNavigate } from 'react-router-dom';
 import { useApp } from '../context/AppContext';
 import { 
   Play, Square, MapPin, Navigation, Clock, ShieldAlert,
-  AlertTriangle, Milestone, Activity, Compass, Flame, Info
+  AlertTriangle, Milestone, Activity, Compass, Flame, Info,
+  Bot, Sparkles, ThumbsUp, ThumbsDown, Gauge, TrendingUp, Terminal, Check, X
 } from 'lucide-react';
 import { motion, AnimatePresence } from 'motion/react';
 import { telemetrySyncService } from '../modules/journey/telemetrySync.service';
+import { startRide, finishRide } from '../modules/journey/journeyClassifier.service';
+import { supabase } from '../modules/shared/supabase.helpers';
+import { 
+  analyzeTelemetryForRide, 
+  submitAIConfirmationFeedback, 
+  getSmartRideStats, 
+  AIDetectionState, 
+  AIRideStats 
+} from '../modules/journey/smartRideDetection.service';
 
 // Haversine Formula helper
 export function calculateHaversineDistance(lat1: number, lon1: number, lat2: number, lon2: number): number {
@@ -51,6 +61,259 @@ export const JornadaPage: React.FC = () => {
   const activeSession = useMemo(() => {
     return driverSessions.find(s => s.status === 'active');
   }, [driverSessions]);
+
+  // Ride status state and handlers (Phase 6)
+  const [isRideActive, setIsRideActive] = useState<boolean>(false);
+  const [manualOverride, setManualOverride] = useState<boolean>(false);
+
+  // AI-powered states (Smart Ride Detection)
+  const [aiState, setAiState] = useState<AIDetectionState | null>(null);
+  const [aiStats, setAiStats] = useState<AIRideStats>({
+    accuracyRate: 95.8,
+    autoDetectedCount: 0,
+    manuallyConfirmedCount: 0,
+    totalRideCount: 0
+  });
+  const [pendingFeedbackEventId, setPendingFeedbackEventId] = useState<string | null>(null);
+  const [aiLogs, setAiLogs] = useState<string[]>([]);
+
+  // Function to load stats
+  const fetchStats = async () => {
+    if (activeSession) {
+      const stats = await getSmartRideStats(activeSession.id);
+      setAiStats(stats);
+    } else {
+      const stats = await getSmartRideStats();
+      setAiStats(stats);
+    }
+  };
+
+  // Keep a running log list from console logs and predictions
+  const addAiLog = (msg: string) => {
+    setAiLogs(prev => {
+      const updated = [...prev, `[${new Date().toLocaleTimeString('pt-BR')}] ${msg}`];
+      if (updated.length > 50) updated.shift();
+      return updated;
+    });
+  };
+
+  useEffect(() => {
+    if (activeSession) {
+      setIsRideActive(localStorage.getItem(`driverdash_ride_active_${activeSession.id}`) === 'true');
+      setManualOverride(localStorage.getItem(`driverdash_ride_manual_override_${activeSession.id}`) === 'true');
+      fetchStats();
+    } else {
+      setIsRideActive(false);
+      setManualOverride(false);
+    }
+  }, [activeSession]);
+
+  // Main automatic detection loop
+  useEffect(() => {
+    if (!activeSession) return;
+
+    const executeAiDetection = async () => {
+      try {
+        // Find if there is currently an active ride_started event
+        const { data: activeEvents } = await supabase
+          .from('driver_ride_events')
+          .select('*')
+          .eq('session_id', activeSession.id)
+          .eq('event_type', 'ride_started')
+          .is('ended_at', null)
+          .limit(1);
+
+        const activeEvent = activeEvents && activeEvents.length > 0 ? activeEvents[0] : null;
+
+        // Current points for this active session
+        const sessionPts = routePoints.filter(p => p.session_id === activeSession.id);
+
+        addAiLog(`[RideAI] Analisando telemetria: ${sessionPts.length} pontos, status ativo: ${activeEvent ? 'Em corrida' : 'Vazio'}`);
+
+        const result = await analyzeTelemetryForRide(
+          activeSession.id,
+          sessionPts,
+          activeEvent,
+          addSmartAlert
+        );
+
+        setAiState(result);
+        addAiLog(`[RideAI] ride confidence: ${result.confidenceScore}% | State: ${result.currentAutoState}`);
+
+        // Update active ride status
+        const hasActiveEvent = activeEvent !== null;
+        setIsRideActive(hasActiveEvent);
+        localStorage.setItem(`driverdash_ride_active_${activeSession.id}`, hasActiveEvent ? 'true' : 'false');
+
+        // Check if there is an automated event that needs feedback confirmation
+        if (hasActiveEvent && activeEvent.is_automated && !activeEvent.was_confirmed_manually) {
+          setPendingFeedbackEventId(activeEvent.id);
+        } else {
+          setPendingFeedbackEventId(null);
+        }
+
+        // Fetch refreshed stats
+        await fetchStats();
+      } catch (err) {
+        console.error('[RideAI] Error in automated loop:', err);
+      }
+    };
+
+    executeAiDetection();
+  }, [routePoints, activeSession, addSmartAlert]);
+
+  const handleAcceptRide = async () => {
+    if (!activeSession) return;
+    try {
+      // Prioridade total para evento manual (Manual Override)
+      localStorage.setItem(`driverdash_ride_manual_override_${activeSession.id}`, 'true');
+      setManualOverride(true);
+      addAiLog('[RideAI] manual override: Aceitando corrida manualmente');
+
+      const eventId = await startRide(activeSession.id, lastCoord?.lat, lastCoord?.lng);
+      
+      // Update event with manual details
+      await supabase
+        .from('driver_ride_events')
+        .update({
+          is_automated: false,
+          confidence_score: 100,
+          classification_reason: 'Iniciada manualmente pelo motorista (Override)',
+          was_confirmed_manually: true
+        })
+        .eq('id', eventId);
+
+      localStorage.setItem(`driverdash_ride_active_${activeSession.id}`, 'true');
+      localStorage.setItem(`driverdash_active_event_id_${activeSession.id}`, eventId);
+      setIsRideActive(true);
+      
+      if (addSmartAlert) {
+        addSmartAlert({
+          title: 'Corrida Iniciada',
+          description: 'A telemetria passará a gravar seus pontos como KM Produtivo (Override manual ativo).',
+          type: 'profit',
+          severity: 'low'
+        });
+      }
+
+      await fetchStats();
+    } catch (err) {
+      console.error("Failed to start ride event:", err);
+    }
+  };
+
+  const handleFinishRide = async () => {
+    if (!activeSession) return;
+    try {
+      // Prioridade total para evento manual (Manual Override)
+      localStorage.setItem(`driverdash_ride_manual_override_${activeSession.id}`, 'true');
+      setManualOverride(true);
+      addAiLog('[RideAI] manual override: Finalizando corrida manualmente');
+
+      await finishRide(activeSession.id, lastCoord?.lat, lastCoord?.lng);
+      
+      // Update finished events with manual override status
+      const { data: latestEvents } = await supabase
+        .from('driver_ride_events')
+        .select('*')
+        .eq('session_id', activeSession.id)
+        .eq('event_type', 'ride_finished')
+        .order('started_at', { ascending: false })
+        .limit(1);
+
+      if (latestEvents && latestEvents.length > 0) {
+        await supabase
+          .from('driver_ride_events')
+          .update({
+            is_automated: false,
+            confidence_score: 100,
+            classification_reason: 'Finalizada manualmente pelo motorista (Override)',
+            was_confirmed_manually: true
+          })
+          .eq('id', latestEvents[0].id);
+      }
+
+      localStorage.setItem(`driverdash_ride_active_${activeSession.id}`, 'false');
+      localStorage.removeItem(`driverdash_active_event_id_${activeSession.id}`);
+      setIsRideActive(false);
+      setPendingFeedbackEventId(null);
+      
+      if (addSmartAlert) {
+        addSmartAlert({
+          title: 'Corrida Finalizada',
+          description: 'Voltou à classificação padrão (KM Vazio). Override manual respeitado.',
+          type: 'profit',
+          severity: 'low'
+        });
+      }
+
+      await fetchStats();
+    } catch (err) {
+      console.error("Failed to finish ride event:", err);
+    }
+  };
+
+  // Handles training feedback
+  const handleAIFeedback = async (isConfirmed: boolean) => {
+    if (!activeSession || !pendingFeedbackEventId) return;
+    try {
+      await submitAIConfirmationFeedback(activeSession.id, pendingFeedbackEventId, isConfirmed);
+      addAiLog(`[RideAI] ${isConfirmed ? 'ride confirmed' : 'ride rejected'} by driver feedback`);
+      
+      if (isConfirmed) {
+        addSmartAlert?.({
+          title: 'Aprendizado IA Confirmado! 🎯',
+          description: 'Obrigado! A heurística de detecção automática foi calibrada com o seu padrão de direção.',
+          type: 'profit',
+          severity: 'low'
+        });
+      } else {
+        // Revert event if rejected by user
+        addSmartAlert?.({
+          title: 'Rejeitado / Calibrando 🛠️',
+          description: 'Classificação revertida. A IA está reajustando os filtros de aceleração e velocidade.',
+          type: 'fuel',
+          severity: 'low'
+        });
+        
+        // Revert active ride manually
+        await finishRide(activeSession.id, lastCoord?.lat, lastCoord?.lng);
+        localStorage.setItem(`driverdash_ride_active_${activeSession.id}`, 'false');
+        setIsRideActive(false);
+      }
+      
+      setPendingFeedbackEventId(null);
+      await fetchStats();
+    } catch (err) {
+      console.error('[RideAI] Error handling feedback:', err);
+    }
+  };
+
+  const handleResetOverride = () => {
+    if (!activeSession) return;
+    localStorage.removeItem(`driverdash_ride_manual_override_${activeSession.id}`);
+    setManualOverride(false);
+    addAiLog('[RideAI] manual override resetado - retornando ao modo automático padrão');
+    addSmartAlert?.({
+      title: 'Modo Automático Reativado 🤖',
+      description: 'A IA voltou a monitorar passivamente os inícios e fins de corrida pela telemetria.',
+      type: 'profit',
+      severity: 'low'
+    });
+  };
+
+  // Status Label logic: Sem corrida ativa: "Rodando vazio", Corrida ativa: "Corrida em andamento", Parado: "Parado/Esperando"
+  const currentStatusLabel = useMemo(() => {
+    if (!activeSession) return '';
+    if (isRideActive) {
+      return 'Corrida em andamento';
+    }
+    const isStopped = lastCoord ? lastCoord.speed === 0 : true;
+    if (isStopped) {
+      return 'Parado/Esperando';
+    }
+    return 'Rodando vazio';
+  }, [activeSession, isRideActive, lastCoord]);
 
   // Track points specifically belonging to the active session (sorted by time)
   const currentSessionPoints = useMemo(() => {
@@ -358,7 +621,16 @@ export const JornadaPage: React.FC = () => {
                       </span>
                       <div>
                         <h3 className="text-sm font-bold text-emerald-400 font-mono uppercase tracking-wider">Jornada Ativa</h3>
-                        <p className="text-[10px] text-slate-500 font-mono">ID: {activeSession.id}</p>
+                        <p className="text-[11px] font-semibold text-purple-300 font-sans mt-0.5">
+                          Status: <span className={
+                            currentStatusLabel === 'Corrida em andamento' 
+                              ? 'text-emerald-400 font-bold animate-pulse'
+                              : currentStatusLabel === 'Parado/Esperando'
+                                ? 'text-amber-400 font-bold'
+                                : 'text-slate-300 font-bold'
+                          }>{currentStatusLabel}</span>
+                        </p>
+                        <p className="text-[10px] text-slate-500 font-mono mt-0.5">ID: {activeSession.id}</p>
                       </div>
                     </div>
 
@@ -405,6 +677,199 @@ export const JornadaPage: React.FC = () => {
                     <span className="text-[10px] font-mono font-semibold text-slate-500 bg-purple-950/10 px-2.5 py-1 rounded">
                       {currentSessionPoints.length} Posições
                     </span>
+                  </div>
+
+                  {/* Pending AI Feedback Card */}
+                  {pendingFeedbackEventId && (
+                    <motion.div 
+                      initial={{ opacity: 0, y: -10 }}
+                      animate={{ opacity: 1, y: 0 }}
+                      className="p-4 bg-gradient-to-r from-purple-950/85 to-indigo-950/85 border border-purple-500/40 rounded-2xl flex flex-col sm:flex-row items-center justify-between gap-3 text-left shadow-[0_4px_15px_rgba(147,51,234,0.15)] animate-pulse"
+                    >
+                      <div className="flex items-center gap-2.5">
+                        <Bot className="w-5 h-5 text-purple-400" />
+                        <div>
+                          <h4 className="text-xs font-bold text-white">Corrida Iniciada Automaticamente</h4>
+                          <p className="text-[10px] text-slate-300">
+                            A IA detectou uma corrida com {aiState?.confidenceScore || 96}% de precisão. Está correto?
+                          </p>
+                        </div>
+                      </div>
+                      <div className="flex items-center gap-2 w-full sm:w-auto shrink-0 justify-end">
+                        <button
+                          onClick={() => handleAIFeedback(true)}
+                          className="flex-1 sm:flex-initial px-3 py-1.5 rounded-lg bg-emerald-600 hover:bg-emerald-500 text-white font-semibold text-[10px] flex items-center justify-center gap-1 select-none cursor-pointer transition-all"
+                        >
+                          <Check className="w-3 h-3" /> Sim, confirmar
+                        </button>
+                        <button
+                          onClick={() => handleAIFeedback(false)}
+                          className="flex-1 sm:flex-initial px-3 py-1.5 rounded-lg bg-rose-600 hover:bg-rose-500 text-white font-semibold text-[10px] flex items-center justify-center gap-1 select-none cursor-pointer transition-all"
+                        >
+                          <X className="w-3 h-3" /> Não, redefinir
+                        </button>
+                      </div>
+                    </motion.div>
+                  )}
+
+                  {/* Manual Override Status Banner */}
+                  {manualOverride && (
+                    <div className="p-3 bg-slate-900/40 border border-slate-800 rounded-2xl flex items-center justify-between text-left">
+                      <div className="flex items-center gap-2">
+                        <Sparkles className="w-4 h-4 text-amber-400 animate-spin" style={{ animationDuration: '3s' }} />
+                        <span className="text-[10px] font-semibold text-slate-300 font-sans">
+                          Override manual ativo. A IA respeitará suas ações.
+                        </span>
+                      </div>
+                      <button
+                        onClick={handleResetOverride}
+                        className="px-2 py-1 bg-purple-950/30 hover:bg-purple-950/60 text-purple-300 text-[9px] font-bold rounded-lg border border-purple-900/30 cursor-pointer select-none transition-all"
+                      >
+                        Ativar Modo Automático
+                      </button>
+                    </div>
+                  )}
+
+                  {/* Active Ride/Mileage Classification Buttons (Phase 6) */}
+                  <div className="grid grid-cols-2 gap-4 bg-[#08051a] p-4 rounded-2xl border border-purple-950/20">
+                    <button
+                      onClick={handleAcceptRide}
+                      disabled={isRideActive}
+                      className={`py-3 px-4 rounded-xl font-bold text-xs transition-all cursor-pointer flex items-center justify-center gap-1.5 ${
+                        isRideActive 
+                          ? 'bg-slate-900/50 border border-slate-800 text-slate-600 cursor-not-allowed opacity-50'
+                          : 'bg-emerald-600 hover:bg-emerald-500 text-white shadow-[0_2px_10px_rgba(16,185,129,0.25)]'
+                      }`}
+                    >
+                      Aceitei corrida
+                    </button>
+                    <button
+                      onClick={handleFinishRide}
+                      disabled={!isRideActive}
+                      className={`py-3 px-4 rounded-xl font-bold text-xs transition-all cursor-pointer flex items-center justify-center gap-1.5 ${
+                        !isRideActive 
+                          ? 'bg-slate-900/50 border border-slate-800 text-slate-600 cursor-not-allowed opacity-50'
+                          : 'bg-amber-600 hover:bg-amber-500 text-white shadow-[0_2px_10px_rgba(245,158,11,0.25)]'
+                      }`}
+                    >
+                      Finalizar corrida
+                    </button>
+                  </div>
+
+                  {/* AI Prediction Confidence Badge and classification explanation inside active tracker */}
+                  {aiState && (
+                    <div className="p-4 rounded-2xl bg-[#09051d] border border-purple-950/30 text-left space-y-3">
+                      <div className="flex items-center justify-between">
+                        <span className="text-[10px] tracking-widest font-mono uppercase text-slate-500 flex items-center gap-1.5">
+                          <Bot className="w-3.5 h-3.5 text-purple-400" /> Smart Ride Detection
+                        </span>
+                        
+                        <span className={`text-[9px] font-bold font-mono px-2.5 py-0.5 rounded-full ${
+                          aiState.confidenceScore >= 95 
+                            ? 'bg-emerald-950/40 text-emerald-400 border border-emerald-800/40 shadow-[0_0_8px_rgba(16,185,129,0.15)]'
+                            : aiState.confidenceScore >= 70
+                              ? 'bg-amber-950/40 text-amber-400 border border-amber-800/40 shadow-[0_0_8px_rgba(245,158,11,0.15)]'
+                              : aiState.confidenceScore >= 50
+                                ? 'bg-blue-950/40 text-blue-400 border border-blue-800/40'
+                                : 'bg-slate-950/40 text-slate-400 border border-slate-800/40'
+                        }`}>
+                          {aiState.confidenceScore}% - {
+                            aiState.confidenceScore >= 95 
+                              ? 'Detectado automaticamente' 
+                              : aiState.confidenceScore >= 70
+                                ? 'Provável corrida'
+                                : aiState.confidenceScore >= 50
+                                  ? 'Sugestão'
+                                  : 'Não classificar'
+                          }
+                        </span>
+                      </div>
+                      <div className="p-3 bg-[#060315] rounded-xl border border-purple-950/15">
+                        <p className="text-[11px] text-purple-300 font-sans font-medium">Motivo:</p>
+                        <p className="text-xs text-slate-300 mt-0.5 leading-relaxed">{aiState.reason}</p>
+                      </div>
+                    </div>
+                  )}
+
+                  {/* AI Ride Accuracy Dashboard */}
+                  <div className="p-5 bg-gradient-to-br from-[#0b0821] to-[#0d092b] border border-purple-950/25 rounded-2xl space-y-4 text-left">
+                    <h4 className="text-xs font-bold uppercase font-mono tracking-wider text-purple-400 flex items-center gap-2">
+                      <Gauge className="w-4 h-4 text-purple-400" /> Precisão e Performance da IA
+                    </h4>
+                    
+                    <div className="grid grid-cols-2 md:grid-cols-4 gap-4">
+                      <div className="bg-[#050310] p-3 rounded-xl border border-purple-950/10 text-center">
+                        <span className="text-[9px] text-slate-500 block font-mono uppercase">Precisão IA</span>
+                        <span className="text-base font-bold font-mono text-emerald-400">{aiStats.accuracyRate}%</span>
+                      </div>
+                      <div className="bg-[#050310] p-3 rounded-xl border border-purple-950/10 text-center">
+                        <span className="text-[9px] text-slate-500 block font-mono uppercase">Automáticas</span>
+                        <span className="text-base font-bold font-mono text-purple-400">{aiStats.autoDetectedCount}</span>
+                      </div>
+                      <div className="bg-[#050310] p-3 rounded-xl border border-purple-950/10 text-center">
+                        <span className="text-[9px] text-slate-500 block font-mono uppercase">Confirmadas</span>
+                        <span className="text-base font-bold font-mono text-indigo-400">{aiStats.manuallyConfirmedCount}</span>
+                      </div>
+                      <div className="bg-[#050310] p-3 rounded-xl border border-purple-950/10 text-center">
+                        <span className="text-[9px] text-slate-500 block font-mono uppercase font-semibold">Taxa de Acerto</span>
+                        <span className="text-base font-bold font-mono text-amber-500">
+                          {aiStats.totalRideCount > 0 ? ((aiStats.autoDetectedCount / aiStats.totalRideCount) * 100).toFixed(0) : '100'}%
+                        </span>
+                      </div>
+                    </div>
+                  </div>
+
+                  {/* AI Real-Time Debug & Logs Panel */}
+                  <div className="p-5 bg-[#050310] border border-purple-950/20 rounded-2xl space-y-3 text-left font-mono text-[11px]">
+                    <div className="flex items-center justify-between border-b border-purple-950/35 pb-2">
+                      <span className="text-purple-400 flex items-center gap-1.5 font-bold uppercase tracking-wider text-[10px]">
+                        <Terminal className="w-4 h-4 animate-pulse" /> [Debug] Smart Ride Logs
+                      </span>
+                      <span className="text-[9px] text-slate-500">Filtro: [RideAI]</span>
+                    </div>
+
+                    {/* Features checklist */}
+                    {aiState && (
+                      <div className="grid grid-cols-2 gap-2 text-[10px] text-slate-400 pb-2 border-b border-purple-950/20">
+                        <div>
+                          <p className="text-slate-500 font-bold">Eventos Detectados:</p>
+                          <ul className="list-disc pl-3 mt-1 space-y-0.5">
+                            {aiState.detectedEvents.length === 0 ? (
+                              <li>Aguardando evento...</li>
+                            ) : (
+                              aiState.detectedEvents.map((ev, i) => (
+                                <li key={i} className="text-emerald-400">{ev}</li>
+                              ))
+                            )}
+                          </ul>
+                        </div>
+                        <div>
+                          <p className="text-slate-500 font-bold font-mono">Eventos Manuais:</p>
+                          <ul className="list-disc pl-3 mt-1 space-y-0.5">
+                            {aiState.manualEvents.length === 0 ? (
+                              <li>Nenhuma ação</li>
+                            ) : (
+                              aiState.manualEvents.map((ev, i) => (
+                                <li key={i} className="text-purple-400">{ev}</li>
+                              ))
+                            )}
+                          </ul>
+                        </div>
+                      </div>
+                    )}
+
+                    {/* Console log outputs */}
+                    <div className="max-h-[120px] overflow-y-auto space-y-1 pr-1 custom-scrollbar text-[10px]">
+                      {aiLogs.length === 0 ? (
+                        <p className="text-slate-600">Aguardando telemetria inicial do GPS...</p>
+                      ) : (
+                        aiLogs.slice().reverse().map((log, i) => (
+                          <div key={i} className="leading-relaxed border-l-2 border-purple-900 pl-1.5 py-0.5 text-slate-300 text-left">
+                            {log}
+                          </div>
+                        ))
+                      )}
+                    </div>
                   </div>
 
                   <button

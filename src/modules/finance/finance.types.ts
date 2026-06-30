@@ -4,9 +4,9 @@
  * When to edit: When altering financial models, transaction models, or metrics schemas.
  */
 
-import { Earning, Expense, DailyClosing, WeeklyClosing, PlatformType, ExpenseType } from '../../types';
+import { Earning, Expense, DailyClosing, WeeklyClosing, PlatformType, ExpenseType, DriverCustomCost } from '../../types';
 
-export type { Earning, Expense, DailyClosing, WeeklyClosing, PlatformType, ExpenseType };
+export type { Earning, Expense, DailyClosing, WeeklyClosing, PlatformType, ExpenseType, DriverCustomCost };
 
 export interface FinancialMetrics {
   totalRevenue: number;
@@ -25,6 +25,7 @@ export interface FinanceContextType {
   expenses: Expense[];
   dailyClosings: DailyClosing[];
   weeklyClosings: WeeklyClosing[];
+  customCosts: DriverCustomCost[];
   metrics: FinancialMetrics;
   addEarning: (earningData: Omit<Earning, 'user_id' | 'id'>) => Promise<void>;
   addExpense: (expenseData: Omit<Expense, 'user_id' | 'id'>) => Promise<void>;
@@ -32,4 +33,6 @@ export interface FinanceContextType {
   deleteExpense: (id: string | undefined, indexLocal: number) => Promise<void>;
   createDailyClosing: (date: string) => Promise<DailyClosing>;
   createWeeklyClosing: (start: string, end: string) => Promise<WeeklyClosing>;
+  addCustomCost: (costData: Omit<DriverCustomCost, 'user_id' | 'id'>) => Promise<void>;
+  deleteCustomCost: (id: string | undefined, indexLocal: number) => Promise<void>;
 }

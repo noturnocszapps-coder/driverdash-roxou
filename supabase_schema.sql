@@ -364,10 +364,14 @@ CREATE TABLE IF NOT EXISTS public.driver_sessions (
 CREATE TABLE IF NOT EXISTS public.route_points (
     id UUID DEFAULT gen_random_uuid() PRIMARY KEY,
     session_id UUID REFERENCES public.driver_sessions ON DELETE CASCADE NOT NULL,
+    driver_id UUID DEFAULT auth.uid() REFERENCES auth.users(id) ON DELETE CASCADE,
     latitude NUMERIC NOT NULL,
     longitude NUMERIC NOT NULL,
     speed NUMERIC, -- in km/h or m/s
     accuracy NUMERIC, -- horizontal GPS accuracy radius
+    heading NUMERIC DEFAULT 0,
+    altitude NUMERIC DEFAULT 0,
+    distance_meters NUMERIC DEFAULT 0,
     timestamp TIMESTAMP WITH TIME ZONE DEFAULT TIMEZONE('utc'::TEXT, NOW()) NOT NULL
 );
 
@@ -382,24 +386,51 @@ CREATE POLICY "Drivers manage their own sessions"
     WITH CHECK (auth.uid() = user_id OR public.is_admin());
 
 -- 7.5 RLS Policies for Route Points
-CREATE POLICY "Drivers manage their routes points"
-    ON public.route_points FOR ALL
+CREATE POLICY "Drivers can select their own route points"
+    ON public.route_points FOR SELECT
     USING (
-        EXISTS (
+        driver_id = auth.uid() 
+        OR EXISTS (
             SELECT 1 FROM public.driver_sessions s
             WHERE s.id = route_points.session_id AND (s.user_id = auth.uid() OR public.is_admin())
         )
+        OR public.is_admin()
+    );
+
+CREATE POLICY "Drivers can insert their own route points"
+    ON public.route_points FOR INSERT
+    WITH CHECK (
+        driver_id = auth.uid()
+        OR EXISTS (
+            SELECT 1 FROM public.driver_sessions s
+            WHERE s.id = route_points.session_id AND (s.user_id = auth.uid() OR public.is_admin())
+        )
+        OR public.is_admin()
+    );
+
+CREATE POLICY "Drivers can update their own route points"
+    ON public.route_points FOR UPDATE
+    USING (
+        driver_id = auth.uid()
+        OR EXISTS (
+            SELECT 1 FROM public.driver_sessions s
+            WHERE s.id = route_points.session_id AND (s.user_id = auth.uid() OR public.is_admin())
+        )
+        OR public.is_admin()
     )
     WITH CHECK (
-        EXISTS (
+        driver_id = auth.uid()
+        OR EXISTS (
             SELECT 1 FROM public.driver_sessions s
             WHERE s.id = route_points.session_id AND (s.user_id = auth.uid() OR public.is_admin())
         )
+        OR public.is_admin()
     );
 
 -- 7.6 Indices for GPS Routing Optimization
 CREATE INDEX IF NOT EXISTS idx_driver_sessions_user ON public.driver_sessions (user_id, status);
 CREATE INDEX IF NOT EXISTS idx_route_points_session ON public.route_points (session_id, timestamp ASC);
+CREATE INDEX IF NOT EXISTS idx_route_points_driver_id ON public.route_points (driver_id);
 
 -- ==========================================
 -- 8. ROXOU SMART DEMAND SIGNALS TABLE

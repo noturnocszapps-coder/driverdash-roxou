@@ -7,15 +7,15 @@
 import React, { useState, useMemo } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { useApp } from '../context/AppContext';
-import { calculateHaversineDistance } from './JornadaPage';
+import { reconstructJourneyFromPoints } from '../modules/journey/journey.calculations';
 import { 
   Calendar, Clock, Milestone, ArrowRight, MapPin, Search, Filter, 
-  Map, TrendingUp, AlertCircle, Sparkles, ChevronRight, Fuel
+  Map, TrendingUp, AlertCircle, Sparkles, ChevronRight, Fuel, DollarSign
 } from 'lucide-react';
 import { motion } from 'motion/react';
 
 export const JornadasHistoryPage: React.FC = () => {
-  const { driverSessions, routePoints } = useApp();
+  const { driverSessions, routePoints, vehicle, vehicleCostSettings, earnings } = useApp();
   const navigate = useNavigate();
 
   // Filters state
@@ -23,85 +23,32 @@ export const JornadasHistoryPage: React.FC = () => {
   const [customStart, setCustomStart] = useState('');
   const [customEnd, setCustomEnd] = useState('');
 
-  // Helper calculation for a specific session
+  // Helper calculation for a specific session using high-fidelity reconstruction
   const calculateSessionStats = useMemo(() => {
-    return (sessionId: string, fallbackDistanceKm: number, fallbackDurationMin: number) => {
-      const points = routePoints
-        .filter(p => p.session_id === sessionId)
-        .sort((a, b) => new Date(a.recorded_at).getTime() - new Date(b.recorded_at).getTime());
-
-      if (points.length < 2) {
-        // Fallback realistic metrics based on seed/fallback values
-        const seedValue = parseInt(sessionId.substring(0, 4), 36) || 42;
-        const totalDistance = fallbackDistanceKm || Math.max(12, (seedValue % 80) + 20);
-        const totalDuration = fallbackDurationMin || Math.max(30, (seedValue % 180) + 60);
-        
-        // Let's divide: 65% passenger, 35% empty
-        const passengerDist = Number((totalDistance * 0.68).toFixed(1));
-        const emptyDist = Number((totalDistance - passengerDist).toFixed(1));
-        const idleMin = Math.round(totalDuration * 0.12);
-        const avgSpeed = Number((totalDistance / (totalDuration / 60)).toFixed(1));
-
-        return {
-          totalKm: totalDistance,
-          passengerKm: passengerDist,
-          emptyKm: emptyDist,
-          idleMin,
-          avgSpeed: avgSpeed > 100 ? 45.2 : avgSpeed,
-          pointsCount: 0
-        };
-      }
-
-      // Compute from actual tracked telemetry points!
-      let totalDistance = 0;
-      let passengerDistance = 0;
-      let emptyDistance = 0;
-      let idleTimeMs = 0;
-      let speedsSum = 0;
-      let speedPointsCount = 0;
-
-      for (let i = 1; i < points.length; i++) {
-        const p1 = points[i - 1];
-        const p2 = points[i];
-        const dist = calculateHaversineDistance(p1.latitude, p1.longitude, p2.latitude, p2.longitude);
-        totalDistance += dist;
-
-        const avgSpeed = ((p1.speed_kmh || 0) + (p2.speed_kmh || 0)) / 2;
-        if (avgSpeed > 30) {
-          passengerDistance += dist;
-        } else {
-          emptyDistance += dist;
-        }
-
-        if (p1.speed_kmh && p1.speed_kmh > 0) {
-          speedsSum += p1.speed_kmh;
-          speedPointsCount++;
-        }
-
-        // Idle detection between consecutive points (if speed <= 5 km/h)
-        if ((p1.speed_kmh || 0) <= 5) {
-          const t1 = new Date(p1.recorded_at).getTime();
-          const t2 = new Date(p2.recorded_at).getTime();
-          const pDiff = t2 - t1;
-          if (pDiff > 0 && pDiff < 10 * 60 * 1000) { // skip anomaly jumps
-            idleTimeMs += pDiff;
-          }
-        }
-      }
-
-      const idleMin = Math.round(idleTimeMs / 60000);
-      const computedAvgSpeed = speedPointsCount > 0 ? Number((speedsSum / speedPointsCount).toFixed(1)) : 22.4;
+    return (sess: any) => {
+      const points = routePoints.filter(p => p.session_id === sess.id);
+      const sessionDateStr = new Date(sess.start_time).toISOString().substring(0, 10);
+      const dayEarnings = earnings.filter(e => e.date === sessionDateStr);
+      
+      const reconstructed = reconstructJourneyFromPoints(
+        sess,
+        points,
+        vehicle,
+        vehicleCostSettings,
+        dayEarnings.map(e => ({ gross_amount: Number(e.gross_amount), platform: e.platform }))
+      );
 
       return {
-        totalKm: Number(totalDistance.toFixed(2)),
-        passengerKm: Number(passengerDistance.toFixed(2)),
-        emptyKm: Number(emptyDistance.toFixed(2)),
-        idleMin,
-        avgSpeed: computedAvgSpeed,
-        pointsCount: points.length
+        totalKm: reconstructed.totalKm,
+        passengerKm: reconstructed.kmClassification.productiveKm,
+        emptyKm: reconstructed.kmClassification.emptyKm,
+        idleMin: reconstructed.idleMinutes,
+        avgSpeed: reconstructed.avgSpeed,
+        pointsCount: reconstructed.pointsCount,
+        netRevenue: reconstructed.financials.netRevenue
       };
     };
-  }, [routePoints]);
+  }, [routePoints, vehicle, vehicleCostSettings, earnings]);
 
   // Filter completed sessions only
   const completedSessions = useMemo(() => {
@@ -172,8 +119,15 @@ export const JornadasHistoryPage: React.FC = () => {
     return `${m} min`;
   };
 
+  const formatCurrency = (val: number) => {
+    return new Intl.NumberFormat('pt-BR', {
+      style: 'currency',
+      currency: 'BRL'
+    }).format(val);
+  };
+
   return (
-    <div className="space-y-6 max-w-5xl mx-auto font-sans">
+    <div className="space-y-6 max-w-5xl mx-auto font-sans text-left">
       
       {/* Page Header Headers */}
       <div>
@@ -253,7 +207,7 @@ export const JornadasHistoryPage: React.FC = () => {
 
           <div className="grid grid-cols-1 gap-4">
             {filteredSessions.map((sess) => {
-              const stats = calculateSessionStats(sess.id, sess.total_distance_km, sess.total_duration_minutes);
+              const stats = calculateSessionStats(sess);
               
               return (
                 <div 
@@ -301,9 +255,9 @@ export const JornadasHistoryPage: React.FC = () => {
                     </div>
 
                     <div>
-                      <span className="text-[9px] text-slate-500 font-mono block uppercase tracking-wider select-none">PARADO</span>
-                      <span className="text-xs font-bold text-yellow-400 font-mono block mt-1.5">
-                        {stats.idleMin} min
+                      <span className="text-[9px] text-slate-500 font-mono block uppercase tracking-wider select-none">LUCRO REAL</span>
+                      <span className="text-xs font-bold text-emerald-400 font-mono block mt-1.5">
+                        {formatCurrency(stats.netRevenue)}
                       </span>
                     </div>
 

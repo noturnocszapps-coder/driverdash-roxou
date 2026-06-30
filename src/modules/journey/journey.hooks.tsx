@@ -46,6 +46,7 @@ export const JourneyProvider: React.FC<{ children: React.ReactNode }> = ({ child
   const [currentAccuracy, setCurrentAccuracy] = useState<number | null>(null);
   const [discardedPointsCount, setDiscardedPointsCount] = useState<number>(0);
   const [lastDiscardReason, setLastDiscardReason] = useState<string | null>(null);
+  const [idleStatus, setIdleStatus] = useState<'moving' | 'stopped'>('moving');
 
   // GPS Engine States
   const [gpsStatus, setGpsStatus] = useState<'Aguardando permissão' | 'Solicitando primeira posição' | 'GPS ativo' | 'GPS sem sinal' | 'GPS erro' | 'GPS negado' | 'Sensor inativo'>('Sensor inativo');
@@ -96,7 +97,17 @@ export const JourneyProvider: React.FC<{ children: React.ReactNode }> = ({ child
     const loadLocal = () => {
       const lSessions = localStorage.getItem(`${STORAGE_PREFIX}driver_sessions_${user.id}`);
       const lPoints = localStorage.getItem(`${STORAGE_PREFIX}route_points_${user.id}`);
-      setDriverSessions(lSessions ? JSON.parse(lSessions) : []);
+      let parsedSessions: DriverSession[] = lSessions ? JSON.parse(lSessions) : [];
+      
+      parsedSessions = parsedSessions.map(s => {
+        const isActuallyActive = s.status === 'active' && !s.end_time && !(s as any).ended_at;
+        return {
+          ...s,
+          status: isActuallyActive ? 'active' : 'completed'
+        };
+      });
+
+      setDriverSessions(parsedSessions);
       setRoutePoints(lPoints ? JSON.parse(lPoints) : []);
     };
 
@@ -114,7 +125,7 @@ export const JourneyProvider: React.FC<{ children: React.ReactNode }> = ({ child
             localStorage.setItem(`${STORAGE_PREFIX}route_points_${user.id}`, JSON.stringify(points));
           }
         } catch (e) {
-          console.warn('Telemetry database fetch failed; fetching from local storage backups:', e);
+          console.warn('[Sync] Telemetry database fetch failed; fetching from local storage backups:', e);
           loadLocal();
         }
       };
@@ -132,7 +143,7 @@ export const JourneyProvider: React.FC<{ children: React.ReactNode }> = ({ child
 
   useEffect(() => {
     const handleOnline = () => {
-      console.log("[Connectivity] Browser back online. Flushing offline queue.");
+      console.log("[Sync] Browser back online. Flushing offline queue.");
       syncOfflineQueue();
     };
 
@@ -142,7 +153,7 @@ export const JourneyProvider: React.FC<{ children: React.ReactNode }> = ({ child
       // Executar a cada 10 segundos se houver jornada ativa
       const hasActiveSession = activeSessionRef.current !== null;
       if (hasActiveSession && navigator.onLine) {
-        console.log("[TelemetrySync] Periodic 10s automatic sync check...");
+        console.log("[Sync] Periodic 10s automatic sync check...");
         syncOfflineQueue();
       }
     }, 10000); // Executar a cada 10 segundos enquanto houver jornada ativa
@@ -169,6 +180,7 @@ export const JourneyProvider: React.FC<{ children: React.ReactNode }> = ({ child
       setCurrentAccuracy(null);
       setDiscardedPointsCount(0);
       setLastDiscardReason(null);
+      setIdleStatus('moving');
       return;
     }
 
@@ -260,7 +272,10 @@ export const JourneyProvider: React.FC<{ children: React.ReactNode }> = ({ child
             session_id: activeSessionRef.current.id,
             latitude: lat,
             longitude: lng,
-            speed_kmh: Number(speed.toFixed(1))
+            speed_kmh: Number(speed.toFixed(1)),
+            accuracy: accuracy,
+            heading: heading,
+            altitude: altitude
           });
         }
       },
@@ -366,7 +381,10 @@ export const JourneyProvider: React.FC<{ children: React.ReactNode }> = ({ child
             session_id: activeSessionRef.current.id,
             latitude: lat,
             longitude: lng,
-            speed_kmh: Number(speed.toFixed(1))
+            speed_kmh: Number(speed.toFixed(1)),
+            accuracy: accuracy,
+            heading: heading,
+            altitude: altitude
           });
         }
 
@@ -526,7 +544,7 @@ export const JourneyProvider: React.FC<{ children: React.ReactNode }> = ({ child
         sessionStorage.removeItem(`discarded_points_${id}`);
         sessionStorage.removeItem(`last_discard_reason_${id}`);
       } catch (err) {
-        console.error("Supabase startSession error:", err);
+        console.error("[Journey] Supabase startSession error:", err);
       }
     } else {
       sessionStorage.removeItem(`total_distance_${newSession.id}`);
@@ -540,6 +558,7 @@ export const JourneyProvider: React.FC<{ children: React.ReactNode }> = ({ child
     setLastDiscardReason(null);
     setCurrentAccuracy(null);
     setLastAddedDistanceMeters(0);
+    setIdleStatus('moving');
 
     const updatedSessions = [newSession, ...driverSessions];
     setDriverSessions(updatedSessions);
@@ -547,28 +566,136 @@ export const JourneyProvider: React.FC<{ children: React.ReactNode }> = ({ child
     auditLogger.logJourneyAction('started', { sessionId: newSession.id, userId });
   };
 
-  const endSession = async (sessionId: string, totalDistanceKm: number, totalDurationMinutes: number) => {
-    if (!user) return;
-    const userId = user.id;
-    const endedAt = new Date().toISOString();
+  const calculateStoppedMinutes = (points: RoutePoint[]): number => {
+    if (points.length < 2) return 0;
+    let totalDuration = 0;
+    let runStart: number | null = null;
+    let runEnd: number | null = null;
 
-    console.log("[Jornada-Reset] Iniciando encerramento da jornada.");
-    console.log("[Jornada-Reset] ID da jornada encontrada:", sessionId);
-    console.log("[Jornada-Reset] Status atual da jornada: active");
+    const sortedPoints = [...points].sort((a, b) => new Date(a.recorded_at).getTime() - new Date(b.recorded_at).getTime());
 
-    let supabaseUpdateResult = "Não conectado";
-    if (dbStatus === 'connected') {
-      try {
-        await journeyService.endSession(sessionId, endedAt, totalDistanceKm, totalDurationMinutes);
-        supabaseUpdateResult = "Sucesso";
-      } catch (err: any) {
-        supabaseUpdateResult = `Erro: ${err.message || err}`;
-        console.error("Failed to end session in Supabase:", err);
+    for (let i = 1; i < sortedPoints.length; i++) {
+      const p1 = sortedPoints[i - 1];
+      const p2 = sortedPoints[i];
+
+      const t1 = new Date(p1.recorded_at).getTime();
+      const t2 = new Date(p2.recorded_at).getTime();
+      const dtMs = t2 - t1;
+
+      if (dtMs <= 0) continue;
+
+      const dist = calculateHaversineDistanceMeters(p1.latitude, p1.longitude, p2.latitude, p2.longitude);
+      const speedKmh = (dist / (dtMs / 1000)) * 3.6;
+
+      if (speedKmh < 5) {
+        if (runStart === null) {
+          runStart = t1;
+          runEnd = t2;
+        } else {
+          runEnd = t2;
+        }
+      } else {
+        if (runStart !== null && runEnd !== null) {
+          const runLength = runEnd - runStart;
+          if (runLength >= 3 * 60 * 1000) {
+            totalDuration += runLength;
+          }
+        }
+        runStart = null;
+        runEnd = null;
       }
     }
-    console.log("[Jornada-Reset] Resultado do update no Supabase:", supabaseUpdateResult);
 
-    // 5. Encerrar qualquer rastreamento GPS ativo:
+    if (runStart !== null && runEnd !== null) {
+      const runLength = runEnd - runStart;
+      if (runLength >= 3 * 60 * 1000) {
+        totalDuration += runLength;
+      }
+    }
+
+    return Math.floor(totalDuration / (60 * 1000));
+  };
+
+  const clearAllJourneyState = () => {
+    console.log("[Journey] Clearing all state");
+
+    console.log("[Journey] Removing localStorage keys");
+    
+    // Clear LocalStorage specified keys
+    const localKeys = [
+      'journey_active',
+      'activeJourney',
+      'currentSession',
+      'driverJourney',
+      'lastJourneyId',
+      'sessionId',
+      'watchId',
+      'gpsWatchId',
+      'gps_watch_id',
+      'jornada_ativa',
+      'activeJourneyId'
+    ];
+    localKeys.forEach(key => {
+      localStorage.removeItem(key);
+      localStorage.removeItem(`${STORAGE_PREFIX}${key}`);
+    });
+
+    // Clear SessionStorage specified keys
+    const sessionKeys = [
+      'activeSession',
+      'journey_session',
+      'telemetry_buffer',
+      'lastPosition',
+      'totalDistance'
+    ];
+    sessionKeys.forEach(key => {
+      sessionStorage.removeItem(key);
+      sessionStorage.removeItem(`${STORAGE_PREFIX}${key}`);
+    });
+
+    // Clean session-specific recovery items too
+    const activeSessId = activeSessionId;
+    if (activeSessId) {
+      sessionStorage.removeItem(`total_distance_${activeSessId}`);
+      sessionStorage.removeItem(`discarded_points_${activeSessId}`);
+      sessionStorage.removeItem(`last_discard_reason_${activeSessId}`);
+      sessionStorage.removeItem(`last_position_${activeSessId}`);
+      sessionStorage.removeItem(`recovery_checked_${activeSessId}`);
+      localStorage.removeItem(`total_distance_${activeSessId}`);
+      localStorage.removeItem(`discarded_points_${activeSessId}`);
+      localStorage.removeItem(`last_discard_reason_${activeSessId}`);
+      localStorage.removeItem(`last_position_${activeSessId}`);
+      localStorage.removeItem(`recovery_checked_${activeSessId}`);
+    }
+
+    // MEMÓRIA (AppContext/JourneyProvider):
+    // - activeJourney / currentSession / journeyId / telemetry state / distance accumulator / idle state
+    setTotalDistanceMeters(0);
+    setLastAddedDistanceMeters(0);
+    setCurrentAccuracy(null);
+    setDiscardedPointsCount(0);
+    setLastDiscardReason(null);
+    setIdleStatus('moving');
+    setGpsStatus('Sensor inativo');
+    setLastCoord(null);
+
+    // Filter/map driver sessions state so that no session is considered active in memory
+    setDriverSessions(prev => 
+      prev.map(s => ({
+        ...s,
+        status: 'completed' as const
+      }))
+    );
+
+    // Clear any active GPS watch identifiers
+    if (watchIdRef.current !== null) {
+      try {
+        navigator.geolocation.clearWatch(watchIdRef.current);
+      } catch (e) {
+        console.warn("[GPS] Error clearing watchIdRef in clearAllJourneyState", e);
+      }
+      watchIdRef.current = null;
+    }
     try {
       const storedWatchId = localStorage.getItem('watchId') || 
                             localStorage.getItem('gpsWatchId') || 
@@ -580,58 +707,124 @@ export const JourneyProvider: React.FC<{ children: React.ReactNode }> = ({ child
       for (let i = 1; i < 100; i++) {
         navigator.geolocation.clearWatch(i);
       }
-      console.log("[Jornada-Reset] Confirmação de clearWatch: Sucesso");
     } catch (e) {
-      console.warn("[Jornada-Reset] Erro ao limpar clearWatch:", e);
+      console.warn("[GPS] Error in batch clearWatch in clearAllJourneyState", e);
     }
 
-    // 6. Limpar todos os timers:
+    // Clear all pending setTimeout / setInterval timers
     try {
       const highestTimeoutId = setTimeout(() => {}, 0) as unknown as number;
       for (let i = 0; i <= highestTimeoutId; i++) {
         clearTimeout(i);
         clearInterval(i);
       }
-      console.log("[Jornada-Reset] Timers e intervalos limpos com sucesso.");
     } catch (e) {
-      console.warn("[Jornada-Reset] Erro ao limpar timers:", e);
+      console.warn("[Journey] Error clearing timers in clearAllJourneyState", e);
+    }
+    if (recoveryTimeoutRef.current) {
+      clearTimeout(recoveryTimeoutRef.current);
+      recoveryTimeoutRef.current = null;
     }
 
-    // 7. Remover listeners criados pela jornada:
+    // Release any active WakeLocks
+    if ((window as any).activeWakeLock) {
+      try {
+        (window as any).activeWakeLock.release();
+        (window as any).activeWakeLock = null;
+      } catch (e) {
+        console.warn("[WakeLock] Error releasing wakeLock in clearAllJourneyState", e);
+      }
+    }
+  };
+
+  const clearJourneyRuntimeState = (sessionId?: string) => {
+    clearAllJourneyState();
+  };
+
+  const endSession = async (sessionId: string, totalDistanceKm: number, totalDurationMinutes: number) => {
+    if (!user) return;
+    const userId = user.id;
+    const endedAt = new Date().toISOString();
+
+    console.log("[Journey] Updating Supabase session");
+
+    // Calculate metrics
+    const sessionPoints = routePoints.filter(p => p.session_id === sessionId);
+    const stopped_minutes = calculateStoppedMinutes(sessionPoints);
+    
+    let total_distance_meters = totalDistanceMeters;
+    if (total_distance_meters === 0) {
+      const sortedPoints = [...sessionPoints].sort((a, b) => new Date(a.recorded_at).getTime() - new Date(b.recorded_at).getTime());
+      for (let i = 1; i < sortedPoints.length; i++) {
+        const m = calculateHaversineDistanceMeters(sortedPoints[i - 1].latitude, sortedPoints[i - 1].longitude, sortedPoints[i].latitude, sortedPoints[i].longitude);
+        if (m >= 3) total_distance_meters += m;
+      }
+    }
+    const finalDistanceKm = totalDistanceKm || (total_distance_meters / 1000);
+    const sessionToClose = driverSessions.find(s => s.id === sessionId);
+    const startTime = sessionToClose ? new Date(sessionToClose.start_time).getTime() : new Date().getTime();
+    const duration_seconds = Math.max(1, Math.round((new Date().getTime() - startTime) / 1000));
+    const finalDurationMinutes = totalDurationMinutes || Math.max(1, Math.round(duration_seconds / 60));
+
+    // Try to sync pending points first
+    console.log("[Sync] Attempting final flush of telemetry points");
     try {
-      window.removeEventListener('visibilitychange', () => {});
-      window.removeEventListener('beforeunload', () => {});
-      window.removeEventListener('online', () => {});
-      window.removeEventListener('offline', () => {});
-      console.log("[Jornada-Reset] Event listeners de jornada removidos.");
+      await telemetrySyncService.finalFlushBeforeEnd();
     } catch (e) {
-      console.warn("[Jornada-Reset] Erro ao remover listeners:", e);
+      console.warn("[Sync] Failed to flush telemetry before ending:", e);
     }
 
-    // 9. Limpar persistência local:
-    const keysToRemove = [
-      'activeJourney', 'activeSession', 'currentSession', 'driverJourney',
-      'journeyTracking', 'gpsTracking', 'sessionId', 'watchId', 'gpsWatchId',
-      'gps_watch_id'
-    ];
-    keysToRemove.forEach(key => {
-      localStorage.removeItem(key);
-      sessionStorage.removeItem(key);
-      localStorage.removeItem(`${STORAGE_PREFIX}${key}`);
-      sessionStorage.removeItem(`${STORAGE_PREFIX}${key}`);
-    });
-    sessionStorage.removeItem(`recovery_checked_${sessionId}`);
-    console.log("[Jornada-Reset] Chaves de localStorage removidas:", keysToRemove.join(', '));
+    // Save unsynced points to separate cache if there are any
+    const allLocalPoints = telemetrySyncService.getPoints();
+    const unsyncedSessionPoints = allLocalPoints.filter(p => p.session_id === sessionId && (p.status === 'pending' || p.status === 'failed'));
+    if (unsyncedSessionPoints.length > 0) {
+      console.log(`[Sync] Keeping ${unsyncedSessionPoints.length} unsynced points in separate cache`);
+      localStorage.setItem(`${STORAGE_PREFIX}finalized_unsynced_points_${sessionId}`, JSON.stringify(unsyncedSessionPoints));
+    }
 
-    // Update state & localStorage
+    // Remove this session's points from active telemetry buffer
+    const remainingOtherPoints = allLocalPoints.filter(p => p.session_id !== sessionId);
+    localStorage.setItem(`${STORAGE_PREFIX}unsynced_route_points`, JSON.stringify(remainingOtherPoints));
+
+    let supabaseUpdateResult = "Não conectado";
+    if (dbStatus === 'connected') {
+      try {
+        await journeyService.endSession(sessionId, endedAt, finalDistanceKm, finalDurationMinutes);
+        supabaseUpdateResult = "Sucesso";
+        console.log("[Journey] Supabase status updated");
+      } catch (err: any) {
+        supabaseUpdateResult = `Erro: ${err.message || err}`;
+        console.error("[Journey] Failed to end session in Supabase:", err);
+      }
+    }
+
+    // Call clearAllJourneyState for comprehensive cleanup
+    clearAllJourneyState();
+
+    // Save full metrics to localStorage/sessionStorage
+    const finalMetrics = {
+      total_distance_km: finalDistanceKm,
+      total_distance_meters,
+      stopped_minutes,
+      duration_seconds,
+      ended_at: endedAt,
+      end_time: endedAt
+    };
+    localStorage.setItem(`${STORAGE_PREFIX}journey_metrics_${sessionId}`, JSON.stringify(finalMetrics));
+    sessionStorage.setItem(`${STORAGE_PREFIX}journey_metrics_${sessionId}`, JSON.stringify(finalMetrics));
+
+    // Update state & localStorage list
     const updatedSessions = driverSessions.map(s => {
-      if (s.id === sessionId) {
+      if (s.id === sessionId || s.status === 'active') {
         return {
           ...s,
           end_time: endedAt,
           status: 'completed' as const,
-          total_distance_km: totalDistanceKm,
-          total_duration_minutes: totalDurationMinutes
+          total_distance_km: finalDistanceKm,
+          total_distance_meters,
+          stopped_minutes,
+          duration_seconds,
+          total_duration_minutes: finalDurationMinutes
         };
       }
       return s;
@@ -639,30 +832,37 @@ export const JourneyProvider: React.FC<{ children: React.ReactNode }> = ({ child
 
     setDriverSessions(updatedSessions);
     localStorage.setItem(`${STORAGE_PREFIX}driver_sessions_${userId}`, JSON.stringify(updatedSessions));
-    
-    // 10. Recarregar ou invalidar o estado global/AppContext
+
     if (dbStatus === 'connected') {
       try {
+        console.log("[Journey] Verifying active sessions");
         const sessions = await journeyService.fetchDriverSessions(userId);
+        const activeSess = sessions.find(s => s.status === 'active');
+        if (activeSess) {
+          console.error(`[Journey] Still exists! Active session ID: ${activeSess.id}`);
+        } else {
+          console.log("[Journey] No active sessions found");
+        }
         setDriverSessions(sessions);
         localStorage.setItem(`${STORAGE_PREFIX}driver_sessions_${userId}`, JSON.stringify(sessions));
-        console.log("[Jornada-Reset] Confirmação de limpeza do AppContext: Sucesso (Recarregado do Supabase)");
       } catch (err) {
-        console.warn("[Jornada-Reset] Falha ao recarregar do Supabase:", err);
+        console.warn("[Journey] Failed to reload sessions from Supabase:", err);
       }
-    } else {
-      console.log("[Jornada-Reset] Confirmação de limpeza do AppContext: Sucesso (Modo Local)");
     }
 
-    auditLogger.logJourneyAction('completed', { sessionId, userId, totalDistanceKm, totalDurationMinutes });
+    auditLogger.logJourneyAction('completed', { sessionId, userId, totalDistanceKm: finalDistanceKm, totalDurationMinutes: finalDurationMinutes });
   };
 
-  const addRoutePoint = async (pointData: Omit<RoutePoint, 'id' | 'recorded_at'> & { accuracy?: number }) => {
+  const addRoutePoint = async (pointData: Omit<RoutePoint, 'id' | 'recorded_at'>) => {
     if (!user) return;
     const userId = user.id;
     const recordedAt = new Date().toISOString();
 
-    const MIN_MOVEMENT_METERS = 3;
+    // Configurable noise threshold in meters
+    const MIN_MOVEMENT_METERS = 3.0;
+
+    // Log the incoming GPS point immediately
+    console.log("[GPS] GPS point received");
 
     const accuracy = pointData.accuracy;
     if (accuracy !== undefined && accuracy !== null) {
@@ -679,7 +879,7 @@ export const JourneyProvider: React.FC<{ children: React.ReactNode }> = ({ child
       const reason = `Precisão ruim: ${accuracy.toFixed(1)}m (máx: 30m)`;
       setLastDiscardReason(reason);
       sessionStorage.setItem(`last_discard_reason_${pointData.session_id}`, reason);
-      console.log("[DistanceEngine] point ignored (bad accuracy)");
+      console.log("[DistanceEngine] Point ignored (bad accuracy)");
       return;
     }
 
@@ -713,7 +913,7 @@ export const JourneyProvider: React.FC<{ children: React.ReactNode }> = ({ child
           const reason = `Salto impossível: ${calculatedSpeedKmh.toFixed(1)} km/h`;
           setLastDiscardReason(reason);
           sessionStorage.setItem(`last_discard_reason_${pointData.session_id}`, reason);
-          console.log("[DistanceEngine] point ignored (impossible jump)");
+          console.log("[DistanceEngine] Point ignored (impossible jump)");
           return;
         }
       }
@@ -729,7 +929,7 @@ export const JourneyProvider: React.FC<{ children: React.ReactNode }> = ({ child
       const reason = `Velocidade excessiva: ${pointData.speed_kmh.toFixed(1)} km/h`;
       setLastDiscardReason(reason);
       sessionStorage.setItem(`last_discard_reason_${pointData.session_id}`, reason);
-      console.log("[DistanceEngine] point ignored (impossible jump)");
+      console.log("[DistanceEngine] Point ignored (impossible speed)");
       return;
     }
 
@@ -737,18 +937,28 @@ export const JourneyProvider: React.FC<{ children: React.ReactNode }> = ({ child
     const newPoint: RoutePoint = {
       id: 'pt-' + Math.random().toString(36).substring(2, 11),
       session_id: pointData.session_id,
+      driver_id: userId,
       latitude: pointData.latitude,
       longitude: pointData.longitude,
       speed_kmh: pointData.speed_kmh || 0,
+      accuracy: pointData.accuracy ?? 0,
+      heading: pointData.heading !== undefined ? pointData.heading : null,
+      altitude: pointData.altitude !== undefined ? pointData.altitude : null,
+      distance_meters: distMeters,
       recorded_at: recordedAt
     };
 
     // Queue point in the central telemetry synchronization service
     telemetrySyncService.queuePoint({
       session_id: pointData.session_id,
+      driver_id: userId,
       latitude: pointData.latitude,
       longitude: pointData.longitude,
       speed_kmh: pointData.speed_kmh || 0,
+      accuracy: pointData.accuracy ?? 0,
+      heading: pointData.heading !== undefined ? pointData.heading : null,
+      altitude: pointData.altitude !== undefined ? pointData.altitude : null,
+      distance_meters: distMeters,
       recorded_at: recordedAt
     });
 
@@ -758,7 +968,7 @@ export const JourneyProvider: React.FC<{ children: React.ReactNode }> = ({ child
 
     let addedMeters = 0;
     if (lastPosition) {
-      // 3. Filtro de movimento: ignorar deslocamentos menores que 3 metros
+      // Filtro de movimento: ignorar deslocamentos menores que a constante MIN_MOVEMENT_METERS
       if (distMeters >= MIN_MOVEMENT_METERS) {
         addedMeters = distMeters;
         setLastAddedDistanceMeters(addedMeters);
@@ -769,7 +979,7 @@ export const JourneyProvider: React.FC<{ children: React.ReactNode }> = ({ child
       }
     } else {
       setLastAddedDistanceMeters(0);
-      console.log("[DistanceEngine] point accepted");
+      console.log("[DistanceEngine] first point accepted");
     }
 
     // Atualizar sempre a última posição persistida
@@ -781,12 +991,14 @@ export const JourneyProvider: React.FC<{ children: React.ReactNode }> = ({ child
     };
     sessionStorage.setItem(`last_position_${pointData.session_id}`, JSON.stringify(newPosition));
 
+    // Executar cálculo de distância de forma assíncrona/em tempo real independente de velocidade
     if (addedMeters > 0) {
       setTotalDistanceMeters(prev => {
         const updatedMeters = prev + addedMeters;
         const updatedKm = Number((updatedMeters / 1000).toFixed(2));
         sessionStorage.setItem(`total_distance_${pointData.session_id}`, updatedMeters.toString());
-        console.log("[DistanceEngine] total updated");
+        console.log("[DistanceEngine] Total updated");
+        console.log("[DistanceEngine] Distance updated");
 
         // Real-time update to active session in driverSessions list
         setDriverSessions(prevSessions => {
@@ -806,6 +1018,28 @@ export const JourneyProvider: React.FC<{ children: React.ReactNode }> = ({ child
         return updatedMeters;
       });
     }
+
+    // Idle Engine - lógica de tempo parado totalmente isolada e apenas de leitura
+    let currentSpeedKmh = 0;
+    if (pointData.speed_kmh !== undefined && pointData.speed_kmh !== null) {
+      currentSpeedKmh = pointData.speed_kmh;
+    } else if (lastPosition) {
+      const prevTime = lastPosition.timestamp || new Date(lastPosition.recorded_at || "").getTime();
+      const currTime = new Date(recordedAt).getTime();
+      const timeDiffSec = (currTime - prevTime) / 1000;
+      if (timeDiffSec > 0) {
+        currentSpeedKmh = (distMeters / timeDiffSec) * 3.6;
+      }
+    }
+
+    const isStopped = currentSpeedKmh < 5;
+    const newIdleState = isStopped ? 'stopped' : 'moving';
+    setIdleStatus(prev => {
+      if (prev !== newIdleState) {
+        console.log("[DistanceEngine] Idle status updated (read-only)");
+      }
+      return newIdleState;
+    });
   };
 
   return (
@@ -830,6 +1064,7 @@ export const JourneyProvider: React.FC<{ children: React.ReactNode }> = ({ child
         currentAccuracy,
         discardedPointsCount,
         lastDiscardReason,
+        idleStatus,
         gpsStatus,
         permissionState,
         lastCoord,
@@ -837,7 +1072,9 @@ export const JourneyProvider: React.FC<{ children: React.ReactNode }> = ({ child
         gpsTestResult,
         gpsTestLoading,
         testGps,
-        clearGpsTestResult
+        clearGpsTestResult,
+        clearJourneyRuntimeState,
+        clearAllJourneyState
       }}
     >
       {children}

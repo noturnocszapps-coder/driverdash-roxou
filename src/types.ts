@@ -172,6 +172,36 @@ export interface VehicleCostSettings {
   created_at?: string;
 }
 
+export interface DriverCustomCost {
+  id?: string;
+  user_id: string;
+  name: string;
+  category: 
+    | 'fuel' 
+    | 'electricity' 
+    | 'oil' 
+    | 'filters' 
+    | 'brakes' 
+    | 'tires' 
+    | 'insurance' 
+    | 'ipva' 
+    | 'license' 
+    | 'depreciation' 
+    | 'washing' 
+    | 'financing' 
+    | 'rent' 
+    | 'uber_fee' 
+    | '99_fee' 
+    | 'indrive_fee' 
+    | 'other';
+  amount: number;
+  periodicity: 'per_km' | 'per_hour' | 'per_day' | 'monthly' | 'yearly' | 'per_ride';
+  apportionment_km: number;
+  apportionment_hour: number;
+  apportionment_day: number;
+  created_at?: string;
+}
+
 export interface SmartAlert {
   id?: string;
   user_id?: string;
@@ -221,10 +251,37 @@ export interface DriverSession {
 export interface RoutePoint {
   id: string;
   session_id: string;
+  driver_id?: string;
   latitude: number;
   longitude: number;
   speed_kmh?: number;
+  accuracy?: number;
+  heading?: number | null;
+  altitude?: number | null;
+  distance_meters?: number;
   recorded_at: string;
+  segment_type?: 'empty' | 'productive' | 'personal' | 'dead' | 'stopped' | 'waiting' | 'offline';
+  ride_event_id?: string | null;
+}
+
+export interface DriverRideEvent {
+  id: string;
+  driver_id: string;
+  session_id: string;
+  event_type: 'ride_started' | 'ride_finished' | 'personal_started' | 'personal_finished';
+  started_at: string;
+  ended_at?: string | null;
+  start_latitude?: number | null;
+  start_longitude?: number | null;
+  end_latitude?: number | null;
+  end_longitude?: number | null;
+  distance_meters?: number;
+  duration_seconds?: number;
+  created_at: string;
+  is_automated?: boolean;
+  confidence_score?: number;
+  classification_reason?: string;
+  was_confirmed_manually?: boolean;
 }
 
 export interface DemandSignal {

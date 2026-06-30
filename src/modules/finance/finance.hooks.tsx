@@ -7,8 +7,9 @@
 import React, { createContext, useContext, useState, useEffect, useMemo } from 'react';
 import { useAuth } from '../auth/auth.hooks';
 import { STORAGE_PREFIX } from '../shared/constants';
-import { Earning, Expense, DailyClosing, WeeklyClosing, FinancialMetrics, FinanceContextType } from './finance.types';
+import { Earning, Expense, DailyClosing, WeeklyClosing, FinancialMetrics, FinanceContextType, DriverCustomCost } from './finance.types';
 import { financeService } from './finance.service';
+import { financeIntelligenceService } from './financeIntelligence.service';
 import { calculateFinancialMetrics, filterFreeTierHistory } from './finance.calculations';
 
 export const FinanceContext = createContext<FinanceContextType | undefined>(undefined);
@@ -20,6 +21,7 @@ export const FinanceProvider: React.FC<{ children: React.ReactNode }> = ({ child
   const [expenses, setExpenses] = useState<Expense[]>([]);
   const [dailyClosings, setDailyClosings] = useState<DailyClosing[]>([]);
   const [weeklyClosings, setWeeklyClosings] = useState<WeeklyClosing[]>([]);
+  const [customCosts, setCustomCosts] = useState<DriverCustomCost[]>([]);
 
   // Local backups helper loaded directly if fallback
   useEffect(() => {
@@ -28,6 +30,7 @@ export const FinanceProvider: React.FC<{ children: React.ReactNode }> = ({ child
       setExpenses([]);
       setDailyClosings([]);
       setWeeklyClosings([]);
+      setCustomCosts([]);
       return;
     }
 
@@ -36,11 +39,13 @@ export const FinanceProvider: React.FC<{ children: React.ReactNode }> = ({ child
       const lExpenses = localStorage.getItem(`${STORAGE_PREFIX}expenses_${user.id}`);
       const lDaily = localStorage.getItem(`${STORAGE_PREFIX}daily_${user.id}`);
       const lWeekly = localStorage.getItem(`${STORAGE_PREFIX}weekly_${user.id}`);
+      const lCustom = localStorage.getItem(`${STORAGE_PREFIX}custom_costs_${user.id}`);
 
       setEarnings(lEarnings ? JSON.parse(lEarnings) : []);
       setExpenses(lExpenses ? JSON.parse(lExpenses) : []);
       setDailyClosings(lDaily ? JSON.parse(lDaily) : []);
       setWeeklyClosings(lWeekly ? JSON.parse(lWeekly) : []);
+      setCustomCosts(lCustom ? JSON.parse(lCustom) : []);
     };
 
     if (dbStatus === 'connected') {
@@ -50,17 +55,20 @@ export const FinanceProvider: React.FC<{ children: React.ReactNode }> = ({ child
           const expResult = await financeService.fetchExpenses(user.id);
           const dailyRes = await financeService.fetchDailyClosings(user.id);
           const weeklyRes = await financeService.fetchWeeklyClosings(user.id);
+          const customRes = await financeIntelligenceService.fetchCustomCosts(user.id);
 
           setEarnings(earn);
           setExpenses(expResult);
           setDailyClosings(dailyRes);
           setWeeklyClosings(weeklyRes);
+          setCustomCosts(customRes);
 
           // Update backups
           localStorage.setItem(`${STORAGE_PREFIX}earnings_${user.id}`, JSON.stringify(earn));
           localStorage.setItem(`${STORAGE_PREFIX}expenses_${user.id}`, JSON.stringify(expResult));
           localStorage.setItem(`${STORAGE_PREFIX}daily_${user.id}`, JSON.stringify(dailyRes));
           localStorage.setItem(`${STORAGE_PREFIX}weekly_${user.id}`, JSON.stringify(weeklyRes));
+          localStorage.setItem(`${STORAGE_PREFIX}custom_costs_${user.id}`, JSON.stringify(customRes));
         } catch (e) {
           console.warn('Finance query error; fetching from local storage backup:', e);
           loadLocal();
@@ -271,6 +279,46 @@ export const FinanceProvider: React.FC<{ children: React.ReactNode }> = ({ child
     return localItem;
   };
 
+  const addCustomCost = async (costData: Omit<DriverCustomCost, 'user_id' | 'id'>) => {
+    if (!user) return;
+    const item: DriverCustomCost = {
+      ...costData,
+      user_id: user.id,
+      created_at: new Date().toISOString()
+    } as any;
+
+    if (dbStatus === 'connected') {
+      try {
+        const saved = await financeIntelligenceService.addCustomCost(item);
+        const updated = [saved, ...customCosts];
+        setCustomCosts(updated);
+        localStorage.setItem(`${STORAGE_PREFIX}custom_costs_${user.id}`, JSON.stringify(updated));
+        return;
+      } catch (err) {
+        console.error('Remote custom cost save missed. Saving locally.', err);
+      }
+    }
+
+    const localItem = { ...item, id: 'lcl-cst-' + Math.random().toString(36).substring(2, 9) };
+    const updated = [localItem, ...customCosts];
+    setCustomCosts(updated);
+    localStorage.setItem(`${STORAGE_PREFIX}custom_costs_${user.id}`, JSON.stringify(updated));
+  };
+
+  const deleteCustomCost = async (id: string | undefined, indexLocal: number) => {
+    if (!user) return;
+    if (dbStatus === 'connected' && id && !id.startsWith('lcl-')) {
+      try {
+        await financeIntelligenceService.deleteCustomCost(id);
+      } catch (e) {
+        console.error('Error deleting remote custom cost:', e);
+      }
+    }
+    const updated = customCosts.filter((e, idx) => e.id !== id && idx !== indexLocal);
+    setCustomCosts(updated);
+    localStorage.setItem(`${STORAGE_PREFIX}custom_costs_${user.id}`, JSON.stringify(updated));
+  };
+
   return (
     <FinanceContext.Provider
       value={{
@@ -278,13 +326,16 @@ export const FinanceProvider: React.FC<{ children: React.ReactNode }> = ({ child
         expenses: outputExpenses,
         dailyClosings,
         weeklyClosings,
+        customCosts,
         metrics,
         addEarning,
         addExpense,
         deleteEarning,
         deleteExpense,
         createDailyClosing,
-        createWeeklyClosing
+        createWeeklyClosing,
+        addCustomCost,
+        deleteCustomCost
       }}
     >
       {children}

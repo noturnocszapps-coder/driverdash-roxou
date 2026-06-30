@@ -7,7 +7,7 @@
 import React, { createContext, useContext, useState, useEffect } from 'react';
 import { supabase } from '../modules/shared/supabase.helpers';
 import { STORAGE_PREFIX } from '../modules/shared/constants';
-import { Profile, UserRole, UserPlan, Vehicle, Earning, Expense, DailyClosing, WeeklyClosing, AdminPeakRule, PassengerReport, FinancialGoal, VehicleCostSettings, SmartAlert, Subscription, Payment, DriverSession, RoutePoint } from '../types';
+import { Profile, UserRole, UserPlan, Vehicle, Earning, Expense, DailyClosing, WeeklyClosing, AdminPeakRule, PassengerReport, FinancialGoal, VehicleCostSettings, SmartAlert, Subscription, Payment, DriverSession, RoutePoint, DriverCustomCost } from '../types';
 
 import { AuthProvider, useAuth } from '../modules/auth/auth.hooks';
 import { FinanceProvider, useFinance } from '../modules/finance/finance.hooks';
@@ -28,6 +28,7 @@ interface AppContextType {
   expenses: Expense[];
   dailyClosings: DailyClosing[];
   weeklyClosings: WeeklyClosing[];
+  customCosts: DriverCustomCost[];
   peakRules: AdminPeakRule[];
   passengerReports: PassengerReport[];
   financialGoal: FinancialGoal | null;
@@ -63,6 +64,8 @@ interface AppContextType {
   deleteExpense: (id: string | undefined, indexLocal: number) => Promise<void>;
   createDailyClosing: (date: string) => Promise<DailyClosing>;
   createWeeklyClosing: (start: string, end: string) => Promise<WeeklyClosing>;
+  addCustomCost: (costData: Omit<DriverCustomCost, 'user_id' | 'id'>) => Promise<void>;
+  deleteCustomCost: (id: string | undefined, indexLocal: number) => Promise<void>;
   addPeakRule: (rule: Omit<AdminPeakRule, 'id'>) => Promise<void>;
   togglePeakRule: (id: string | undefined, indexLocal: number) => Promise<void>;
   addPassengerReport: (report: Omit<PassengerReport, 'user_id' | 'id'>) => Promise<void>;
@@ -83,6 +86,8 @@ interface AppContextType {
   gpsTestLoading: boolean;
   testGps: () => Promise<GpsTestResult>;
   clearGpsTestResult: () => void;
+  clearJourneyRuntimeState: (sessionId?: string) => void;
+  clearAllJourneyState: () => void;
   
   // Telemetry Sync States
   pendingPointsCount: number;
@@ -99,6 +104,7 @@ interface AppContextType {
   currentAccuracy: number | null;
   discardedPointsCount: number;
   lastDiscardReason: string | null;
+  idleStatus: 'moving' | 'stopped';
   
   // Commercial & admin updates
   updateUserPlan: (userId: string, plan: UserPlan) => Promise<void>;
@@ -300,6 +306,7 @@ const LegacyAppBridgeProvider: React.FC<{ children: React.ReactNode }> = ({ chil
         expenses: finance.expenses,
         dailyClosings: finance.dailyClosings,
         weeklyClosings: finance.weeklyClosings,
+        customCosts: finance.customCosts,
         peakRules: insights.peakRules,
         passengerReports: insights.passengerReports,
         financialGoal: goals.financialGoal,
@@ -335,6 +342,8 @@ const LegacyAppBridgeProvider: React.FC<{ children: React.ReactNode }> = ({ chil
         deleteExpense: finance.deleteExpense,
         createDailyClosing: finance.createDailyClosing,
         createWeeklyClosing: finance.createWeeklyClosing,
+        addCustomCost: finance.addCustomCost,
+        deleteCustomCost: finance.deleteCustomCost,
         
         addPeakRule: insights.addPeakRule,
         togglePeakRule: insights.togglePeakRule,
@@ -357,6 +366,8 @@ const LegacyAppBridgeProvider: React.FC<{ children: React.ReactNode }> = ({ chil
         gpsTestLoading: journey.gpsTestLoading,
         testGps: journey.testGps,
         clearGpsTestResult: journey.clearGpsTestResult,
+        clearJourneyRuntimeState: journey.clearJourneyRuntimeState,
+        clearAllJourneyState: journey.clearAllJourneyState,
 
         pendingPointsCount: journey.pendingPointsCount,
         syncedPointsCount: journey.syncedPointsCount,
@@ -370,6 +381,7 @@ const LegacyAppBridgeProvider: React.FC<{ children: React.ReactNode }> = ({ chil
         currentAccuracy: journey.currentAccuracy,
         discardedPointsCount: journey.discardedPointsCount,
         lastDiscardReason: journey.lastDiscardReason,
+        idleStatus: journey.idleStatus,
 
         updateUserPlan,
         updateSubscriptionStatus: subscriptions.updateSubscriptionStatus,

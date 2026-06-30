@@ -41,7 +41,8 @@ export const DebugPage: React.FC = () => {
     lastAddedDistanceMeters,
     currentAccuracy,
     discardedPointsCount,
-    lastDiscardReason
+    lastDiscardReason,
+    idleStatus
   } = useApp();
 
   const [simulatedOnline, setSimulatedOnline] = useState(navigator.onLine);
@@ -50,6 +51,35 @@ export const DebugPage: React.FC = () => {
   const [isSyncing, setIsSyncing] = useState(false);
   const [sessionPointsCount, setSessionPointsCount] = useState(0);
   const [hasGeneratedSimulated, setHasGeneratedSimulated] = useState(false);
+  const [localLogs, setLocalLogs] = useState<any[]>([]);
+
+  const loadLocalLogs = () => {
+    try {
+      const logsStr = localStorage.getItem('driverdash_roxou_local_app_logs');
+      if (logsStr) {
+        setLocalLogs(JSON.parse(logsStr));
+      } else {
+        setLocalLogs([]);
+      }
+    } catch (e) {
+      console.error(e);
+    }
+  };
+
+  useEffect(() => {
+    loadLocalLogs();
+    const interval = setInterval(loadLocalLogs, 3000);
+    return () => clearInterval(interval);
+  }, []);
+
+  const handleClearLogs = () => {
+    try {
+      localStorage.removeItem('driverdash_roxou_local_app_logs');
+      setLocalLogs([]);
+    } catch (e) {
+      console.error(e);
+    }
+  };
 
   // Active driver session reference
   const activeSession = useMemo(() => {
@@ -343,7 +373,7 @@ export const DebugPage: React.FC = () => {
                 Auditoria da Engine de Distância (Roxou V3)
               </h4>
               
-              <div className="grid grid-cols-2 md:grid-cols-4 gap-4">
+              <div className="grid grid-cols-2 lg:grid-cols-5 gap-4">
                 <div className="p-4 rounded-2xl bg-purple-950/5 border border-purple-950/15">
                   <span className="text-[10px] text-purple-400 font-mono block mb-1">Distância Total</span>
                   <span className="text-sm font-extrabold text-white font-mono block">
@@ -384,6 +414,18 @@ export const DebugPage: React.FC = () => {
                   </span>
                   <span className="text-[10px] text-slate-400 font-mono block mt-0.5 truncate">
                     Ruídos / Saltos filtrados
+                  </span>
+                </div>
+
+                <div className="p-4 rounded-2xl bg-purple-950/5 border border-purple-950/15">
+                  <span className="text-[10px] text-purple-400 font-mono block mb-1">Motor Marcha Lenta</span>
+                  <span className={`text-sm font-extrabold font-mono block ${
+                    idleStatus === 'stopped' ? 'text-amber-400' : 'text-emerald-400'
+                  }`}>
+                    {idleStatus === 'stopped' ? 'PARADO' : 'EM MOVIMENTO'}
+                  </span>
+                  <span className="text-[10px] text-slate-400 font-mono block mt-0.5 truncate">
+                    Filtro: &lt; 5.0 km/h
                   </span>
                 </div>
               </div>
@@ -741,6 +783,68 @@ export const DebugPage: React.FC = () => {
           }`}>
             {dbStatus === 'connected' ? 'REAL_CLOUD_DB' : 'LOCAL_SANDBOX'}
           </span>
+        </div>
+      </div>
+
+      {/* AUDIT LOGS TERMINAL */}
+      <div className="p-6 bg-[#0a061d]/80 border border-purple-950/50 rounded-3xl mt-6">
+        <div className="flex items-center justify-between mb-4 text-left">
+          <div>
+            <h3 className="text-xs font-mono font-semibold tracking-wider text-purple-400 uppercase">
+              Logs de Auditoria de Telemetria (Roxou V3)
+            </h3>
+            <p className="text-[10px] text-slate-400 mt-0.5">
+              Eventos de jornada, sincronização e alertas GPS em tempo real (atualizado a cada 3s)
+            </p>
+          </div>
+          <div className="flex gap-2">
+            <button
+              onClick={loadLocalLogs}
+              className="px-2.5 py-1 text-[9px] font-mono rounded bg-purple-950/40 hover:bg-purple-950/70 border border-purple-900/35 text-purple-300 transition-all cursor-pointer"
+            >
+              Recarregar
+            </button>
+            <button
+              onClick={handleClearLogs}
+              className="px-2.5 py-1 text-[9px] font-mono rounded bg-rose-950/40 hover:bg-rose-950/70 border border-rose-900/35 text-rose-300 transition-all cursor-pointer"
+            >
+              Limpar
+            </button>
+          </div>
+        </div>
+
+        <div className="h-64 overflow-y-auto bg-black/50 border border-purple-950/40 rounded-2xl p-4 font-mono text-[10px] space-y-1.5 scrollbar-thin text-left">
+          {localLogs.length === 0 ? (
+            <p className="text-slate-500 italic text-center py-12">Nenhum log de auditoria registrado ainda.</p>
+          ) : (
+            localLogs.map((log) => {
+              const dateStr = new Date(log.created_at).toLocaleTimeString('pt-BR');
+              let levelColor = 'text-slate-400';
+              if (log.level === 'warn') levelColor = 'text-amber-400';
+              if (log.level === 'error' || log.level === 'critical') levelColor = 'text-rose-400 font-bold';
+              if (log.level === 'info') levelColor = 'text-emerald-400';
+
+              return (
+                <div key={log.id} className="hover:bg-purple-950/10 py-1 px-1.5 rounded transition-all border-b border-purple-950/5 flex flex-col md:flex-row md:items-start gap-1 md:gap-3">
+                  <span className="text-slate-500 select-none whitespace-nowrap">[{dateStr}]</span>
+                  <span className={`uppercase text-[9px] font-bold ${levelColor} select-none`}>
+                    [{log.level}]
+                  </span>
+                  <span className="text-purple-400 select-none font-bold uppercase text-[9px]">
+                    [{log.category}]
+                  </span>
+                  <div className="flex-1 min-w-0">
+                    <p className="text-slate-300 break-words">{log.message}</p>
+                    {log.metadata && Object.keys(log.metadata).length > 0 && (
+                      <pre className="mt-1 text-[9px] text-slate-500 bg-[#060412] p-1.5 rounded overflow-x-auto max-w-full leading-normal">
+                        {JSON.stringify(log.metadata, null, 2)}
+                      </pre>
+                    )}
+                  </div>
+                </div>
+              );
+            })
+          )}
         </div>
       </div>
     </div>

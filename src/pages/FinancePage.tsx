@@ -2,10 +2,11 @@ import React, { useState } from 'react';
 import { useApp } from '../context/AppContext';
 import { 
   Plus, Trash2, Calendar, Coins, ArrowUpRight, ArrowDownRight, 
-  Layers, Clock, HelpCircle, FileCheck, CheckCircle2, AlertCircle, Info, TrendingUp
+  Layers, Clock, HelpCircle, FileCheck, CheckCircle2, AlertCircle, Info, TrendingUp, Sparkles
 } from 'lucide-react';
 import { motion, AnimatePresence } from 'motion/react';
 import { PlatformType, ExpenseType } from '../types';
+import { FinanceIntelligence } from '../components/FinanceIntelligence';
 
 export const FinancePage: React.FC = () => {
   const { 
@@ -14,7 +15,7 @@ export const FinancePage: React.FC = () => {
     createDailyClosing, createWeeklyClosing, metrics
   } = useApp();
 
-  const [activeTab, setActiveTab] = useState<'record' | 'history' | 'closing'>('record');
+  const [activeTab, setActiveTab] = useState<'intelligence' | 'record' | 'history' | 'closing'>('intelligence');
 
   // Form errors
   const [earnError, setEarnError] = useState<string | null>(null);
@@ -318,7 +319,17 @@ export const FinancePage: React.FC = () => {
       </div>
 
       {/* Navigation tab bar */}
-      <div className="flex border-b border-purple-950/20 gap-2">
+      <div className="flex flex-wrap border-b border-purple-950/20 gap-2">
+        <button
+          onClick={() => setActiveTab('intelligence')}
+          className={`px-4 py-2 text-xs font-mono font-semibold tracking-wider uppercase border-b-2 transition-colors cursor-pointer flex items-center gap-1.5 ${
+            activeTab === 'intelligence'
+              ? 'text-purple-400 border-purple-500'
+              : 'text-purple-300/40 border-transparent hover:text-purple-300'
+          }`}
+        >
+          <Sparkles className="w-3.5 h-3.5" /> Copiloto & Inteligência Financeira
+        </button>
         <button
           onClick={() => setActiveTab('record')}
           className={`px-4 py-2 text-xs font-mono font-semibold tracking-wider uppercase border-b-2 transition-colors cursor-pointer ${
@@ -353,6 +364,16 @@ export const FinancePage: React.FC = () => {
 
       {/* TAB CONTENTS CONTAINER */}
       <div className="mt-6">
+
+        {/* TAB 0: COPILOT & FINANCIAL INTELLIGENCE */}
+        {activeTab === 'intelligence' && (
+          <motion.div
+            initial={{ opacity: 0, y: 10 }}
+            animate={{ opacity: 1, y: 0 }}
+          >
+            <FinanceIntelligence />
+          </motion.div>
+        )}
         
         {/* TAB 1: RECORD GAINS & EXPENSES */}
         {activeTab === 'record' && (

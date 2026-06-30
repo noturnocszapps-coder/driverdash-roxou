@@ -18,18 +18,64 @@ export const AppLayout: React.FC<{ children: React.ReactNode }> = ({ children })
   const [copied, setCopied] = useState(false);
   const [showSessionRecovery, setShowSessionRecovery] = useState(false);
 
-  const activeSessionRef = driverSessions?.find(s => s.status === 'active');
+  const activeSessionRef = driverSessions?.find(s => s.status === 'active' && !s.end_time && !(s as any).ended_at);
+  const isJornadaPage = location.pathname === '/jornada';
 
   useEffect(() => {
-    if (activeSessionRef) {
-      const alreadyChecked = sessionStorage.getItem(`recovery_checked_${activeSessionRef.id}`);
-      if (!alreadyChecked) {
-        setShowSessionRecovery(true);
-      }
-    } else {
+    if (!isJornadaPage) {
       setShowSessionRecovery(false);
+      return;
     }
-  }, [activeSessionRef]);
+
+    if (!user) {
+      setShowSessionRecovery(false);
+      return;
+    }
+
+    const checkActiveSessionInSupabase = async () => {
+      if (dbStatus === 'connected') {
+        try {
+          const { data: activeSessions, error } = await supabase
+            .from('driver_sessions')
+            .select('*')
+            .eq('user_id', user.id)
+            .eq('status', 'active');
+
+          if (error) throw error;
+
+          const activeSess = activeSessions && activeSessions.find(s => s.status === 'active' && !s.end_time && !s.ended_at);
+          if (activeSess) {
+            const alreadyChecked = sessionStorage.getItem(`recovery_checked_${activeSess.id}`);
+            if (!alreadyChecked) {
+              setShowSessionRecovery(true);
+            } else {
+              setShowSessionRecovery(false);
+            }
+          } else {
+            setShowSessionRecovery(false);
+          }
+        } catch (e) {
+          console.error("[JourneyEnd] Error checking active session in Supabase:", e);
+          setShowSessionRecovery(false);
+        }
+      } else {
+        // Local mode fallback
+        const activeSess = driverSessions?.find(s => s.status === 'active' && !s.end_time && !(s as any).ended_at);
+        if (activeSess) {
+          const alreadyChecked = sessionStorage.getItem(`recovery_checked_${activeSess.id}`);
+          if (!alreadyChecked) {
+            setShowSessionRecovery(true);
+          } else {
+            setShowSessionRecovery(false);
+          }
+        } else {
+          setShowSessionRecovery(false);
+        }
+      }
+    };
+
+    checkActiveSessionInSupabase();
+  }, [isJornadaPage, user, dbStatus, driverSessions]);
 
   const handleContinueSession = () => {
     if (activeSessionRef) {
@@ -40,8 +86,36 @@ export const AppLayout: React.FC<{ children: React.ReactNode }> = ({ children })
   };
 
   const handleEndSession = async () => {
-    if (!activeSessionRef) return;
-    const sessionToClose = activeSessionRef;
+    console.log("[JourneyEnd] modal end clicked");
+    
+    let sessionToClose = activeSessionRef;
+    if (!sessionToClose && dbStatus === 'connected' && user?.id) {
+      try {
+        const { data: activeSessions } = await supabase
+          .from('driver_sessions')
+          .select('*')
+          .eq('user_id', user.id)
+          .eq('status', 'active');
+        const realActiveSessions = activeSessions ? activeSessions.filter(s => !s.end_time && !s.ended_at) : [];
+        if (realActiveSessions.length > 0) {
+          sessionToClose = {
+            id: realActiveSessions[0].id,
+            user_id: realActiveSessions[0].user_id,
+            start_time: realActiveSessions[0].start_time,
+            status: 'active',
+            created_at: realActiveSessions[0].created_at || realActiveSessions[0].start_time
+          };
+        }
+      } catch (e) {
+        console.error("Failed to query active session for end session:", e);
+      }
+    }
+
+    if (!sessionToClose) {
+      console.log("[JourneyEnd] no active session found to end");
+      setShowSessionRecovery(false);
+      return;
+    }
     
     // Calculate distance
     const currentPoints = routePoints
@@ -75,33 +149,34 @@ export const AppLayout: React.FC<{ children: React.ReactNode }> = ({ children })
     await endSession(sessionToClose.id, Number(distance.toFixed(2)), runningTimeMinutes);
     sessionStorage.setItem(`recovery_checked_${sessionToClose.id}`, 'true');
     
-    // 11. Depois de finalizar, fazer uma verificação final no Supabase:
+    console.log("[JourneyEnd] verifying remaining active sessions");
     if (dbStatus === 'connected' && user?.id) {
       try {
         const { data: activeSessions, error: checkError } = await supabase
           .from('driver_sessions')
-          .select('id, status')
+          .select('id, status, end_time, ended_at')
           .eq('user_id', user.id)
           .eq('status', 'active');
         
         if (checkError) throw checkError;
         
-        const hasActive = activeSessions && activeSessions.length > 0;
-        console.log("[Jornada-Reset] Resultado da verificação final de jornada ativa:", hasActive ? "Ainda ativa!" : "Nenhuma ativa");
+        const realActiveSessions = activeSessions ? activeSessions.filter(s => !s.end_time && !s.ended_at) : [];
+        const hasActive = realActiveSessions.length > 0;
         
         if (hasActive) {
-          const activeIds = activeSessions.map(s => s.id).join(', ');
-          console.error(`[Jornada-Reset] Erro: Jornada ativa ainda existe no banco! IDs: ${activeIds}`);
-          alert(`Erro: Não foi possível encerrar a jornada ativa no banco de dados. IDs: ${activeIds}. Por favor, tente novamente.`);
+          console.log("[JourneyEnd] active session still exists");
+          const activeIds = realActiveSessions.map(s => s.id).join(', ');
+          alert(`Erro técnico: Ainda existem jornadas ativas no Supabase. ID(s): ${activeIds}`);
         } else {
+          console.log("[JourneyEnd] no active sessions found");
           setShowSessionRecovery(false);
         }
       } catch (checkErr) {
-        console.error("[Jornada-Reset] Falha na verificação final de jornada ativa:", checkErr);
-        setShowSessionRecovery(false); // Fechar mesmo se falhar a verificação de segurança secundária
+        console.error("Failed verification:", checkErr);
+        setShowSessionRecovery(false);
       }
     } else {
-      console.log("[Jornada-Reset] Resultado da verificação final de jornada ativa: Nenhuma ativa (Modo Local)");
+      console.log("[JourneyEnd] no active sessions found");
       setShowSessionRecovery(false);
     }
   };

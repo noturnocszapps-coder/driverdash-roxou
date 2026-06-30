@@ -14,14 +14,21 @@ const SYNC_STATS_STORAGE_KEY = `${STORAGE_PREFIX}telemetry_sync_stats`;
 export interface LocalTelemetryPoint {
   idLocal: string; // Unique ID (usually generated from session_id + timestamp + lat + lng)
   session_id: string;
+  driver_id?: string;
   latitude: number;
   longitude: number;
   speed_kmh: number;
+  accuracy: number;
+  heading: number | null;
+  altitude: number | null;
+  distance_meters: number;
   recorded_at: string;
   status: 'pending' | 'syncing' | 'synced' | 'failed';
   retry_count: number;
   last_retry_at?: string;
   error_message?: string;
+  segment_type?: 'empty' | 'productive' | 'personal' | 'dead' | 'stopped' | 'waiting' | 'offline';
+  ride_event_id?: string | null;
 }
 
 export interface TelemetrySyncStats {
@@ -40,7 +47,7 @@ class TelemetrySyncService {
     // Listen to network changes to automatically sync
     if (typeof window !== 'undefined') {
       window.addEventListener('online', () => {
-        console.log('[TelemetrySync] Browser reported back online. Triggering automatic synchronization...');
+        console.log('[Sync] Browser reported back online. Triggering automatic synchronization...');
         this.sync();
       });
     }
@@ -61,7 +68,7 @@ class TelemetrySyncService {
       try {
         listener();
       } catch (err) {
-        console.error('[TelemetrySync] Error in sync listener notification:', err);
+        console.error('[Sync] Error in sync listener notification:', err);
       }
     });
   }
@@ -74,7 +81,7 @@ class TelemetrySyncService {
       const raw = localStorage.getItem(TELEMETRY_STORAGE_KEY);
       return raw ? JSON.parse(raw) : [];
     } catch (err) {
-      console.error('[TelemetrySync] Failed to read cached telemetry points:', err);
+      console.error('[Sync] Failed to read cached telemetry points:', err);
       return [];
     }
   }
@@ -94,7 +101,7 @@ class TelemetrySyncService {
       localStorage.setItem(TELEMETRY_STORAGE_KEY, JSON.stringify(finalPoints));
       this.notify();
     } catch (err) {
-      console.error('[TelemetrySync] Failed to write telemetry points to cache:', err);
+      console.error('[Sync] Failed to write telemetry points to cache:', err);
     }
   }
 
@@ -106,7 +113,7 @@ class TelemetrySyncService {
       const raw = localStorage.getItem(SYNC_STATS_STORAGE_KEY);
       if (raw) return JSON.parse(raw);
     } catch (err) {
-      console.error('[TelemetrySync] Failed to read sync statistics:', err);
+      console.error('[Sync] Failed to read sync statistics:', err);
     }
 
     return {
@@ -126,7 +133,7 @@ class TelemetrySyncService {
       localStorage.setItem(SYNC_STATS_STORAGE_KEY, JSON.stringify(next));
       this.notify();
     } catch (err) {
-      console.error('[TelemetrySync] Failed to update sync statistics:', err);
+      console.error('[Sync] Failed to update sync statistics:', err);
     }
   }
 
@@ -144,9 +151,14 @@ class TelemetrySyncService {
    */
   queuePoint(point: {
     session_id: string;
+    driver_id?: string;
     latitude: number;
     longitude: number;
     speed_kmh: number;
+    accuracy?: number;
+    heading?: number | null;
+    altitude?: number | null;
+    distance_meters?: number;
     recorded_at?: string;
   }) {
     const timestamp = point.recorded_at || new Date().toISOString();
@@ -156,23 +168,56 @@ class TelemetrySyncService {
 
     // Check for duplicity inside local storage to avoid duplicates
     if (points.some(p => p.idLocal === idLocal)) {
-      console.log(`[TelemetrySync] Duplicate telemetry point ignored: ${idLocal}`);
+      console.log(`[Sync] Duplicate telemetry point ignored: ${idLocal}`);
       return;
     }
+
+    // Automatic Real-Time Classification based on manual event states and speed rules (Phase 6)
+    const storagePrefix = 'driverdash_';
+    const isRideActive = localStorage.getItem(`${storagePrefix}ride_active_${point.session_id}`) === 'true';
+    const isPersonalActive = localStorage.getItem(`${storagePrefix}personal_active_${point.session_id}`) === 'true';
+    const activeEventId = localStorage.getItem(`${storagePrefix}active_event_id_${point.session_id}`) || null;
+
+    let segment: 'empty' | 'productive' | 'personal' | 'dead' | 'stopped' | 'waiting' | 'offline' = 'empty';
+    if (isRideActive) {
+      segment = 'productive';
+    } else if (isPersonalActive) {
+      segment = 'personal';
+    } else if (point.speed_kmh === 0) {
+      // If consecutive 0-speed points exist in our recent queue, classify as stopped, otherwise waiting
+      const sessionPoints = points.filter(p => p.session_id === point.session_id);
+      const lastPoint = sessionPoints[sessionPoints.length - 1];
+      if (lastPoint && lastPoint.speed_kmh === 0) {
+        segment = 'stopped';
+      } else {
+        segment = 'waiting';
+      }
+    } else {
+      segment = 'empty';
+    }
+
+    console.log('[JourneyClassifier] point classified', { sessionId: point.session_id, segment_type: segment });
 
     const newPoint: LocalTelemetryPoint = {
       idLocal,
       session_id: point.session_id,
+      driver_id: point.driver_id,
       latitude: point.latitude,
       longitude: point.longitude,
       speed_kmh: point.speed_kmh,
+      accuracy: point.accuracy ?? 0,
+      heading: point.heading !== undefined ? point.heading : null,
+      altitude: point.altitude !== undefined ? point.altitude : null,
+      distance_meters: point.distance_meters ?? 0,
       recorded_at: timestamp,
       status: 'pending',
-      retry_count: 0
+      retry_count: 0,
+      segment_type: segment,
+      ride_event_id: activeEventId
     };
 
     points.push(newPoint);
-    console.log(`[TelemetrySync] pending count incremented. Total queue: ${points.length}`);
+    console.log(`[Sync] pending count incremented. Total queue: ${points.length}`);
     this.savePoints(points);
 
     // Automatically trigger background sync upon queuing a new point
@@ -206,7 +251,7 @@ class TelemetrySyncService {
    */
   async sync(): Promise<number> {
     if (this.isSyncingLock) {
-      console.log('[TelemetrySync] Sync execution is already locked/running. Skipping concurrency.');
+      console.log('[Sync] Sync execution is already locked/running. Skipping concurrency.');
       return 0;
     }
 
@@ -219,7 +264,7 @@ class TelemetrySyncService {
     }
 
     if (!navigator.onLine) {
-      console.log('[TelemetrySync] Browser is currently OFFLINE. Postponing synchronization.');
+      console.log('[Sync] Browser is currently OFFLINE. Postponing synchronization.');
       this.updateStats({ syncStatus: 'aguardando internet' });
       return 0;
     }
@@ -227,13 +272,13 @@ class TelemetrySyncService {
     this.isSyncingLock = true;
     this.updateStats({ syncStatus: 'sincronizando' });
 
-    console.log(`[TelemetrySync] pending count: ${pendingPoints.length}. Preparing batch...`);
+    console.log(`[Sync] pending count: ${pendingPoints.length}. Preparing batch...`);
 
     // Filter points that are cooling down due to backoff
     const syncablePoints = pendingPoints.filter(p => !this.isCoolingDown(p));
 
     if (syncablePoints.length === 0) {
-      console.log('[TelemetrySync] All failed points are cooling down. Retry scheduled on backoff.');
+      console.log('[Sync] All failed points are cooling down. Retry scheduled on backoff.');
       this.isSyncingLock = false;
       this.updateStats({ syncStatus: 'ocioso' });
       return 0;
@@ -259,15 +304,31 @@ class TelemetrySyncService {
     let syncedCount = 0;
     
     try {
+      // Fetch authenticated user id dynamically if not populated in the local point
+      const { data: { session } } = await supabase.auth.getSession();
+      const currentUserId = session?.user?.id;
+
       // Perform batch insert into Supabase
-      const payload = batch.map(pt => ({
-        session_id: pt.session_id,
-        latitude: pt.latitude,
-        longitude: pt.longitude,
-        speed: pt.speed_kmh,
-        accuracy: 0,
-        timestamp: pt.recorded_at
-      }));
+      const payload = batch.map(pt => {
+        const uId = pt.driver_id || currentUserId;
+        const item: any = {
+          session_id: pt.session_id,
+          latitude: pt.latitude,
+          longitude: pt.longitude,
+          speed: pt.speed_kmh,
+          accuracy: pt.accuracy ?? 0,
+          heading: pt.heading ?? 0,
+          altitude: pt.altitude ?? 0,
+          distance_meters: pt.distance_meters ?? 0,
+          timestamp: pt.recorded_at,
+          segment_type: pt.segment_type || 'empty',
+          ride_event_id: pt.ride_event_id || null
+        };
+        if (uId) {
+          item.driver_id = uId;
+        }
+        return item;
+      });
 
       const { error } = await supabase
         .from('route_points')
@@ -289,7 +350,7 @@ class TelemetrySyncService {
       syncedCount = batch.length;
       this.savePoints(finalPoints);
 
-      console.log(`[TelemetrySync] batch success. Uploaded ${batch.length} coordinates.`);
+      console.log(`[Sync] batch success. Uploaded ${batch.length} coordinates.`);
       this.updateStats({
         lastSyncTime: new Date().toISOString(),
         lastSyncError: null,
@@ -297,7 +358,7 @@ class TelemetrySyncService {
       });
 
     } catch (err: any) {
-      console.error('[TelemetrySync] batch error during uploading:', err);
+      console.error('[Sync] batch error during uploading:', err);
       const errorMessage = err?.message || 'Erro desconhecido na rede';
 
       // Rollback to failed status with retry increment
@@ -312,7 +373,7 @@ class TelemetrySyncService {
       });
       this.savePoints(finalPoints);
 
-      console.log(`[TelemetrySync] retry scheduled. Local error cached.`);
+      console.log(`[Sync] retry scheduled. Local error cached.`);
       this.updateStats({
         lastSyncError: errorMessage,
         syncStatus: 'erro'
@@ -338,12 +399,12 @@ class TelemetrySyncService {
    * If some points remain unsynced, let the user know.
    */
   async finalFlushBeforeEnd(): Promise<{ success: boolean; pendingCount: number }> {
-    console.log('[TelemetrySync] final flush before journey end initiated.');
+    console.log('[Sync] final flush before journey end initiated.');
     // Run sync immediately
     await this.sync();
     
     const remaining = this.getPoints().filter(p => p.status === 'pending' || p.status === 'failed');
-    console.log(`[TelemetrySync] cache cleaned validation. Remaining unsynced: ${remaining.length}`);
+    console.log(`[Sync] cache cleaned validation. Remaining unsynced: ${remaining.length}`);
     
     return {
       success: remaining.length === 0,
