@@ -267,7 +267,7 @@ ALTER TABLE IF EXISTS public.profiles ENABLE ROW LEVEL SECURITY;
             ) : (
               <div>
                 <span className="text-amber-400 flex items-center gap-1.5 font-mono text-[11px] mb-1">
-                  <ShieldAlert className="w-3.5 h-3.5" /> Sandbox Local Ativo
+                  <ShieldAlert className="w-3.5 h-3.5" /> Armazenamento Local
                 </span>
                 <button 
                   onClick={() => setShowSqlPopup(true)}

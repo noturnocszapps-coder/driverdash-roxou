@@ -84,12 +84,12 @@ export const ProtectedRoute: React.FC<ProtectedRouteProps> = ({ children, allowe
             <Lock className="w-8 h-8" />
           </div>
           
-          <h2 className="text-xl font-bold text-white tracking-wide">Beta Fechado</h2>
+          <h2 className="text-xl font-bold text-white tracking-wide">Acesso Restrito</h2>
           <p className="text-xs text-slate-300 mt-3 leading-relaxed">
-            O <span className="text-purple-400 font-semibold uppercase">DriverDash Roxou</span> está em fase de testes com motoristas selecionados.
+            O <span className="text-purple-400 font-semibold uppercase">DriverDash Roxou</span> está em período de adesão exclusiva para motoristas parceiros.
           </p>
           <p className="text-[11px] text-purple-300/60 mt-2 leading-relaxed">
-            Para obter liberação, sua conta precisa ter o acesso de testador (beta_tester) ativo ou possuir uma assinatura ativa no sistema.
+            Para obter liberação imediata, sua conta precisa ter o acesso homologado ativo ou possuir uma assinatura ativa no sistema.
           </p>
 
           <div className="mt-6 p-4 rounded-xl bg-purple-950/10 border border-purple-900/20 text-left font-mono text-[11px]">

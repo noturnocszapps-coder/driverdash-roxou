@@ -113,14 +113,14 @@ export const LoginPage: React.FC = () => {
         {!isProduction && (
           <div className="mt-8 border-t border-purple-950/30 pt-6" id="sandbox-demo-section">
             <div className="flex items-center justify-between mb-3 text-purple-400/70">
-              <span className="text-[10px] font-semibold font-mono tracking-wider uppercase">Sandbox de Desenvolvimento</span>
+              <span className="text-[10px] font-semibold font-mono tracking-wider uppercase">Acesso de Avaliação</span>
               <span className="inline-flex items-center gap-1 text-[9px] bg-purple-950/80 text-purple-400 px-1.5 py-0.5 rounded border border-purple-900/30">
-                <Sparkles className="w-2.5 h-2.5" /> Demo
+                <Sparkles className="w-2.5 h-2.5" /> Simulação
               </span>
             </div>
             
             <p className="text-[11px] text-purple-300/60 leading-relaxed mb-4">
-              Não quer configurar o Supabase agora? Libere a visão do motorista em modo de demonstração local offline:
+              Para fins de testes e homologação rápida da interface, acesse o painel em modo offline:
             </p>
 
             <button
@@ -128,7 +128,7 @@ export const LoginPage: React.FC = () => {
               className="w-full flex items-center justify-center gap-1.5 py-2.5 px-3 bg-[#0d0922] border border-purple-950 hover:bg-purple-950/20 rounded-xl text-xs font-semibold text-purple-300 transition-all cursor-pointer hover:border-purple-700/50"
               id="demo-driver-button"
             >
-              Motorista Demo
+              Entrar como Convidado (Simular Painel)
             </button>
           </div>
         )}

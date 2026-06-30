@@ -1,0 +1,38 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512" width="100%" height="100%">
+  <defs>
+    <!-- Background Gradient -->
+    <linearGradient id="bg-grad" x1="0%" y1="0%" x2="100%" y2="100%">
+      <stop offset="0%" stop-color="#1e1145" />
+      <stop offset="50%" stop-color="#0c0728" />
+      <stop offset="100%" stop-color="#050314" />
+    </linearGradient>
+    <!-- Neon Purple Gradient -->
+    <linearGradient id="neon-purple" x1="0%" y1="0%" x2="100%" y2="100%">
+      <stop offset="0%" stop-color="#a855f7" />
+      <stop offset="100%" stop-color="#6366f1" />
+    </linearGradient>
+    <!-- Glow Effect -->
+    <filter id="glow" x="-20%" y="-20%" width="140%" height="140%">
+      <feGaussianBlur stdDeviation="12" result="blur" />
+      <feMerge>
+        <feMergeNode in="blur" />
+        <feMergeNode in="SourceGraphic" />
+      </feMerge>
+    </filter>
+  </defs>
+
+  <!-- Smooth Rounded Squircle Background -->
+  <rect x="16" y="16" width="480" height="480" rx="120" fill="url(#bg-grad)" stroke="#4c1d95" stroke-width="4" />
+
+  <!-- Outer Neon Ring (Speedometer track) -->
+  <circle cx="256" cy="256" r="180" fill="none" stroke="#2e1065" stroke-width="24" stroke-dasharray="800" stroke-dashoffset="100" />
+  <circle cx="256" cy="256" r="180" fill="none" stroke="url(#neon-purple)" stroke-width="16" stroke-dasharray="1130" stroke-dashoffset="340" filter="url(#glow)" stroke-linecap="round" />
+
+  <!-- Lightning Bolt Dashboard Arrow -->
+  <path d="M220 120 L310 220 L240 240 L310 380 L190 260 L260 240 Z" fill="url(#neon-purple)" filter="url(#glow)" />
+  
+  <!-- Speed lines or Dash markings -->
+  <line x1="256" y1="44" x2="256" y2="60" stroke="#a855f7" stroke-width="8" stroke-linecap="round" />
+  <line x1="44" y1="256" x2="60" y2="256" stroke="#6366f1" stroke-width="8" stroke-linecap="round" />
+  <line x1="468" y1="256" x2="452" y2="256" stroke="#6366f1" stroke-width="8" stroke-linecap="round" />
+</svg>

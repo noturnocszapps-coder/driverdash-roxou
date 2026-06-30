@@ -1,0 +1,29 @@
+{
+  "name": "DriverDash Roxou",
+  "short_name": "DriverDash",
+  "description": "Gestão Inteligente para Motoristas de Aplicativo. Controle de jornadas, quilômetros, faturamento e análise operacional avançada.",
+  "categories": ["finance", "utilities", "productivity"],
+  "lang": "pt-BR",
+  "dir": "ltr",
+  "start_url": "/dashboard",
+  "scope": "/",
+  "display": "standalone",
+  "display_override": ["fullscreen", "minimal-ui"],
+  "orientation": "portrait-primary",
+  "theme_color": "#090624",
+  "background_color": "#050314",
+  "icons": [
+    {
+      "src": "/icon.svg",
+      "sizes": "16x16 32x32 48x48 64x64 128x128 192x192 256x256 512x512",
+      "type": "image/svg+xml",
+      "purpose": "any"
+    },
+    {
+      "src": "/icon.svg",
+      "sizes": "192x192 512x512",
+      "type": "image/svg+xml",
+      "purpose": "maskable"
+    }
+  ]
+}

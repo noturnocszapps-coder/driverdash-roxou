@@ -3,6 +3,7 @@ import { BrowserRouter, Routes, Route, Navigate } from 'react-router-dom';
 import { AppProvider } from './context/AppContext';
 import { ProtectedRoute } from './components/ProtectedRoute';
 import { AppLayout } from './components/AppLayout';
+import { PageTitleHandler } from './components/PageTitleHandler';
 
 // Pages
 import { LoginPage } from './pages/LoginPage';
@@ -27,6 +28,7 @@ export default function App() {
   return (
     <AppProvider>
       <BrowserRouter>
+        <PageTitleHandler />
         <Routes>
           {/* Guest routes */}
           <Route path="/login" element={<LoginPage />} />
