@@ -10,7 +10,8 @@ import { useApp } from '../context/AppContext';
 import { 
   Play, Square, MapPin, Navigation, Clock, ShieldAlert,
   AlertTriangle, Milestone, Activity, Compass, Flame, Info,
-  Bot, Sparkles, ThumbsUp, ThumbsDown, Gauge, TrendingUp, Terminal, Check, X
+  Bot, Sparkles, ThumbsUp, ThumbsDown, Gauge, TrendingUp, Terminal, Check, X,
+  ChevronRight, ChevronDown, Signal
 } from 'lucide-react';
 import { motion, AnimatePresence } from 'motion/react';
 import { telemetrySyncService } from '../modules/journey/telemetrySync.service';
@@ -23,6 +24,7 @@ import {
   AIDetectionState, 
   AIRideStats 
 } from '../modules/journey/smartRideDetection.service';
+import { calculateCostPerKmEstimate } from '../modules/vehicle/vehicle.calculations';
 
 // Haversine Formula helper
 export function calculateHaversineDistance(lat1: number, lon1: number, lat2: number, lon2: number): number {
@@ -50,12 +52,45 @@ export const JornadaPage: React.FC = () => {
     permissionState,
     lastCoord,
     gpsError,
-    totalDistanceKm
+    totalDistanceKm,
+    vehicle,
+    vehicleCostSettings,
+    earnings,
+    profile
   } = useApp();
 
   const [elapsedTime, setElapsedTime] = useState<string>('00:00:00');
   const [wakeLockActive, setWakeLockActive] = useState(false);
   const [wakeLockObj, setWakeLockObj] = useState<any | null>(null);
+
+  const [isInstructionsOpen, setIsInstructionsOpen] = useState(false);
+
+  // Hidden title click developer toggler
+  const [clickCount, setClickCount] = useState(0);
+  const [debugMode, setDebugMode] = useState(() => localStorage.getItem('driverdash_debug_mode') === 'true');
+
+  const handleTitleClick = () => {
+    setClickCount(prev => {
+      const next = prev + 1;
+      if (next >= 5) {
+        const nextMode = !debugMode;
+        setDebugMode(nextMode);
+        localStorage.setItem('driverdash_debug_mode', nextMode ? 'true' : 'false');
+        addSmartAlert?.({
+          title: nextMode ? 'Modo Diagnóstico Ativado 🛠️' : 'Modo Diagnóstico Desativado 🤫',
+          description: nextMode 
+            ? 'Você agora pode ver as telemetrias e logs em tempo real da IA.'
+            : 'Os logs e indicadores técnicos foram ocultados.',
+          type: 'profit',
+          severity: 'low'
+        });
+        return 0;
+      }
+      return next;
+    });
+  };
+
+  const isAdmin = profile?.role === 'admin' || debugMode;
 
   // Active session helper
   const activeSession = useMemo(() => {
@@ -302,18 +337,61 @@ export const JornadaPage: React.FC = () => {
     });
   };
 
-  // Status Label logic: Sem corrida ativa: "Rodando vazio", Corrida ativa: "Corrida em andamento", Parado: "Parado/Esperando"
+  // Status Label logic conforming to requested commercial states: Offline, Online aguardando corrida, Em deslocamento, Em corrida, Pausado
   const currentStatusLabel = useMemo(() => {
-    if (!activeSession) return '';
+    if (!activeSession) return 'Offline';
     if (isRideActive) {
-      return 'Corrida em andamento';
+      return 'Em corrida';
     }
     const isStopped = lastCoord ? lastCoord.speed === 0 : true;
     if (isStopped) {
-      return 'Parado/Esperando';
+      return 'Online aguardando corrida';
     }
-    return 'Rodando vazio';
+    return 'Em deslocamento';
   }, [activeSession, isRideActive, lastCoord]);
+
+  // GPS signal quality computation
+  const gpsAccuracy = lastCoord?.accuracy;
+  const gpsSignalQuality = useMemo(() => {
+    if (gpsStatus === 'GPS erro' || gpsStatus === 'GPS negado' || gpsError) {
+      return { label: 'Sem sinal', color: 'text-rose-500', bg: 'bg-rose-950/30 border border-rose-900/30' };
+    }
+    if (!gpsAccuracy) {
+      return { label: 'Sem sinal', color: 'text-slate-500', bg: 'bg-slate-900/30 border border-slate-800/40' };
+    }
+    if (gpsAccuracy <= 15) {
+      return { label: 'Excelente', color: 'text-emerald-400', bg: 'bg-emerald-950/30 border border-emerald-800/30' };
+    }
+    if (gpsAccuracy <= 30) {
+      return { label: 'Boa', color: 'text-green-400', bg: 'bg-green-950/30 border border-green-800/30' };
+    }
+    if (gpsAccuracy <= 60) {
+      return { label: 'Fraca', color: 'text-amber-400', bg: 'bg-amber-950/30 border border-amber-800/30' };
+    }
+    return { label: 'Sem sinal', color: 'text-rose-500', bg: 'bg-rose-950/30 border border-rose-900/30' };
+  }, [gpsAccuracy, gpsStatus, gpsError]);
+
+  // Active session indicators calculation (Tempo online, KM rodados, Corridas realizadas, Ganhos informados, Custo estimado, Lucro estimado)
+  const activeMetrics = useMemo(() => {
+    if (!activeSession) return null;
+    const activeSessionDateStr = new Date(activeSession.start_time).toISOString().substring(0, 10);
+    const dayEarnings = (earnings || []).filter(e => e.date === activeSessionDateStr);
+    const totalEarningsVal = dayEarnings.reduce((acc, curr) => acc + Number(curr.gross_amount || 0), 0);
+
+    const costPerKm = calculateCostPerKmEstimate(vehicle, vehicleCostSettings) || 0.45;
+    const totalCostVal = totalDistanceKm * costPerKm;
+    const netProfitVal = totalEarningsVal - totalCostVal;
+
+    return {
+      tempoOnline: elapsedTime,
+      kmRodados: `${totalDistanceKm.toFixed(1)} km`,
+      corridasRealizadas: `${aiStats.totalRideCount} ${aiStats.totalRideCount === 1 ? 'corrida' : 'corridas'}`,
+      ganhosVal: totalEarningsVal,
+      custoVal: totalCostVal,
+      lucroVal: netProfitVal,
+      hasEarnings: totalEarningsVal > 0
+    };
+  }, [activeSession, earnings, vehicle, vehicleCostSettings, totalDistanceKm, elapsedTime, aiStats]);
 
   // Track points specifically belonging to the active session (sorted by time)
   const currentSessionPoints = useMemo(() => {
@@ -542,9 +620,12 @@ export const JornadaPage: React.FC = () => {
     <div className="space-y-6">
       {/* Title Header */}
       <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4">
-        <div>
-          <h1 className="text-2xl font-bold tracking-tight text-white flex items-center gap-2">
-            <Navigation className="w-6 h-6 text-purple-400 rotate-45" /> Jornada Inteligente
+        <div className="text-left">
+          <h1 
+            onClick={handleTitleClick}
+            className="text-2xl font-bold tracking-tight text-white flex items-center gap-2 cursor-pointer select-none active:scale-95 transition-transform"
+          >
+            <Navigation className="w-6 h-6 text-purple-400 rotate-45" /> Assistente Inteligente
           </h1>
           <p className="text-xs text-slate-400">
             Rastreie o seu tempo ativo operacional, distância e tempo parado para otimizar seus custos em tempo real.
@@ -557,14 +638,52 @@ export const JornadaPage: React.FC = () => {
           >
             Ver Histórico
           </button>
-          <button
-            onClick={() => navigate('/debug')}
-            className="px-3.5 py-1.5 md:py-2 text-xs font-semibold bg-[#0d0926] border border-purple-950/45 text-purple-300 hover:text-white rounded-xl transition-all cursor-pointer flex items-center gap-1.5 select-none"
-          >
-            Diagnóstico GPS
-          </button>
+          {isAdmin && (
+            <button
+              onClick={() => navigate('/debug')}
+              className="px-3.5 py-1.5 md:py-2 text-xs font-semibold bg-[#0d0926] border border-purple-950/45 text-purple-300 hover:text-white rounded-xl transition-all cursor-pointer flex items-center gap-1.5 select-none"
+            >
+              Diagnóstico GPS
+            </button>
+          )}
         </div>
       </div>
+
+      {/* Top Indicators / Active Metrics Grid */}
+      {activeSession && activeMetrics && (
+        <div className="grid grid-cols-2 md:grid-cols-6 gap-3">
+          <div className="bg-[#0c0827] border border-purple-950/40 p-3.5 rounded-2xl text-left">
+            <span className="text-[9px] text-slate-500 font-bold block uppercase tracking-wider">Tempo online</span>
+            <span className="text-sm font-extrabold text-white font-mono block mt-1">{activeMetrics.tempoOnline}</span>
+          </div>
+          <div className="bg-[#0c0827] border border-purple-950/40 p-3.5 rounded-2xl text-left">
+            <span className="text-[9px] text-slate-500 font-bold block uppercase tracking-wider">KM rodados</span>
+            <span className="text-sm font-extrabold text-purple-400 font-mono block mt-1">{activeMetrics.kmRodados}</span>
+          </div>
+          <div className="bg-[#0c0827] border border-purple-950/40 p-3.5 rounded-2xl text-left">
+            <span className="text-[9px] text-slate-500 font-bold block uppercase tracking-wider">Corridas</span>
+            <span className="text-sm font-extrabold text-indigo-400 font-mono block mt-1">{activeMetrics.corridasRealizadas}</span>
+          </div>
+          <div className="bg-[#0c0827] border border-purple-950/40 p-3.5 rounded-2xl text-left">
+            <span className="text-[9px] text-slate-500 font-bold block uppercase tracking-wider">Ganhos informados</span>
+            <span className="text-sm font-extrabold text-emerald-400 font-mono block mt-1">
+              {activeMetrics.hasEarnings ? new Intl.NumberFormat('pt-BR', { style: 'currency', currency: 'BRL' }).format(activeMetrics.ganhosVal) : 'R$ 0,00'}
+            </span>
+          </div>
+          <div className="bg-[#0c0827] border border-purple-950/40 p-3.5 rounded-2xl text-left">
+            <span className="text-[9px] text-slate-500 font-bold block uppercase tracking-wider">Custo estimado</span>
+            <span className="text-sm font-extrabold text-rose-400 font-mono block mt-1">
+              {activeMetrics.custoVal > 0 ? new Intl.NumberFormat('pt-BR', { style: 'currency', currency: 'BRL' }).format(activeMetrics.custoVal) : 'R$ 0,00'}
+            </span>
+          </div>
+          <div className="bg-[#0c0827] border border-purple-950/40 p-3.5 rounded-2xl text-left">
+            <span className="text-[9px] text-slate-500 font-bold block uppercase tracking-wider">Lucro estimado</span>
+            <span className={`text-sm font-extrabold font-mono block mt-1 ${activeMetrics.hasEarnings ? (activeMetrics.lucroVal >= 0 ? 'text-emerald-400' : 'text-rose-400') : 'text-slate-500'}`}>
+              {activeMetrics.hasEarnings ? new Intl.NumberFormat('pt-BR', { style: 'currency', currency: 'BRL' }).format(activeMetrics.lucroVal) : '—'}
+            </span>
+          </div>
+        </div>
+      )}
 
       {/* Main Layout Grid */}
       <div className="grid grid-cols-1 lg:grid-cols-3 gap-6">
@@ -593,13 +712,13 @@ export const JornadaPage: React.FC = () => {
                   <div>
                     <h2 className="text-xl font-bold text-white mb-2">Pronto para rodar?</h2>
                     <p className="text-xs text-slate-400 leading-relaxed">
-                      Inicie sua jornada operacional para computar distâncias percorridas de forma passiva através de telemetria inteligente e automatizada por GPS real.
+                      Inicie sua jornada operacional para computar distâncias percorridas de forma passiva através de rastreamento inteligente e automatizado por GPS real.
                     </p>
                   </div>
 
                   <button
                     onClick={handleStartTracking}
-                    className="w-full py-4 rounded-2xl font-semibold bg-gradient-to-r from-purple-600 to-indigo-600 hover:from-purple-500 hover:to-indigo-500 text-white shadow-[0_4px_20px_rgba(147,51,234,0.3)] hover:shadow-[0_4px_30px_rgba(147,51,234,0.4)] transition-all cursor-pointer flex items-center justify-center gap-2"
+                    className="w-full py-4 rounded-2xl font-semibold bg-gradient-to-r from-purple-600 to-indigo-600 hover:from-purple-500 hover:to-indigo-500 text-white shadow-[0_4px_20px_rgba(147,51,234,0.3)] hover:shadow-[0_4px_30px_rgba(147,51,234,0.4)] transition-all cursor-pointer flex items-center justify-center gap-2 select-none"
                   >
                     <Play className="w-5 h-5 fill-current" /> Iniciar Jornada
                   </button>
@@ -611,7 +730,7 @@ export const JornadaPage: React.FC = () => {
                   initial={{ opacity: 0, scale: 0.95 }}
                   animate={{ opacity: 1, scale: 1 }}
                   exit={{ opacity: 0, scale: 0.95 }}
-                  className="space-y-8 w-full max-w-xl"
+                  className="space-y-6 w-full max-w-xl"
                 >
                   <div className="flex items-center justify-between border-b border-purple-950/40 pb-4">
                     <div className="flex items-center gap-3 text-left">
@@ -623,47 +742,40 @@ export const JornadaPage: React.FC = () => {
                         <h3 className="text-sm font-bold text-emerald-400 font-mono uppercase tracking-wider">Jornada Ativa</h3>
                         <p className="text-[11px] font-semibold text-purple-300 font-sans mt-0.5">
                           Status: <span className={
-                            currentStatusLabel === 'Corrida em andamento' 
+                            currentStatusLabel === 'Em corrida' 
                               ? 'text-emerald-400 font-bold animate-pulse'
-                              : currentStatusLabel === 'Parado/Esperando'
+                              : currentStatusLabel === 'Online aguardando corrida'
                                 ? 'text-amber-400 font-bold'
                                 : 'text-slate-300 font-bold'
                           }>{currentStatusLabel}</span>
                         </p>
-                        <p className="text-[10px] text-slate-500 font-mono mt-0.5">ID: {activeSession.id}</p>
                       </div>
                     </div>
-
-                    {wakeLockActive && (
-                      <span className="text-[10px] bg-purple-950/80 text-purple-300 font-mono font-medium px-2 py-1 rounded-md border border-purple-900/30 flex items-center gap-1.5">
-                        <Flame className="w-3.5 h-3.5 text-purple-400" /> Manter Tela Ligada
-                      </span>
-                    )}
                   </div>
 
                   {/* Active Timer and Metrics */}
                   <div className="grid grid-cols-1 md:grid-cols-2 gap-6 items-center">
-                    <div className="space-y-1">
+                    <div className="space-y-1 text-left">
                       <span className="text-[10px] tracking-widest font-mono uppercase text-slate-500">Tempo de Corrida</span>
-                      <div className="text-5xl font-mono font-semibold tracking-tight text-white bg-clip-text">
+                      <div className="text-5xl font-mono font-semibold tracking-tight text-white">
                         {elapsedTime}
                       </div>
                     </div>
                     
                     <div className="grid grid-cols-2 gap-4">
                       <div className="bg-[#08051a] p-4 rounded-2xl border border-purple-950/20 text-center">
-                        <span className="text-[10px] text-slate-500 block mb-1 font-mono uppercase">Distância</span>
-                        <span className="text-2xl font-bold font-mono text-purple-400">{totalKmToday} km</span>
+                        <span className="text-[10px] text-slate-500 block mb-1 font-mono uppercase select-none">Distância</span>
+                        <span className="text-2xl font-bold font-mono text-purple-400">{totalDistanceKm.toFixed(1)} km</span>
                       </div>
                       <div className="bg-[#08051a] p-4 rounded-2xl border border-purple-950/20 text-center">
-                        <span className="text-[10px] text-slate-500 block mb-1 font-mono uppercase">Minutos Parado</span>
+                        <span className="text-[10px] text-slate-500 block mb-1 font-mono uppercase select-none">Minutos Parado</span>
                         <span className="text-lg font-bold font-mono text-amber-500">{formattedStoppedTime}</span>
                       </div>
                     </div>
                   </div>
 
-                  {/* Geolocation Telemetry status pill */}
-                  <div className="p-4 rounded-2xl bg-[#09051d] border border-purple-950/30 flex items-center justify-between text-left">
+                  {/* Geolocation status and GPS Signal Quality */}
+                  <div className="p-4 rounded-2xl bg-[#09051d] border border-purple-950/30 flex flex-col sm:flex-row sm:items-center justify-between text-left gap-3">
                     <div className="flex items-center gap-3">
                       <div className={`p-2 rounded-xl ${gpsUi.isError ? 'bg-rose-950/40 text-rose-400' : 'bg-purple-950/60 text-purple-400'} flex items-center justify-center`}>
                         <Compass className={`w-5 h-5 ${gpsStatus === 'GPS ativo' ? 'animate-spin' : ''}`} style={{ animationDuration: '4s' }} />
@@ -674,9 +786,14 @@ export const JornadaPage: React.FC = () => {
                       </div>
                     </div>
 
-                    <span className="text-[10px] font-mono font-semibold text-slate-500 bg-purple-950/10 px-2.5 py-1 rounded">
-                      {currentSessionPoints.length} Posições
-                    </span>
+                    <div className="flex flex-wrap items-center gap-2">
+                      <span className={`text-[10px] font-mono font-semibold px-2.5 py-1 rounded-md flex items-center gap-1 ${gpsSignalQuality.bg} ${gpsSignalQuality.color}`}>
+                        <Signal className="w-3 h-3" /> Sinal: {gpsSignalQuality.label} {gpsAccuracy ? `(±${gpsAccuracy.toFixed(0)}m)` : ''}
+                      </span>
+                      <span className="text-[10px] font-mono font-semibold text-slate-400 bg-purple-950/10 px-2.5 py-1 rounded">
+                        {currentSessionPoints.length} Posições
+                      </span>
+                    </div>
                   </div>
 
                   {/* Pending AI Feedback Card */}
@@ -684,14 +801,14 @@ export const JornadaPage: React.FC = () => {
                     <motion.div 
                       initial={{ opacity: 0, y: -10 }}
                       animate={{ opacity: 1, y: 0 }}
-                      className="p-4 bg-gradient-to-r from-purple-950/85 to-indigo-950/85 border border-purple-500/40 rounded-2xl flex flex-col sm:flex-row items-center justify-between gap-3 text-left shadow-[0_4px_15px_rgba(147,51,234,0.15)] animate-pulse"
+                      className="p-4 bg-gradient-to-r from-purple-950/85 to-indigo-950/85 border border-purple-500/40 rounded-2xl flex flex-col sm:flex-row items-center justify-between gap-3 text-left shadow-[0_4px_15px_rgba(147,51,234,0.15)]"
                     >
                       <div className="flex items-center gap-2.5">
-                        <Bot className="w-5 h-5 text-purple-400" />
+                        <Bot className="w-5 h-5 text-purple-400 animate-pulse" />
                         <div>
-                          <h4 className="text-xs font-bold text-white">Corrida Iniciada Automaticamente</h4>
+                          <h4 className="text-xs font-bold text-white">Viagem Detectada</h4>
                           <p className="text-[10px] text-slate-300">
-                            A IA detectou uma corrida com {aiState?.confidenceScore || 96}% de precisão. Está correto?
+                            O Assistente de Corridas identificou o início de uma viagem operacional. Confirmar início?
                           </p>
                         </div>
                       </div>
@@ -714,170 +831,139 @@ export const JornadaPage: React.FC = () => {
 
                   {/* Manual Override Status Banner */}
                   {manualOverride && (
-                    <div className="p-3 bg-slate-900/40 border border-slate-800 rounded-2xl flex items-center justify-between text-left">
+                    <div className="p-3 bg-[#0c0827] border border-purple-950/20 rounded-2xl flex items-center justify-between text-left gap-2">
                       <div className="flex items-center gap-2">
-                        <Sparkles className="w-4 h-4 text-amber-400 animate-spin" style={{ animationDuration: '3s' }} />
+                        <Sparkles className="w-4 h-4 text-amber-400" />
                         <span className="text-[10px] font-semibold text-slate-300 font-sans">
-                          Override manual ativo. A IA respeitará suas ações.
+                          Modo manual ativo. O Assistente respeitará suas ações.
                         </span>
                       </div>
                       <button
                         onClick={handleResetOverride}
-                        className="px-2 py-1 bg-purple-950/30 hover:bg-purple-950/60 text-purple-300 text-[9px] font-bold rounded-lg border border-purple-900/30 cursor-pointer select-none transition-all"
+                        className="px-2.5 py-1 bg-purple-950/30 hover:bg-purple-950/60 text-purple-300 text-[9px] font-bold rounded-lg border border-purple-900/30 cursor-pointer select-none transition-all shrink-0"
                       >
                         Ativar Modo Automático
                       </button>
                     </div>
                   )}
 
-                  {/* Active Ride/Mileage Classification Buttons (Phase 6) */}
-                  <div className="grid grid-cols-2 gap-4 bg-[#08051a] p-4 rounded-2xl border border-purple-950/20">
+                  {/* Button Flow: Iniciar, Aceitar Corrida/Finalizar Corrida, Encerrar Jornada */}
+                  <div className="flex flex-col sm:flex-row gap-3 w-full pt-2">
+                    {!isRideActive ? (
+                      <button
+                        onClick={handleAcceptRide}
+                        className="flex-1 py-4 rounded-2xl font-semibold bg-gradient-to-r from-emerald-600 to-green-600 hover:from-emerald-500 hover:to-green-500 text-white shadow-[0_4px_15px_rgba(16,185,129,0.25)] hover:shadow-[0_4px_25px_rgba(16,185,129,0.35)] transition-all cursor-pointer flex items-center justify-center gap-2 select-none"
+                      >
+                        <Play className="w-4 h-4 fill-current" /> Aceitar Corrida
+                      </button>
+                    ) : (
+                      <button
+                        onClick={handleFinishRide}
+                        className="flex-1 py-4 rounded-2xl font-semibold bg-gradient-to-r from-amber-600 to-orange-600 hover:from-amber-500 hover:to-orange-500 text-white shadow-[0_4px_15px_rgba(245,158,11,0.25)] hover:shadow-[0_4px_25px_rgba(245,158,11,0.35)] transition-all cursor-pointer flex items-center justify-center gap-2 select-none"
+                      >
+                        <Square className="w-4 h-4 fill-current" /> Finalizar Corrida
+                      </button>
+                    )}
+
                     <button
-                      onClick={handleAcceptRide}
-                      disabled={isRideActive}
-                      className={`py-3 px-4 rounded-xl font-bold text-xs transition-all cursor-pointer flex items-center justify-center gap-1.5 ${
-                        isRideActive 
-                          ? 'bg-slate-900/50 border border-slate-800 text-slate-600 cursor-not-allowed opacity-50'
-                          : 'bg-emerald-600 hover:bg-emerald-500 text-white shadow-[0_2px_10px_rgba(16,185,129,0.25)]'
-                      }`}
+                      onClick={handleStopTracking}
+                      className="py-4 px-6 rounded-2xl font-semibold bg-rose-950/20 hover:bg-rose-900/30 text-rose-400 hover:text-rose-300 border border-rose-950/40 transition-all cursor-pointer flex items-center justify-center gap-2 select-none"
                     >
-                      Aceitei corrida
-                    </button>
-                    <button
-                      onClick={handleFinishRide}
-                      disabled={!isRideActive}
-                      className={`py-3 px-4 rounded-xl font-bold text-xs transition-all cursor-pointer flex items-center justify-center gap-1.5 ${
-                        !isRideActive 
-                          ? 'bg-slate-900/50 border border-slate-800 text-slate-600 cursor-not-allowed opacity-50'
-                          : 'bg-amber-600 hover:bg-amber-500 text-white shadow-[0_2px_10px_rgba(245,158,11,0.25)]'
-                      }`}
-                    >
-                      Finalizar corrida
+                      <X className="w-4 h-4" /> Encerrar Jornada
                     </button>
                   </div>
 
-                  {/* AI Prediction Confidence Badge and classification explanation inside active tracker */}
-                  {aiState && (
-                    <div className="p-4 rounded-2xl bg-[#09051d] border border-purple-950/30 text-left space-y-3">
-                      <div className="flex items-center justify-between">
-                        <span className="text-[10px] tracking-widest font-mono uppercase text-slate-500 flex items-center gap-1.5">
-                          <Bot className="w-3.5 h-3.5 text-purple-400" /> Smart Ride Detection
-                        </span>
-                        
-                        <span className={`text-[9px] font-bold font-mono px-2.5 py-0.5 rounded-full ${
-                          aiState.confidenceScore >= 95 
-                            ? 'bg-emerald-950/40 text-emerald-400 border border-emerald-800/40 shadow-[0_0_8px_rgba(16,185,129,0.15)]'
-                            : aiState.confidenceScore >= 70
-                              ? 'bg-amber-950/40 text-amber-400 border border-amber-800/40 shadow-[0_0_8px_rgba(245,158,11,0.15)]'
-                              : aiState.confidenceScore >= 50
-                                ? 'bg-blue-950/40 text-blue-400 border border-blue-800/40'
-                                : 'bg-slate-950/40 text-slate-400 border border-slate-800/40'
-                        }`}>
-                          {aiState.confidenceScore}% - {
-                            aiState.confidenceScore >= 95 
-                              ? 'Detectado automaticamente' 
-                              : aiState.confidenceScore >= 70
-                                ? 'Provável corrida'
-                                : aiState.confidenceScore >= 50
-                                  ? 'Sugestão'
-                                  : 'Não classificar'
-                          }
-                        </span>
-                      </div>
-                      <div className="p-3 bg-[#060315] rounded-xl border border-purple-950/15">
-                        <p className="text-[11px] text-purple-300 font-sans font-medium">Motivo:</p>
-                        <p className="text-xs text-slate-300 mt-0.5 leading-relaxed">{aiState.reason}</p>
+                  {/* AI Ride Accuracy Dashboard */}
+                  {aiStats.totalRideCount === 0 ? (
+                    <div className="p-5 bg-[#09051d]/60 border border-purple-950/25 rounded-2xl text-left space-y-2">
+                      <h4 className="text-xs font-bold uppercase font-mono tracking-wider text-purple-400 flex items-center gap-2 select-none">
+                        <Bot className="w-4 h-4 text-purple-400" /> Assistente de Corridas
+                      </h4>
+                      <p className="text-xs text-slate-300 leading-relaxed">
+                        Ainda estamos aprendendo seus padrões de direção. As estatísticas aparecerão após algumas jornadas reais.
+                      </p>
+                    </div>
+                  ) : (
+                    <div className="p-5 bg-[#09051d]/60 border border-purple-950/25 rounded-2xl space-y-4 text-left">
+                      <h4 className="text-xs font-bold uppercase font-mono tracking-wider text-purple-400 flex items-center gap-2 select-none">
+                        <Gauge className="w-4 h-4 text-purple-400" /> Precisão e Performance da IA
+                      </h4>
+                      
+                      <div className="grid grid-cols-2 md:grid-cols-4 gap-3">
+                        <div className="bg-[#050310] p-3 rounded-xl border border-purple-950/10 text-center">
+                          <span className="text-[9px] text-slate-500 block font-mono uppercase select-none">Confiança IA</span>
+                          <span className="text-base font-bold font-mono text-emerald-400">{aiStats.accuracyRate}%</span>
+                        </div>
+                        <div className="bg-[#050310] p-3 rounded-xl border border-purple-950/10 text-center">
+                          <span className="text-[9px] text-slate-500 block font-mono uppercase select-none">Automáticas</span>
+                          <span className="text-base font-bold font-mono text-purple-400">{aiStats.autoDetectedCount}</span>
+                        </div>
+                        <div className="bg-[#050310] p-3 rounded-xl border border-purple-950/10 text-center">
+                          <span className="text-[9px] text-slate-500 block font-mono uppercase select-none font-semibold">Confirmadas</span>
+                          <span className="text-base font-bold font-mono text-indigo-400">{aiStats.manuallyConfirmedCount}</span>
+                        </div>
+                        <div className="bg-[#050310] p-3 rounded-xl border border-purple-950/10 text-center">
+                          <span className="text-[9px] text-slate-500 block font-mono uppercase select-none">Taxa Acerto</span>
+                          <span className="text-base font-bold font-mono text-amber-500">
+                            {aiStats.totalRideCount > 0 ? ((aiStats.autoDetectedCount / aiStats.totalRideCount) * 100).toFixed(0) : '100'}%
+                          </span>
+                        </div>
                       </div>
                     </div>
                   )}
 
-                  {/* AI Ride Accuracy Dashboard */}
-                  <div className="p-5 bg-gradient-to-br from-[#0b0821] to-[#0d092b] border border-purple-950/25 rounded-2xl space-y-4 text-left">
-                    <h4 className="text-xs font-bold uppercase font-mono tracking-wider text-purple-400 flex items-center gap-2">
-                      <Gauge className="w-4 h-4 text-purple-400" /> Precisão e Performance da IA
-                    </h4>
-                    
-                    <div className="grid grid-cols-2 md:grid-cols-4 gap-4">
-                      <div className="bg-[#050310] p-3 rounded-xl border border-purple-950/10 text-center">
-                        <span className="text-[9px] text-slate-500 block font-mono uppercase">Precisão IA</span>
-                        <span className="text-base font-bold font-mono text-emerald-400">{aiStats.accuracyRate}%</span>
-                      </div>
-                      <div className="bg-[#050310] p-3 rounded-xl border border-purple-950/10 text-center">
-                        <span className="text-[9px] text-slate-500 block font-mono uppercase">Automáticas</span>
-                        <span className="text-base font-bold font-mono text-purple-400">{aiStats.autoDetectedCount}</span>
-                      </div>
-                      <div className="bg-[#050310] p-3 rounded-xl border border-purple-950/10 text-center">
-                        <span className="text-[9px] text-slate-500 block font-mono uppercase">Confirmadas</span>
-                        <span className="text-base font-bold font-mono text-indigo-400">{aiStats.manuallyConfirmedCount}</span>
-                      </div>
-                      <div className="bg-[#050310] p-3 rounded-xl border border-purple-950/10 text-center">
-                        <span className="text-[9px] text-slate-500 block font-mono uppercase font-semibold">Taxa de Acerto</span>
-                        <span className="text-base font-bold font-mono text-amber-500">
-                          {aiStats.totalRideCount > 0 ? ((aiStats.autoDetectedCount / aiStats.totalRideCount) * 100).toFixed(0) : '100'}%
+                  {/* AI Real-Time Debug & Logs Panel (Only for admins/debuggers) */}
+                  {isAdmin && (
+                    <div className="p-5 bg-[#050310] border border-purple-950/20 rounded-2xl space-y-3 text-left font-mono text-[11px]">
+                      <div className="flex items-center justify-between border-b border-purple-950/35 pb-2">
+                        <span className="text-purple-400 flex items-center gap-1.5 font-bold uppercase tracking-wider text-[10px]">
+                          <Terminal className="w-4 h-4 animate-pulse" /> [Debug] Diagnóstico Interno
                         </span>
+                        <span className="text-[9px] text-slate-500">Filtro: [RideAI]</span>
                       </div>
-                    </div>
-                  </div>
 
-                  {/* AI Real-Time Debug & Logs Panel */}
-                  <div className="p-5 bg-[#050310] border border-purple-950/20 rounded-2xl space-y-3 text-left font-mono text-[11px]">
-                    <div className="flex items-center justify-between border-b border-purple-950/35 pb-2">
-                      <span className="text-purple-400 flex items-center gap-1.5 font-bold uppercase tracking-wider text-[10px]">
-                        <Terminal className="w-4 h-4 animate-pulse" /> [Debug] Smart Ride Logs
-                      </span>
-                      <span className="text-[9px] text-slate-500">Filtro: [RideAI]</span>
-                    </div>
-
-                    {/* Features checklist */}
-                    {aiState && (
-                      <div className="grid grid-cols-2 gap-2 text-[10px] text-slate-400 pb-2 border-b border-purple-950/20">
-                        <div>
-                          <p className="text-slate-500 font-bold">Eventos Detectados:</p>
-                          <ul className="list-disc pl-3 mt-1 space-y-0.5">
-                            {aiState.detectedEvents.length === 0 ? (
-                              <li>Aguardando evento...</li>
-                            ) : (
-                              aiState.detectedEvents.map((ev, i) => (
-                                <li key={i} className="text-emerald-400">{ev}</li>
-                              ))
-                            )}
-                          </ul>
-                        </div>
-                        <div>
-                          <p className="text-slate-500 font-bold font-mono">Eventos Manuais:</p>
-                          <ul className="list-disc pl-3 mt-1 space-y-0.5">
-                            {aiState.manualEvents.length === 0 ? (
-                              <li>Nenhuma ação</li>
-                            ) : (
-                              aiState.manualEvents.map((ev, i) => (
-                                <li key={i} className="text-purple-400">{ev}</li>
-                              ))
-                            )}
-                          </ul>
-                        </div>
-                      </div>
-                    )}
-
-                    {/* Console log outputs */}
-                    <div className="max-h-[120px] overflow-y-auto space-y-1 pr-1 custom-scrollbar text-[10px]">
-                      {aiLogs.length === 0 ? (
-                        <p className="text-slate-600">Aguardando telemetria inicial do GPS...</p>
-                      ) : (
-                        aiLogs.slice().reverse().map((log, i) => (
-                          <div key={i} className="leading-relaxed border-l-2 border-purple-900 pl-1.5 py-0.5 text-slate-300 text-left">
-                            {log}
+                      {aiState && (
+                        <div className="grid grid-cols-2 gap-2 text-[10px] text-slate-400 pb-2 border-b border-purple-950/20">
+                          <div>
+                            <p className="text-slate-500 font-bold">Eventos Detectados:</p>
+                            <ul className="list-disc pl-3 mt-1 space-y-0.5">
+                              {aiState.detectedEvents.length === 0 ? (
+                                <li>Aguardando evento...</li>
+                              ) : (
+                                aiState.detectedEvents.map((ev, i) => (
+                                  <li key={i} className="text-emerald-400">{ev}</li>
+                                ))
+                              )}
+                            </ul>
                           </div>
-                        ))
+                          <div>
+                            <p className="text-slate-500 font-bold font-mono">Eventos Manuais:</p>
+                            <ul className="list-disc pl-3 mt-1 space-y-0.5">
+                              {aiState.manualEvents.length === 0 ? (
+                                <li>Nenhuma ação</li>
+                              ) : (
+                                aiState.manualEvents.map((ev, i) => (
+                                  <li key={i} className="text-purple-400">{ev}</li>
+                                ))
+                              )}
+                            </ul>
+                          </div>
+                        </div>
                       )}
-                    </div>
-                  </div>
 
-                  <button
-                    onClick={handleStopTracking}
-                    className="w-full py-4 rounded-2xl font-semibold bg-gradient-to-r from-rose-600 to-rose-700 hover:from-rose-500 hover:to-rose-600 text-white shadow-[0_4px_2px_rgba(225,29,72,0.1)] transition-all cursor-pointer flex items-center justify-center gap-2"
-                  >
-                    <Square className="w-4 h-4 fill-current" /> Finalizar Jornada Monetizada
-                  </button>
+                      <div className="max-h-[120px] overflow-y-auto space-y-1 pr-1 custom-scrollbar text-[10px]">
+                        {aiLogs.length === 0 ? (
+                          <p className="text-slate-600">Aguardando telemetria inicial do GPS...</p>
+                        ) : (
+                          aiLogs.slice().reverse().map((log, i) => (
+                            <div key={i} className="leading-relaxed border-l-2 border-purple-900 pl-1.5 py-0.5 text-slate-300 text-left">
+                              {log}
+                            </div>
+                          ))
+                        )}
+                      </div>
+                    </div>
+                  )}
                 </motion.div>
               )}
             </AnimatePresence>
@@ -889,7 +975,7 @@ export const JornadaPage: React.FC = () => {
           
           {/* Active Status Alerts warnings */}
           {gpsUi.isError && (
-            <div className="p-5 rounded-2xl bg-rose-950/20 border border-rose-900/30 text-rose-200 flex items-start gap-3">
+            <div className="p-5 rounded-2xl bg-rose-950/20 border border-rose-900/30 text-rose-200 flex items-start gap-3 text-left">
               <ShieldAlert className="w-5 h-5 text-rose-400 shrink-0 mt-0.5" />
               <div>
                 <h4 className="text-xs font-bold text-white">Anomalia de Telemetria</h4>
@@ -900,61 +986,127 @@ export const JornadaPage: React.FC = () => {
             </div>
           )}
 
-          {/* Guidelines info card */}
-          <div className="p-5 rounded-2xl bg-[#09061d] border border-purple-950/25 space-y-4">
-            <h3 className="text-xs font-bold uppercase font-mono tracking-wider text-purple-400 flex items-center gap-2">
-              <Info className="w-4 h-4" /> Instruções de Uso
-            </h3>
+          {/* Manter Tela Ligada Switch Card */}
+          <div className="flex items-center justify-between p-4 rounded-2xl bg-[#09051d] border border-purple-950/25 text-left w-full">
+            <div className="space-y-0.5">
+              <span className="text-xs font-semibold text-white flex items-center gap-1.5 select-none">
+                <Flame className={`w-4 h-4 ${wakeLockActive ? 'text-purple-400 animate-pulse' : 'text-slate-400'}`} />
+                Manter Tela Ligada
+              </span>
+              <p className="text-[10px] text-slate-400 leading-normal">
+                Evita que a tela apague durante a jornada.
+              </p>
+            </div>
+            <button
+              onClick={async () => {
+                if (wakeLockActive) {
+                  await releaseWakeLock();
+                } else {
+                  await requestWakeLock();
+                }
+              }}
+              className={`w-11 h-6 rounded-full p-1 transition-colors duration-200 focus:outline-none cursor-pointer ${
+                wakeLockActive ? 'bg-purple-600' : 'bg-slate-800'
+              }`}
+            >
+              <div
+                className={`bg-white w-4 h-4 rounded-full shadow-md transform duration-200 ease-in-out ${
+                  wakeLockActive ? 'translate-x-5' : 'translate-x-0'
+                }`}
+              />
+            </button>
+          </div>
+
+          {/* Collapsible Guidelines info card */}
+          <div className="p-4 rounded-2xl bg-[#09061d] border border-purple-950/25">
+            <button 
+              onClick={() => setIsInstructionsOpen(!isInstructionsOpen)}
+              className="w-full flex items-center justify-between text-left text-xs font-bold uppercase font-mono tracking-wider text-purple-400 focus:outline-none"
+            >
+              <span className="flex items-center gap-2">
+                <Info className="w-4 h-4" /> Como funciona o rastreamento?
+              </span>
+              <motion.span
+                animate={{ rotate: isInstructionsOpen ? 180 : 0 }}
+                transition={{ duration: 0.2 }}
+                className="text-purple-400 flex items-center"
+              >
+                <ChevronDown className="w-4 h-4" />
+              </motion.span>
+            </button>
             
-            <ul className="space-y-3 text-xs text-slate-400 leading-relaxed list-none pl-0">
-              <li className="flex items-start gap-2">
-                <span className="text-purple-500 shrink-0 font-bold">•</span>
-                <span>O sistema economiza bateria capturando de forma real por telemetria baseada em variação de deslocamento no navegador de maneira inteligente.</span>
-              </li>
-              <li className="flex items-start gap-2">
-                <span className="text-purple-500 shrink-0 font-bold">•</span>
-                <span><strong>Segurança de Tela:</strong> A opção "Manter Tela Ligada" evita o congelamento das execuções em aparelhos Android e iOS.</span>
-              </li>
-              <li className="flex items-start gap-2">
-                <span className="text-purple-500 shrink-0 font-bold">•</span>
-                <span>O cálculo de velocidade é dinâmico. Se a velocidade estiver abaixo de 5 km/h por mais de 3 minutos, calcula-se automaticamente o tempo parado de forma retroativa.</span>
-              </li>
-            </ul>
+            <AnimatePresence>
+              {isInstructionsOpen && (
+                <motion.div
+                  initial={{ height: 0, opacity: 0, marginTop: 0 }}
+                  animate={{ height: 'auto', opacity: 1, marginTop: 12 }}
+                  exit={{ height: 0, opacity: 0, marginTop: 0 }}
+                  className="overflow-hidden space-y-3 text-xs text-slate-400 leading-relaxed text-left"
+                >
+                  <p className="flex items-start gap-2">
+                    <span className="text-purple-500 shrink-0 font-bold">•</span>
+                    <span>O sistema economiza bateria capturando de forma real por rastreamento baseado em variação de deslocamento no navegador de maneira inteligente.</span>
+                  </p>
+                  <p className="flex items-start gap-2">
+                    <span className="text-purple-500 shrink-0 font-bold">•</span>
+                    <span><strong>Segurança de Tela:</strong> A opção "Manter Tela Ligada" evita o congelamento das execuções em aparelhos Android e iOS.</span>
+                  </p>
+                  <p className="flex items-start gap-2">
+                    <span className="text-purple-500 shrink-0 font-bold">•</span>
+                    <span>O cálculo de velocidade é dinâmico. Se a velocidade estiver abaixo de 5 km/h por mais de 3 minutos, calcula-se automaticamente o tempo parado de forma retroativa.</span>
+                  </p>
+                </motion.div>
+              )}
+            </AnimatePresence>
           </div>
 
           {/* Session logs summary */}
-          <div className="p-5 rounded-2xl bg-[#0d0926]/40 border border-purple-950/25 space-y-4">
-            <h3 className="text-xs font-bold uppercase font-mono tracking-wider text-slate-400 flex items-center justify-between">
-              Como foi hoje <span>Últimos logs</span>
+          <div className="p-5 rounded-2xl bg-[#0d0926]/40 border border-purple-950/25 space-y-4 text-left">
+            <h3 className="text-xs font-bold uppercase font-mono tracking-wider text-slate-400 flex items-center justify-between select-none">
+              Como foi hoje <span className="text-[10px] text-purple-400 font-normal lowercase font-sans">Histórico recente</span>
             </h3>
 
             {driverSessions.length === 0 ? (
-              <div className="text-center py-4 text-xs text-slate-500">
-                Nenhuma corrida ou jornada registrada ainda.
+              <div className="text-center py-4 text-xs text-slate-500 select-none">
+                Nenhuma jornada registrada ainda.
               </div>
             ) : (
               <div className="space-y-3 font-mono">
-                {driverSessions.slice(0, 4).map((sess, idx) => (
-                  <div key={sess.id || idx} className="p-3 bg-[#0d0926] rounded-xl border border-purple-950/10 flex items-center justify-between">
-                    <div>
-                      <p className="text-[11px] text-white font-sans font-bold">
-                        {sess.status === 'active' ? '🟢 Rodando...' : '🏁 Concluída'}
-                      </p>
-                      <span className="text-[9px] text-slate-500">
-                        {new Date(sess.start_time).toLocaleDateString('pt-BR')} às {new Date(sess.start_time).toLocaleTimeString('pt-BR', { hour: '2-digit', minute: '2-digit' })}
-                      </span>
-                    </div>
+                {driverSessions.slice(0, 4).map((sess, idx) => {
+                  const isSessionCancelled = sess.status === 'completed' && (sess.total_distance_km || 0) === 0 && (sess.total_duration_minutes || 0) < 3;
+                  
+                  return (
+                    <div key={sess.id || idx} className="p-3 bg-[#0d0926] rounded-xl border border-purple-950/10 flex items-center justify-between gap-3 text-left">
+                      <div>
+                        <p className={`text-[11px] font-sans font-bold ${
+                          sess.status === 'active' 
+                            ? 'text-emerald-400 animate-pulse' 
+                            : isSessionCancelled 
+                              ? 'text-rose-400' 
+                              : 'text-purple-300'
+                        }`}>
+                          {sess.status === 'active' 
+                            ? '🟢 Em andamento' 
+                            : isSessionCancelled 
+                              ? '❌ Cancelada' 
+                              : '🏁 Concluída'}
+                        </p>
+                        <span className="text-[9px] text-slate-500 block mt-0.5 select-none">
+                          {new Date(sess.start_time).toLocaleDateString('pt-BR')} às {new Date(sess.start_time).toLocaleTimeString('pt-BR', { hour: '2-digit', minute: '2-digit' })}
+                        </span>
+                      </div>
 
-                    <div className="text-right">
-                      <p className="text-xs font-bold text-purple-400">
-                        {sess.total_distance_km ? sess.total_distance_km.toFixed(1) : '0.0'} KM
-                      </p>
-                      <p className="text-[9px] text-slate-500">
-                        {sess.total_duration_minutes || 0} min total
-                      </p>
+                      <div className="text-right">
+                        <p className={`text-xs font-bold ${isSessionCancelled ? 'text-slate-500 line-through' : 'text-purple-400'}`}>
+                          {sess.total_distance_km ? sess.total_distance_km.toFixed(1) : '0.0'} KM
+                        </p>
+                        <p className="text-[9px] text-slate-500 select-none">
+                          {sess.total_duration_minutes || 0} min total
+                        </p>
+                      </div>
                     </div>
-                  </div>
-                ))}
+                  );
+                })}
               </div>
             )}
           </div>

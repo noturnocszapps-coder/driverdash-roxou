@@ -5,6 +5,7 @@
  */
 
 import { supabase } from '../shared/supabase.helpers';
+import { calculateCostPerKmEstimate } from '../vehicle/vehicle.calculations';
 
 /**
  * Retrieves the current active ride or personal event segment.
@@ -258,19 +259,19 @@ export async function calculateSegmentMetrics(sessionId: string) {
 
     if (pError) throw pError;
 
-    const { data: costSettings, error: cError } = await supabase
+    const { data: vehicle } = await supabase
+      .from('vehicles')
+      .select('*')
+      .eq('user_id', userId)
+      .maybeSingle();
+
+    const { data: costSettings } = await supabase
       .from('vehicle_cost_settings')
       .select('*')
       .eq('user_id', userId)
       .maybeSingle();
 
-    let costPerKm = 0.45;
-    if (costSettings) {
-      const fuelCostKm = (costSettings.fuel_price || 5.89) / 10;
-      const tireCostKm = costSettings.tire_cost > 0 && costSettings.tire_lifespan_km > 0 ? (costSettings.tire_cost / costSettings.tire_lifespan_km) : 0.05;
-      const oilCostKm = costSettings.oil_change_cost > 0 && costSettings.oil_change_interval_km > 0 ? (costSettings.oil_change_cost / costSettings.oil_change_interval_km) : 0.03;
-      costPerKm = fuelCostKm + tireCostKm + oilCostKm;
-    }
+    const costPerKm = calculateCostPerKmEstimate(vehicle, costSettings) || 0.45;
 
     const { data: earnings, error: eError } = await supabase
       .from('earnings')

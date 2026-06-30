@@ -27,6 +27,188 @@ export const calculateElectricityPriceKwh = (vehicle: Vehicle | null): number =>
   }
 };
 
+export interface VehicleCostBreakdown {
+  ownershipType: 'own' | 'financed' | 'rented';
+  isElectric: boolean;
+  fuelPerKm: number;
+  tirePerKm: number;
+  oilPerKm: number;
+  brakePerKm: number;
+  insurancePerKm: number;
+  ipvaPerKm: number;
+  licensingPerKm: number;
+  depreciationPerKm: number;
+  maintenanceReservePerKm: number;
+  financingPerKm: number;
+  rentalPerKm: number;
+  
+  // rented specific or general operational
+  washPerKm: number;
+  cleaningPerKm: number;
+  damagePerKm: number;
+  tollPerKm: number;
+  foodPerKm: number;
+  otherOperationalPerKm: number;
+  
+  totalCostPerKm: number;
+}
+
+/**
+ * Centrally calculates the exact costs based strictly on the vehicle's ownership_type.
+ * This is the SINGLE SOURCE OF TRUTH for the entire application.
+ */
+export const calculateCostBreakdown = (
+  vehicle: Vehicle | null,
+  costSettings: VehicleCostSettings | null,
+  estimatedMonthlyKmInput?: number
+): VehicleCostBreakdown => {
+  const ownershipType = vehicle?.ownership_type || 'own';
+  const isElectric = isElectricVehicle(vehicle);
+  
+  const estimatedMonthlyKm = estimatedMonthlyKmInput || vehicle?.monthly_km_limit || 2500;
+  // If estimatedMonthlyKm is 0 or negative, default to 2500 to avoid division by zero
+  const monthlyKm = estimatedMonthlyKm > 0 ? estimatedMonthlyKm : 2500;
+  const weeklyKm = monthlyKm / 4.33;
+  const dailyKm = monthlyKm / 26; // assume 26 active driving days per month
+
+  let fuelPerKm = 0;
+  if (isElectric) {
+    const consumptionKwh100 = vehicle?.electric_consumption_kwh_100km || 0;
+    const priceKwh = calculateElectricityPriceKwh(vehicle);
+    fuelPerKm = (consumptionKwh100 * priceKwh) / 100;
+  } else {
+    const kmPerLiter = vehicle?.km_per_liter || 10;
+    const fuelPrice = costSettings?.fuel_price || 0;
+    fuelPerKm = kmPerLiter > 0 ? fuelPrice / kmPerLiter : 0;
+  }
+
+  // Initialize all to 0
+  let tirePerKm = 0;
+  let oilPerKm = 0;
+  let brakePerKm = 0;
+  let insurancePerKm = 0;
+  let ipvaPerKm = 0;
+  let licensingPerKm = 0;
+  let depreciationPerKm = 0;
+  let maintenanceReservePerKm = 0;
+  let financingPerKm = 0;
+  let rentalPerKm = 0;
+  
+  let washPerKm = 0;
+  let cleaningPerKm = 0;
+  let damagePerKm = 0;
+  let tollPerKm = 0;
+  let foodPerKm = 0;
+  let otherOperationalPerKm = 0;
+
+  if (ownershipType === 'own' || ownershipType === 'financed') {
+    // 1. Own & Financed Calculations
+    if (costSettings) {
+      tirePerKm = costSettings.tire_lifespan_km > 0 ? (costSettings.tire_cost / costSettings.tire_lifespan_km) : 0;
+      
+      if (!isElectric) {
+        oilPerKm = costSettings.oil_change_interval_km > 0 ? (costSettings.oil_change_cost / costSettings.oil_change_interval_km) : 0;
+      }
+      
+      brakePerKm = costSettings.brake_interval_km > 0 ? (costSettings.brake_cost / costSettings.brake_interval_km) : 0;
+      
+      insurancePerKm = monthlyKm > 0 ? ((costSettings.insurance_yearly || 0) / 12) / monthlyKm : 0;
+      ipvaPerKm = monthlyKm > 0 ? ((costSettings.ipva_yearly || 0) / 12) / monthlyKm : 0;
+      licensingPerKm = monthlyKm > 0 ? ((costSettings.licensing_yearly || 0) / 12) / monthlyKm : 0;
+      
+      const reserve = costSettings.emergency_reserve_monthly || 0;
+      const maintenance = costSettings.maintenance_monthly || 0;
+      maintenanceReservePerKm = monthlyKm > 0 ? (reserve + maintenance) / monthlyKm : 0;
+
+      depreciationPerKm = 0.16; // constant R$ 0.16 depreciation per km driven
+    } else {
+      // safe defaults if costSettings is missing
+      tirePerKm = 0.03;
+      if (!isElectric) oilPerKm = 0.03;
+      brakePerKm = 0.02;
+      insurancePerKm = 0.10;
+      ipvaPerKm = 0.06;
+      licensingPerKm = 0.01;
+      maintenanceReservePerKm = 0.08;
+      depreciationPerKm = 0.16;
+    }
+
+    if (ownershipType === 'financed') {
+      const financingMonthly = costSettings?.financing_monthly || 0;
+      financingPerKm = monthlyKm > 0 ? financingMonthly / monthlyKm : 0;
+    }
+  } else if (ownershipType === 'rented') {
+    // 2. Rented Calculations
+    // Tires, oil, brakes, insurance, ipva, licensing, depreciation, and reserve are STRICTLY 0.
+    
+    // Valor do aluguel & periodicidade
+    const rentalAmount = vehicle?.rental_amount || 0;
+    const rentalPeriod = vehicle?.rental_period || 'weekly';
+    const rentalMonthly = rentalPeriod === 'weekly' ? rentalAmount * 4.33 : rentalAmount;
+    rentalPerKm = monthlyKm > 0 ? rentalMonthly / monthlyKm : 0;
+
+    // Rented specific variable costs per km
+    // Franquia/Avarias (rental_damage_monthly)
+    const damageMonthly = vehicle?.rental_damage_monthly || 0;
+    damagePerKm = monthlyKm > 0 ? damageMonthly / monthlyKm : 0;
+
+    // Limpeza (rental_cleaning_monthly)
+    const cleaningMonthly = vehicle?.rental_cleaning_monthly || 0;
+    cleaningPerKm = monthlyKm > 0 ? cleaningMonthly / monthlyKm : 0;
+
+    // Alimentação (rental_food_daily) - 26 working days
+    const foodDaily = vehicle?.rental_food_daily || 0;
+    foodPerKm = dailyKm > 0 ? foodDaily / dailyKm : 0;
+
+    // Toll, wash, and other operational
+    washPerKm = 0.015; // standard proportional wash
+    tollPerKm = 0.01;  // standard toll apportioned
+    otherOperationalPerKm = 0.005; // other oper
+  }
+
+  const totalCostPerKm = 
+    fuelPerKm + 
+    tirePerKm + 
+    oilPerKm + 
+    brakePerKm + 
+    insurancePerKm + 
+    ipvaPerKm + 
+    licensingPerKm + 
+    depreciationPerKm + 
+    maintenanceReservePerKm + 
+    financingPerKm + 
+    rentalPerKm +
+    washPerKm +
+    cleaningPerKm +
+    damagePerKm +
+    tollPerKm +
+    foodPerKm +
+    otherOperationalPerKm;
+
+  return {
+    ownershipType,
+    isElectric,
+    fuelPerKm,
+    tirePerKm,
+    oilPerKm,
+    brakePerKm,
+    insurancePerKm,
+    ipvaPerKm,
+    licensingPerKm,
+    depreciationPerKm,
+    maintenanceReservePerKm,
+    financingPerKm,
+    rentalPerKm,
+    washPerKm,
+    cleaningPerKm,
+    damagePerKm,
+    tollPerKm,
+    foodPerKm,
+    otherOperationalPerKm,
+    totalCostPerKm
+  };
+};
+
 /**
  * Calculates the exact dynamic maintenance + fuel cost per km.
  */
@@ -35,70 +217,7 @@ export const calculateCostPerKmEstimate = (
   costSettings: VehicleCostSettings | null
 ): number => {
   if (!vehicle) return 0;
-
-  const ownership = vehicle.ownership_type || 'own';
-  console.log(`[VehicleCost] ownership detected: ${ownership}`);
-  if (ownership === 'rented') {
-    console.log('[VehicleCost] rental cost rules applied');
-  } else if (ownership === 'own') {
-    console.log('[VehicleCost] own vehicle rules applied');
-  } else if (ownership === 'financed') {
-    console.log('[VehicleCost] financed vehicle rules applied');
-  }
-
-  // Handle Electric Vehicles
-  if (isElectricVehicle(vehicle)) {
-    const consumptionKwh100 = vehicle.electric_consumption_kwh_100km || 0;
-    const priceKwh = calculateElectricityPriceKwh(vehicle);
-    const energyCostPerKm = (consumptionKwh100 * priceKwh) / 100;
-
-    if (ownership === 'rented') {
-      const monthlyFixed = calculateMonthlyFixedCost(vehicle, costSettings);
-      const kmsMensais = vehicle.monthly_km_limit 
-        || (vehicle.weekly_km_limit ? vehicle.weekly_km_limit * 4.33 : 4330);
-      const fixedCostPerKm = kmsMensais > 0 ? monthlyFixed / kmsMensais : 0;
-      return energyCostPerKm + fixedCostPerKm;
-    }
-
-    if (!costSettings) return energyCostPerKm;
-
-    const tireCostPerKm = costSettings.tire_lifespan_km > 0 ? costSettings.tire_cost / costSettings.tire_lifespan_km : 0;
-    const brakeCostPerKm = costSettings.brake_interval_km > 0 ? costSettings.brake_cost / costSettings.brake_interval_km : 0;
-    
-    const batteryCostPerKm = (vehicle.battery_life_km && vehicle.battery_life_km > 0) 
-      ? (vehicle.battery_replacement_cost || 0) / vehicle.battery_life_km 
-      : 0;
-
-    const monthlyFixed = calculateMonthlyFixedCost(vehicle, costSettings);
-    const fixedCostPerKm = monthlyFixed > 0 ? (monthlyFixed / 4.33) / 1000 : 0;
-
-    return energyCostPerKm + tireCostPerKm + brakeCostPerKm + batteryCostPerKm + fixedCostPerKm;
-  }
-
-  // 1. Fuel cost per KM (Combustion Engines)
-  const kmPerLiter = vehicle.km_per_liter || 10;
-  const fuelPrice = costSettings?.fuel_price || 0;
-  const fuelCostPerKm = kmPerLiter > 0 ? fuelPrice / kmPerLiter : 0;
-
-  // If vehicle is rented, preventive maintenance (tires, oil, brakes) is not included
-  if (ownership === 'rented') {
-    const monthlyFixed = calculateMonthlyFixedCost(vehicle, costSettings);
-    const fixedCostPerKm = monthlyFixed > 0 ? (monthlyFixed / 4.33) / 1000 : 0;
-    return fuelCostPerKm + fixedCostPerKm;
-  }
-
-  if (!costSettings) return fuelCostPerKm;
-
-  // 2. Amortization and components per KM (for non-rented)
-  const tireCostPerKm = costSettings.tire_lifespan_km > 0 ? costSettings.tire_cost / costSettings.tire_lifespan_km : 0;
-  const oilCostPerKm = costSettings.oil_change_interval_km > 0 ? costSettings.oil_change_cost / costSettings.oil_change_interval_km : 0;
-  const brakeCostPerKm = costSettings.brake_interval_km > 0 ? costSettings.brake_cost / costSettings.brake_interval_km : 0;
-
-  // 3. Fixed costs divided by approximate weekly averages (e.g. 1000 KM per week usually)
-  const monthlyFixed = calculateMonthlyFixedCost(vehicle, costSettings);
-  const fixedCostPerKm = monthlyFixed > 0 ? (monthlyFixed / 4.33) / 1000 : 0;
-
-  return fuelCostPerKm + tireCostPerKm + oilCostPerKm + brakeCostPerKm + fixedCostPerKm;
+  return calculateCostBreakdown(vehicle, costSettings).totalCostPerKm;
 };
 
 /**
@@ -111,14 +230,6 @@ export const calculateMonthlyFixedCost = (
   if (!vehicle) return 0;
 
   const ownership = vehicle.ownership_type || 'own';
-  console.log(`[VehicleCost] ownership detected: ${ownership}`);
-  if (ownership === 'rented') {
-    console.log('[VehicleCost] rental cost rules applied');
-  } else if (ownership === 'own') {
-    console.log('[VehicleCost] own vehicle rules applied');
-  } else if (ownership === 'financed') {
-    console.log('[VehicleCost] financed vehicle rules applied');
-  }
 
   if (ownership === 'rented') {
     const amount = vehicle.rental_amount || 0;

@@ -22,6 +22,7 @@ import { usePlatformComparator } from '../modules/platform-comparison/hooks/useP
 // New UI Components
 import { DataSourceBadge } from '../components/DataSourceBadge';
 import { reconstructJourneyFromPoints } from '../modules/journey/journey.calculations';
+import { calculateCostPerKmEstimate } from '../modules/vehicle/vehicle.calculations';
 import { DiagnosticCards } from '../modules/driver-ai/components/DiagnosticCards';
 import { ScoreMeter } from '../modules/driver-score/components/ScoreMeter';
 import { RecommendationsList } from '../modules/driver-score/components/RecommendationsList';
@@ -185,13 +186,7 @@ export const DashboardPage: React.FC = () => {
         totalMinutes = 7.5 * 60 * factor;
         totalReceita = (p === 'today' ? todayGross : 340 * factor);
         
-        let costPerKm = 0.45;
-        if (vehicleCostSettings) {
-          const fuelCostKm = (vehicleCostSettings.fuel_price || 5.89) / 10;
-          const tireCostKm = vehicleCostSettings.tire_cost > 0 && vehicleCostSettings.tire_lifespan_km > 0 ? (vehicleCostSettings.tire_cost / vehicleCostSettings.tire_lifespan_km) : 0.05;
-          const oilCostKm = vehicleCostSettings.oil_change_cost > 0 && vehicleCostSettings.oil_change_interval_km > 0 ? (vehicleCostSettings.oil_change_cost / vehicleCostSettings.oil_change_interval_km) : 0.03;
-          costPerKm = fuelCostKm + tireCostKm + oilCostKm;
-        }
+        const costPerKm = calculateCostPerKmEstimate(vehicle, vehicleCostSettings) || 0.45;
         totalDespesas = totalKm * costPerKm;
         if (totalDespesas === 0) totalDespesas = totalReceita * 0.28;
         totalStoppedMinutes = 48 * factor;

@@ -444,8 +444,8 @@ export async function getSmartRideStats(sessionId?: string): Promise<AIRideStats
       .select('*')
       .order('created_at', { ascending: false });
 
-    if (error || !events) {
-      return { accuracyRate: 94.5, autoDetectedCount: 8, manuallyConfirmedCount: 3, totalRideCount: 11 };
+    if (error || !events || events.length === 0) {
+      return { accuracyRate: 0, autoDetectedCount: 0, manuallyConfirmedCount: 0, totalRideCount: 0 };
     }
 
     const filtered = sessionId ? events.filter(e => e.session_id === sessionId) : events;
@@ -462,11 +462,11 @@ export async function getSmartRideStats(sessionId?: string): Promise<AIRideStats
     const rejections = feedbackList.filter((f: any) => f.type === 'reject').length;
     const confirmations = feedbackList.filter((f: any) => f.type === 'confirm').length;
     
-    let accuracyRate = 95.8; // Default initial accuracy high
+    let accuracyRate = 0;
     if (confirmations + rejections > 0) {
       accuracyRate = Number(((confirmations / (confirmations + rejections)) * 100).toFixed(1));
-    } else if (rejections > 0) {
-      accuracyRate = Math.max(50, 95.8 - (rejections * 5));
+    } else if (total > 0) {
+      accuracyRate = 100; // If they have rides but no feedback yet, default to 100%
     }
 
     return {
@@ -476,6 +476,6 @@ export async function getSmartRideStats(sessionId?: string): Promise<AIRideStats
       totalRideCount: total
     };
   } catch (err) {
-    return { accuracyRate: 95.8, autoDetectedCount: 12, manuallyConfirmedCount: 4, totalRideCount: 16 };
+    return { accuracyRate: 0, autoDetectedCount: 0, manuallyConfirmedCount: 0, totalRideCount: 0 };
   }
 }

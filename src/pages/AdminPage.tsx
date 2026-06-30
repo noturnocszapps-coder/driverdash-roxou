@@ -1,4 +1,4 @@
-import React, { useState } from 'react';
+import React, { useState, useEffect } from 'react';
 import { useApp } from '../context/AppContext';
 import { useDemand } from '../modules/demand/demand.hooks';
 import { 
@@ -6,12 +6,13 @@ import {
   Clock, AlertTriangle, ShieldAlert, Sparkles, MapPin, Gauge,
   Coins, Check, X, Shield, Star, Ban, Power, LayoutDashboard,
   Settings, Lightbulb, Search, Filter, Calendar, UserCheck,
-  Eye, Activity, Database, AlertCircle, RefreshCw
+  Eye, Activity, Database, AlertCircle, RefreshCw, Smartphone, Car
 } from 'lucide-react';
 import { motion, AnimatePresence } from 'motion/react';
-import { UserPlan, UserRole } from '../types';
+import { UserPlan, UserRole, RideOffer } from '../types';
 import { roxouIntegrationService } from '../modules/demand/roxouIntegration.service';
 import { useObservability } from '../modules/observability/observability.hooks';
+import { rideOffersService } from '../modules/ride-offers/rideOffers.service';
 
 export const AdminPage: React.FC = () => {
   const { 
@@ -19,11 +20,86 @@ export const AdminPage: React.FC = () => {
     passengerReports, dbStatus, earnings, expenses,
     users, subscriptions, payments,
     updateUserPlan, updateSubscriptionStatus, toggleUserRole, toggleBlockUser, toggleBetaTester,
-    approvePayment, rejectPayment
+    approvePayment, rejectPayment, vehicle, vehicleCostSettings, user
   } = useApp();
 
   // Selected Admin Menu
-  const [activeTab, setActiveTab] = useState<'dashboard' | 'users' | 'subscriptions' | 'occurrences' | 'intelligence' | 'configs' | 'observability'>('dashboard');
+  const [activeTab, setActiveTab] = useState<'dashboard' | 'users' | 'subscriptions' | 'occurrences' | 'intelligence' | 'configs' | 'observability' | 'ride_offers'>('dashboard');
+
+  // State for Ride Offers (future Android Accessibility simulation and viewing)
+  const [allOffers, setAllOffers] = useState<RideOffer[]>([]);
+  const [offersStats, setOffersStats] = useState<any>(null);
+  const [loadingOffers, setLoadingOffers] = useState(false);
+
+  useEffect(() => {
+    if (activeTab === 'ride_offers') {
+      const loadOffers = async () => {
+        setLoadingOffers(true);
+        try {
+          const uId = user?.id || 'all_users_admin';
+          const list = await rideOffersService.listRecentRideOffers(uId);
+          const stats = await rideOffersService.getRideOfferStats(uId);
+          setAllOffers(list);
+          setOffersStats(stats);
+        } catch (e) {
+          console.error(e);
+        } finally {
+          setLoadingOffers(false);
+        }
+      };
+      loadOffers();
+    }
+  }, [activeTab, user?.id]);
+
+  const handleCreateSimulatedOffer = async (templateIndex: number) => {
+    const templates = [
+      "UberX - R$ 24,50 • 8.2 km • 15 min • Embarque: Jardim Bongiovani • Destino: Centro",
+      "99Pop - R$ 12,80 • 3.1 km • 8 min • Embarque: Ana Jacinta • Destino: Vila Industrial",
+      "Uber Comfort - R$ 42,00 • 18.0 km • 28 min • Embarque: Centro • Destino: Regente Feijó",
+      "UberX - R$ 7,50 • 9.5 km • 22 min • Embarque: Cohab • Destino: Brasil Novo",
+      "99Pop - R$ 15,20 • 4.5 km • 10 min • Embarque: Jardim Paulista • Destino: Parque do Povo"
+    ];
+
+    const text = templates[templateIndex];
+    const parsed = rideOffersService.parseOfferTextMock(text);
+    const uId = user?.id || 'all_users_admin';
+    
+    await rideOffersService.createRideOffer({
+      user_id: uId,
+      provider: parsed.provider || 'uber',
+      raw_text: text,
+      fare_amount: parsed.fare_amount || 15,
+      estimated_distance_km: parsed.estimated_distance_km || 4.5,
+      estimated_duration_min: parsed.estimated_duration_min || 12,
+      pickup_text: parsed.pickup_text || 'Desconhecido',
+      destination_text: parsed.destination_text || 'Desconhecido',
+      pickup_neighborhood: parsed.pickup_neighborhood || 'Desconhecido',
+      destination_neighborhood: parsed.destination_neighborhood || 'Desconhecido',
+      pickup_city: parsed.pickup_city || 'Presidente Prudente',
+      destination_city: parsed.destination_city || 'Presidente Prudente',
+      confidence_score: 98,
+      source: 'android_accessibility',
+      status: 'detected',
+      detected_at: new Date().toISOString()
+    }, vehicle, vehicleCostSettings);
+
+    const list = await rideOffersService.listRecentRideOffers(uId);
+    const stats = await rideOffersService.getRideOfferStats(uId);
+    setAllOffers(list);
+    setOffersStats(stats);
+  };
+
+  const handleUpdateStatus = async (offerId: string, newStatus: 'accepted' | 'rejected' | 'expired' | 'ignored') => {
+    await rideOffersService.updateRideOfferStatus(offerId, newStatus);
+    const uId = user?.id || 'all_users_admin';
+    const list = await rideOffersService.listRecentRideOffers(uId);
+    const stats = await rideOffersService.getRideOfferStats(uId);
+    setAllOffers(list);
+    setOffersStats(stats);
+  };
+
+
+
 
   // Observability Telemetry Context
   const { 
@@ -283,6 +359,15 @@ export const AdminPage: React.FC = () => {
         >
           <Activity className="w-3.5 h-3.5" /> Monitoramento
         </button>
+        <button
+          onClick={() => setActiveTab('ride_offers')}
+          className={`px-4 py-2 rounded-xl font-medium transition-all cursor-pointer flex items-center gap-1.5 ${
+            activeTab === 'ride_offers' ? 'bg-emerald-950/40 text-emerald-300 border border-emerald-900/20' : 'text-slate-400 hover:text-slate-200'
+          }`}
+        >
+          <Smartphone className="w-3.5 h-3.5" /> Ofertas Capturadas
+        </button>
+
       </div>
 
       <AnimatePresence mode="wait">
@@ -1805,6 +1890,296 @@ export const AdminPage: React.FC = () => {
                 </div>
               </div>
 
+            </div>
+          </motion.div>
+        )}
+
+        {activeTab === 'ride_offers' && (
+          <motion.div
+            key="admin-ride-offers-view"
+            initial={{ opacity: 0, y: 10 }}
+            animate={{ opacity: 1, y: 0 }}
+            exit={{ opacity: 0, y: -10 }}
+            className="space-y-6"
+          >
+            {/* Title & Introduction */}
+            <div className="p-6 bg-gradient-to-r from-emerald-950/20 via-[#0d0526] to-[#0a051d] border border-emerald-900/30 rounded-3xl">
+              <div className="flex items-center gap-3">
+                <div className="p-3 bg-emerald-950/40 rounded-2xl border border-emerald-800/30 text-emerald-400">
+                  <Smartphone className="w-6 h-6" />
+                </div>
+                <div>
+                  <h3 className="text-lg font-bold text-white">Ofertas Capturadas via Android AccessibilityService</h3>
+                  <p className="text-xs text-slate-400 mt-1 max-w-3xl">
+                    Painel de monitoramento e homologação das ofertas de corridas capturadas em tempo real. Esta interface simula e prepara a integração com o futuro aplicativo Android nativo que lerá as telas de Uber/99.
+                  </p>
+                </div>
+              </div>
+            </div>
+
+            {/* Metrics Dashboard Grid */}
+            <div className="grid grid-cols-2 md:grid-cols-4 gap-4">
+              <div className="p-4 bg-[#0a051d] border border-purple-950/20 rounded-2xl flex flex-col justify-between">
+                <span className="text-[10px] text-slate-400 font-mono uppercase">Total Capturado</span>
+                <div className="mt-2">
+                  <span className="text-2xl font-extrabold text-white font-mono">{offersStats?.total || 0}</span>
+                  <span className="text-[10px] text-purple-400/50 block font-mono">corridas detectadas</span>
+                </div>
+              </div>
+              <div className="p-4 bg-[#0a051d] border border-purple-950/20 rounded-2xl flex flex-col justify-between">
+                <span className="text-[10px] text-slate-400 font-mono uppercase">Conversão / Aceitas</span>
+                <div className="mt-2">
+                  <span className="text-2xl font-extrabold text-emerald-400 font-mono">{offersStats?.accepted || 0}</span>
+                  <span className="text-[10px] text-emerald-400/50 block font-mono">
+                    {offersStats?.total > 0 ? ((offersStats.accepted / offersStats.total) * 100).toFixed(0) : 0}% de aceitação
+                  </span>
+                </div>
+              </div>
+              <div className="p-4 bg-[#0a051d] border border-purple-950/20 rounded-2xl flex flex-col justify-between">
+                <span className="text-[10px] text-slate-400 font-mono uppercase">Margem Média Lucro</span>
+                <div className="mt-2">
+                  <span className="text-2xl font-extrabold text-teal-400 font-mono">
+                    R$ {(offersStats?.avgProfit || 0).toFixed(2)}
+                  </span>
+                  <span className="text-[10px] text-teal-400/50 block font-mono">por corrida aceita</span>
+                </div>
+              </div>
+              <div className="p-4 bg-[#0a051d] border border-purple-950/20 rounded-2xl flex flex-col justify-between">
+                <span className="text-[10px] text-slate-400 font-mono uppercase">Veredito Comum</span>
+                <div className="mt-2">
+                  <span className="text-2xl font-extrabold text-fuchsia-400 font-mono">
+                    {offersStats?.commonDecision || 'Nenhum'}
+                  </span>
+                  <span className="text-[10px] text-fuchsia-400/50 block font-mono">padrão de análise</span>
+                </div>
+              </div>
+            </div>
+
+            {/* Geographical Insights */}
+            <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+              <div className="p-4 bg-[#0a051d] border border-purple-950/20 rounded-2xl">
+                <span className="text-[10px] text-slate-400 font-mono uppercase block border-b border-purple-950/20 pb-2">Origem mais frequente</span>
+                <p className="text-lg font-bold text-white mt-2 font-sans">{offersStats?.commonPickup || 'Nenhum'}</p>
+                <span className="text-xs text-slate-500 font-mono">Bairro de embarque em Presidente Prudente</span>
+              </div>
+              <div className="p-4 bg-[#0a051d] border border-purple-950/20 rounded-2xl">
+                <span className="text-[10px] text-slate-400 font-mono uppercase block border-b border-purple-950/20 pb-2">Destino mais frequente</span>
+                <p className="text-lg font-bold text-white mt-2 font-sans">{offersStats?.commonDest || 'Nenhum'}</p>
+                <span className="text-xs text-slate-500 font-mono">Bairro de desembarque final</span>
+              </div>
+            </div>
+
+            {/* Simulated Capture Panel */}
+            <div className="p-5 bg-[#09041a] border border-purple-950/35 rounded-3xl space-y-4">
+              <div>
+                <span className="text-xs font-bold uppercase tracking-wider font-mono text-purple-300 block">
+                  🚀 Simulador de Captura de Ofertas (Homologação Web)
+                </span>
+                <p className="text-xs text-slate-400 mt-1">
+                  Selecione um cenário típico para simular a captura de um texto bruto pelo AccessibilityService. A engine irá analisar a corrida usando os parâmetros de custo reais do veículo do usuário e gerar a recomendação imediatamente.
+                </p>
+              </div>
+
+              <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-3">
+                <button
+                  onClick={() => handleCreateSimulatedOffer(0)}
+                  className="p-3 bg-[#0c0524] hover:bg-emerald-950/25 border border-purple-950/30 rounded-2xl text-left transition-all group"
+                >
+                  <div className="flex justify-between items-start">
+                    <span className="px-2 py-0.5 bg-black/40 text-slate-300 font-mono text-[9px] rounded-md border border-purple-950/35 uppercase">UberX Excelente</span>
+                    <span className="text-emerald-400 group-hover:translate-x-1 transition-transform">→</span>
+                  </div>
+                  <p className="text-xs font-bold text-white mt-2">Jardim Bongiovani a Centro</p>
+                  <p className="text-[11px] text-slate-400 mt-1 font-mono">R$ 24,50 • 8.2 km • 15 min</p>
+                </button>
+
+                <button
+                  onClick={() => handleCreateSimulatedOffer(1)}
+                  className="p-3 bg-[#0c0524] hover:bg-emerald-950/25 border border-purple-950/30 rounded-2xl text-left transition-all group"
+                >
+                  <div className="flex justify-between items-start">
+                    <span className="px-2 py-0.5 bg-black/40 text-slate-300 font-mono text-[9px] rounded-md border border-purple-950/35 uppercase">99Pop Boa</span>
+                    <span className="text-emerald-400 group-hover:translate-x-1 transition-transform">→</span>
+                  </div>
+                  <p className="text-xs font-bold text-white mt-2">Ana Jacinta a Vila Industrial</p>
+                  <p className="text-[11px] text-slate-400 mt-1 font-mono">R$ 12,80 • 3.1 km • 8 min</p>
+                </button>
+
+                <button
+                  onClick={() => handleCreateSimulatedOffer(2)}
+                  className="p-3 bg-[#0c0524] hover:bg-emerald-950/25 border border-purple-950/30 rounded-2xl text-left transition-all group"
+                >
+                  <div className="flex justify-between items-start">
+                    <span className="px-2 py-0.5 bg-black/40 text-slate-300 font-mono text-[9px] rounded-md border border-purple-950/35 uppercase">Comfort Retorno</span>
+                    <span className="text-emerald-400 group-hover:translate-x-1 transition-transform">→</span>
+                  </div>
+                  <p className="text-xs font-bold text-white mt-2">Centro a Regente Feijó</p>
+                  <p className="text-[11px] text-slate-400 mt-1 font-mono">R$ 42,00 • 18.0 km • 28 min</p>
+                </button>
+
+                <button
+                  onClick={() => handleCreateSimulatedOffer(3)}
+                  className="p-3 bg-[#0c0524] hover:bg-[#ff0055]/10 border border-purple-950/30 rounded-2xl text-left transition-all group"
+                >
+                  <div className="flex justify-between items-start">
+                    <span className="px-2 py-0.5 bg-rose-950/20 text-rose-400 font-mono text-[9px] rounded-md border border-rose-900/10 uppercase">UberX Ruim (Prejuízo)</span>
+                    <span className="text-rose-400 group-hover:translate-x-1 transition-transform">→</span>
+                  </div>
+                  <p className="text-xs font-bold text-white mt-2">Cohab a Brasil Novo</p>
+                  <p className="text-[11px] text-rose-400/80 mt-1 font-mono">R$ 7,50 • 9.5 km • 22 min</p>
+                </button>
+
+                <button
+                  onClick={() => handleCreateSimulatedOffer(4)}
+                  className="p-3 bg-[#0c0524] hover:bg-emerald-950/25 border border-purple-950/30 rounded-2xl text-left transition-all group"
+                >
+                  <div className="flex justify-between items-start">
+                    <span className="px-2 py-0.5 bg-black/40 text-slate-300 font-mono text-[9px] rounded-md border border-purple-950/35 uppercase">99Pop Saudável</span>
+                    <span className="text-emerald-400 group-hover:translate-x-1 transition-transform">→</span>
+                  </div>
+                  <p className="text-xs font-bold text-white mt-2">Jardim Paulista a Parque do Povo</p>
+                  <p className="text-[11px] text-slate-400 mt-1 font-mono">R$ 15,20 • 4.5 km • 10 min</p>
+                </button>
+              </div>
+            </div>
+
+            {/* List of Captured Offers */}
+            <div className="bg-[#0a051d] border border-purple-950/20 rounded-3xl p-6 space-y-4">
+              <span className="text-xs font-bold uppercase tracking-wider font-mono text-purple-300 block">
+                📋 Registro Recente de Ofertas Capturadas ({allOffers.length})
+              </span>
+
+              {allOffers.length === 0 ? (
+                <div className="text-center py-12 space-y-3">
+                  <p className="text-slate-500 italic">Quando o aplicativo Android capturar ofertas de corrida, elas aparecerão aqui.</p>
+                  <p className="text-[11px] text-slate-600 max-w-md mx-auto">
+                    Use os botões de simulação acima para carregar ofertas de testes e verificar os scores de decisão gerados em tempo real com os custos reais do carro.
+                  </p>
+                </div>
+              ) : (
+                <div className="space-y-3 max-h-[600px] overflow-y-auto pr-2">
+                  {allOffers.map((offer) => {
+                    // Badge styles based on decision
+                    let decisionBg = 'bg-slate-950/50 text-slate-400 border border-slate-900';
+                    let decisionLabel = 'Indefinido';
+                    if (offer.decision === 'excellent') {
+                      decisionBg = 'bg-emerald-950/30 text-emerald-400 border border-emerald-500/25 animate-pulse';
+                      decisionLabel = 'Excelente';
+                    } else if (offer.decision === 'good') {
+                      decisionBg = 'bg-green-950/30 text-green-400 border border-green-500/20';
+                      decisionLabel = 'Boa';
+                    } else if (offer.decision === 'attention') {
+                      decisionBg = 'bg-amber-950/30 text-amber-400 border border-amber-500/20';
+                      decisionLabel = 'Atenção';
+                    } else if (offer.decision === 'only_if_returning') {
+                      decisionBg = 'bg-blue-950/30 text-blue-400 border border-blue-500/20';
+                      decisionLabel = 'Retorno';
+                    } else if (offer.decision === 'bad') {
+                      decisionBg = 'bg-rose-950/30 text-rose-400 border border-rose-500/20';
+                      decisionLabel = 'Ruim';
+                    }
+
+                    // Status style
+                    let statusColor = 'text-slate-400 bg-slate-900/20';
+                    let statusText = 'Detectado';
+                    if (offer.status === 'accepted') {
+                      statusColor = 'text-emerald-400 bg-emerald-950/30 border border-emerald-800/30';
+                      statusText = 'Aceita';
+                    } else if (offer.status === 'rejected') {
+                      statusColor = 'text-rose-400 bg-rose-950/30 border border-rose-800/30';
+                      statusText = 'Recusada';
+                    } else if (offer.status === 'expired') {
+                      statusColor = 'text-amber-400 bg-amber-950/30 border border-amber-800/30';
+                      statusText = 'Expirada';
+                    } else if (offer.status === 'ignored') {
+                      statusColor = 'text-slate-500 bg-slate-950/30';
+                      statusText = 'Ignorada';
+                    }
+
+                    return (
+                      <div key={offer.id} className="p-4 bg-[#070314] border border-purple-950/30 rounded-2xl flex flex-col lg:flex-row lg:items-center justify-between gap-4">
+                        <div className="space-y-2 flex-1">
+                          <div className="flex flex-wrap items-center gap-2">
+                            <span className={`px-2.5 py-1 text-xs font-extrabold uppercase tracking-wide font-mono rounded-lg ${
+                              offer.provider === 'uber' ? 'bg-white text-black' : 'bg-[#ff0055]/15 text-[#ff0055]'
+                            }`}>
+                              {offer.provider.toUpperCase()}
+                            </span>
+
+                            <span className={`px-2 py-0.5 text-[10px] font-bold rounded-md font-mono ${decisionBg}`}>
+                              {decisionLabel}
+                            </span>
+
+                            <span className={`px-2 py-0.5 text-[10px] font-bold rounded-md font-mono ${statusColor}`}>
+                              {statusText}
+                            </span>
+
+                            <span className="text-[10px] text-slate-500 font-mono">
+                              Detectada em: {formatDate(offer.detected_at)}
+                            </span>
+                          </div>
+
+                          <div className="space-y-1">
+                            <p className="text-sm font-bold text-white flex items-center gap-1.5">
+                              <span className="text-emerald-400">R$ {offer.fare_amount.toFixed(2)}</span>
+                              <span className="text-slate-500 font-normal text-xs">•</span>
+                              <span className="text-slate-300 font-mono font-normal text-xs">{offer.estimated_distance_km} km ({offer.estimated_duration_min} min)</span>
+                            </p>
+                            <p className="text-xs text-slate-300">
+                              <strong className="text-purple-300">Embarque:</strong> {offer.pickup_text} <span className="text-[10px] text-purple-400/50">({offer.pickup_neighborhood})</span>
+                            </p>
+                            <p className="text-xs text-slate-300">
+                              <strong className="text-indigo-300">Destino:</strong> {offer.destination_text} <span className="text-[10px] text-indigo-400/50">({offer.destination_neighborhood})</span>
+                            </p>
+                          </div>
+
+                          <div className="p-2.5 bg-black/35 rounded-xl border border-purple-950/20 text-[11px] text-slate-400 leading-relaxed font-sans">
+                            <strong className="text-purple-300 font-mono block mb-0.5">Análise de Lucro Roxou:</strong>
+                            {offer.decision_reason}
+                            <div className="mt-1 flex flex-wrap gap-x-4 gap-y-1 font-mono text-[10px] text-slate-500">
+                              <span>Rentabilidade: <strong className="text-slate-300">R$ {offer.calculated_revenue_per_km.toFixed(2)}/km</strong></span>
+                              <span>Ganhos Hora: <strong className="text-slate-300">R$ {offer.calculated_revenue_per_hour.toFixed(2)}/h</strong></span>
+                              <span>Custos Carro: <strong className="text-slate-300">R$ {offer.estimated_cost.toFixed(2)}</strong></span>
+                              <span>Lucro Real: <strong className={`font-bold ${offer.estimated_profit > 0 ? 'text-emerald-400' : 'text-rose-400'}`}>R$ {offer.estimated_profit.toFixed(2)}</strong></span>
+                            </div>
+                          </div>
+                        </div>
+
+                        {/* Interactive Manual Override Actions (testing purposes) */}
+                        <div className="flex lg:flex-col gap-2 shrink-0">
+                          {offer.status === 'detected' && (
+                            <>
+                              <button
+                                onClick={() => handleUpdateStatus(offer.id, 'accepted')}
+                                className="px-3 py-1.5 bg-emerald-950/40 hover:bg-emerald-900/40 border border-emerald-800/30 text-emerald-400 rounded-xl text-xs font-mono font-bold transition-all cursor-pointer flex-1 text-center"
+                              >
+                                Aceitar
+                              </button>
+                              <button
+                                onClick={() => handleUpdateStatus(offer.id, 'rejected')}
+                                className="px-3 py-1.5 bg-rose-950/40 hover:bg-rose-900/40 border border-rose-800/30 text-rose-400 rounded-xl text-xs font-mono font-bold transition-all cursor-pointer flex-1 text-center"
+                              >
+                                Recusar
+                              </button>
+                              <button
+                                onClick={() => handleUpdateStatus(offer.id, 'expired')}
+                                className="px-3 py-1.5 bg-slate-900/40 hover:bg-slate-800/40 border border-purple-950/25 text-slate-300 rounded-xl text-xs font-mono font-bold transition-all cursor-pointer flex-1 text-center"
+                              >
+                                Expirar
+                              </button>
+                            </>
+                          )}
+                          {offer.status !== 'detected' && (
+                            <span className="text-[10px] font-mono text-slate-500 uppercase block text-center bg-black/20 px-3 py-2 rounded-xl">
+                              Histórico Fechado
+                            </span>
+                          )}
+                        </div>
+                      </div>
+                    );
+                  })}
+                </div>
+              )}
             </div>
           </motion.div>
         )}

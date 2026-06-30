@@ -4,7 +4,7 @@ import {
   TrendingUp, BarChart4, AlertTriangle, HelpCircle, Sparkles, Check, 
   Calendar, Award, Trash, Filter, Info, ShieldAlert, CheckCircle2, ShieldCheck, 
   Clock, Layers, Car, Milestone, ArrowUpRight, ArrowDownRight, RefreshCw, 
-  Zap, DollarSign, Percent, Play, Gauge, Eye, HelpCircle as HelpIcon, Flame
+  Zap, DollarSign, Percent, Play, Gauge, Eye, HelpCircle as HelpIcon, Flame, Smartphone
 } from 'lucide-react';
 import { motion } from 'motion/react';
 import { 
@@ -21,6 +21,7 @@ import {
   generatePreventiveAlertsAndInsights,
   calculatePeriodComparison
 } from '../modules/insights/insights.calculations';
+import { DemandOpportunitiesPanel } from '../modules/demand-intelligence/DemandOpportunitiesPanel';
 
 export const InsightsPage: React.FC = () => {
   const { 
@@ -39,6 +40,7 @@ export const InsightsPage: React.FC = () => {
   } = useApp();
 
   // Active filters and tab states
+  const [insightsTab, setInsightsTab] = useState<'copilot' | 'opportunities'>('opportunities');
   const [activeAlertFilter, setActiveAlertFilter] = useState<'all' | 'unread' | 'read'>('unread');
   const [timelinePeriod, setTimelinePeriod] = useState<'day' | 'week' | 'month' | 'year'>('week');
   const [comparisonPeriod, setComparisonPeriod] = useState<'day' | 'week' | 'month' | 'year'>('week');
@@ -323,8 +325,42 @@ export const InsightsPage: React.FC = () => {
         )}
       </div>
 
-      {/* ALERT/BANNER FOR DEMO MODE ACTIVE */}
-      {useSimulatedData && (
+      {/* Sub-Tabs Section */}
+      <div className="flex border-b border-purple-950/20 pb-px gap-6 mb-2">
+        <button
+          onClick={() => setInsightsTab('opportunities')}
+          className={`pb-3 text-sm font-bold tracking-wide relative cursor-pointer transition-all flex items-center gap-2 ${
+            insightsTab === 'opportunities' ? 'text-white font-extrabold' : 'text-slate-400 hover:text-slate-200'
+          }`}
+        >
+          {insightsTab === 'opportunities' && (
+            <motion.div layoutId="insightsTabActiveLine" className="absolute bottom-0 left-0 right-0 h-0.5 bg-purple-500" />
+          )}
+          <span>🗺️ Mapa de Oportunidades</span>
+          <span className="px-1.5 py-0.5 bg-emerald-950/40 text-emerald-400 font-mono text-[9px] uppercase rounded-md border border-emerald-500/20 tracking-wider">
+            18h MVP
+          </span>
+        </button>
+
+        <button
+          onClick={() => setInsightsTab('copilot')}
+          className={`pb-3 text-sm font-bold tracking-wide relative cursor-pointer transition-all flex items-center gap-1.5 ${
+            insightsTab === 'copilot' ? 'text-white font-extrabold' : 'text-slate-400 hover:text-slate-200'
+          }`}
+        >
+          {insightsTab === 'copilot' && (
+            <motion.div layoutId="insightsTabActiveLine" className="absolute bottom-0 left-0 right-0 h-0.5 bg-purple-500" />
+          )}
+          <span>📊 Copiloto Financeiro & IA</span>
+        </button>
+      </div>
+
+      {insightsTab === 'opportunities' ? (
+        <DemandOpportunitiesPanel />
+      ) : (
+        <>
+          {/* ALERT/BANNER FOR DEMO MODE ACTIVE */}
+          {useSimulatedData && (
         <div className="p-4 bg-gradient-to-r from-[#0f0a2e]/60 via-[#160f42]/60 to-[#0f0a2e]/60 border border-purple-500/25 rounded-3xl flex flex-col sm:flex-row items-center justify-between gap-4 shadow-xl">
           <div className="flex items-center gap-3">
             <div className="w-10 h-10 bg-purple-900/30 border border-purple-500/20 rounded-xl flex items-center justify-center shrink-0">
@@ -1135,7 +1171,32 @@ export const InsightsPage: React.FC = () => {
 
         </div>
       </div>
+      </>
+      )}
+
+      {/* SEÇÃO DISCRETA PREPARATÓRIA: ANÁLISE DE OFERTAS EM TEMPO REAL */}
+      <div className="p-6 bg-gradient-to-br from-[#0c0524] to-[#04010a] border border-purple-950/40 rounded-3xl space-y-4">
+        <div className="flex items-center gap-3 border-b border-purple-950/25 pb-3">
+          <div className="p-2 bg-purple-950/40 rounded-xl text-purple-400">
+            <Smartphone className="w-5 h-5" />
+          </div>
+          <div>
+            <h3 className="text-sm font-bold text-white uppercase tracking-wider font-mono">Análise de Ofertas (Android Integrado)</h3>
+            <p className="text-[11px] text-slate-400 mt-0.5">Suporte nativo para leitura de tela via Serviço de Acessibilidade</p>
+          </div>
+        </div>
+
+        <div className="p-5 bg-purple-950/10 border border-purple-950/40 rounded-2xl text-center space-y-2">
+          <p className="text-xs text-purple-300 font-semibold leading-relaxed">
+            Em breve, o DriverDash poderá analisar ofertas de corrida em tempo real no Android.
+          </p>
+          <p className="text-[10px] text-slate-500 font-sans max-w-lg mx-auto">
+            Esta funcionalidade requer a instalação do aplicativo nativo DriverDash Roxou no Android e a ativação do Serviço de Acessibilidade. A análise em tempo real não é suportada diretamente no navegador ou via PWA.
+          </p>
+        </div>
+      </div>
 
     </div>
   );
 };
+

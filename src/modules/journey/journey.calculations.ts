@@ -6,6 +6,7 @@
 
 import { RoutePoint, DriverSession } from './journey.types';
 import { Vehicle, VehicleCostSettings } from '../../types';
+import { calculateCostBreakdown } from '../vehicle/vehicle.calculations';
 
 /**
  * Calculates distance in kilometers between two GPS coordinates using the Haversine formula.
@@ -347,130 +348,39 @@ export const calculateJourneyFinancials = (
     commissions = otherFees;
   }
 
-  // 3. Energy / Fuel calculations
-  const ft = vehicle?.fuel_type?.toLowerCase() || 'flex';
-  const isElectric = ft === 'electric' || ft === 'elétrico' || ft === 'eletrico';
+  // 3. Centralized Cost Breakdown
+  const breakdown = calculateCostBreakdown(vehicle, costSettings);
 
+  const isElectric = breakdown.isElectric;
   let fuelConsumedLiters = 0;
   let electricConsumedKwh = 0;
-  let energyCost = 0;
-
+  
   if (isElectric) {
     const consumptionKwh100 = vehicle?.electric_consumption_kwh_100km || 15.5;
     electricConsumedKwh = (totalKm * consumptionKwh100) / 100;
-    
-    // Calculate electricity price per kWh
-    let priceKwh = 0.85; // Standard default
-    if (vehicle) {
-      if (vehicle.charging_type === 'mixed') {
-        const priceHome = vehicle.home_electricity_price_kwh || 0.75;
-        const percentHome = vehicle.home_charging_percent ?? 70;
-        const pricePublic = vehicle.public_electricity_price_kwh || 1.80;
-        const percentPublic = vehicle.public_charging_percent ?? 30;
-        priceKwh = (priceHome * percentHome / 100) + (pricePublic * percentPublic / 100);
-      } else if (vehicle.charging_type === 'public') {
-        priceKwh = vehicle.public_electricity_price_kwh || vehicle.electricity_price_kwh || 1.80;
-      } else {
-        priceKwh = vehicle.home_electricity_price_kwh || vehicle.electricity_price_kwh || 0.75;
-      }
-    }
-    energyCost = electricConsumedKwh * priceKwh;
   } else {
     const kmPerLiter = vehicle?.km_per_liter || 10.5;
-    const fuelPrice = costSettings?.fuel_price || 5.89; // Standard gasoline default
     fuelConsumedLiters = totalKm / kmPerLiter;
-    energyCost = fuelConsumedLiters * fuelPrice;
   }
 
-  // 4. Maintenance / Component Wear
-  const ownership = vehicle?.ownership_type || 'own';
-
-  console.log(`[VehicleCost] ownership detected: ${ownership}`);
-  if (ownership === 'rented') {
-    console.log('[VehicleCost] rental cost rules applied');
-  } else if (ownership === 'own') {
-    console.log('[VehicleCost] own vehicle rules applied');
-  } else if (ownership === 'financed') {
-    console.log('[VehicleCost] financed vehicle rules applied');
-  }
-
-  let depreciation = 0;
-  let tiresCost = 0;
-  let oilCost = 0;
-  let insuranceCost = 0;
-  let ipvaCost = 0;
-  let licensingCost = 0;
-  let washingCost = 0;
-  let maintenanceCost = 0;
-
-  // Rented vehicles don't pay maintenance, tires, oil, ipva, insurance, licensing
-  if (ownership === 'rented') {
-    const rentAmount = vehicle?.rental_amount || 550;
-    const rentPeriod = vehicle?.rental_period || 'weekly';
-    const rentPerDay = rentPeriod === 'weekly' ? rentAmount / 7 : rentAmount / 30;
-    
-    // Distribute daily rental rate proportionately based on active journey duration fraction of day
-    const activeFraction = Math.min(1.0, durationMinutes / 1440);
-    const rentCostProportional = rentPerDay * activeFraction;
-    
-    // Standard cleaning fee proportional
-    washingCost = totalKm * 0.015; // Proportional cleaning
-    
-    // Food, damage, and auxiliary rental fees
-    const foodDaily = (vehicle?.rental_food_daily || 0) * activeFraction;
-    const damageMonthlyProportional = ((vehicle?.rental_damage_monthly || 0) / 30) * activeFraction;
-    const cleaningMonthlyProportional = ((vehicle?.rental_cleaning_monthly || 0) / 30) * activeFraction;
-
-    maintenanceCost = rentCostProportional + foodDaily + damageMonthlyProportional + cleaningMonthlyProportional;
-  } else {
-    // Standard own/financed calculations
-    // Depreciation: average R$ 0.18 per km driven
-    depreciation = totalKm * 0.16;
-
-    // Tires: wear calculation
-    const tireCost = costSettings?.tire_cost || 1400;
-    const tireLifespan = costSettings?.tire_lifespan_km || 50000;
-    tiresCost = lifespanKmRate(totalKm, tireCost, tireLifespan, 0.028);
-
-    // Oil changes: wear (combustion only)
-    if (!isElectric) {
-      const oilChange = costSettings?.oil_change_cost || 280;
-      const oilInterval = costSettings?.oil_change_interval_km || 10000;
-      oilCost = lifespanKmRate(totalKm, oilChange, oilInterval, 0.028);
-    }
-
-    // Proportional Yearly Fixed Costs
-    const activeDays = Math.max(0.1, durationMinutes / 1440);
-    
-    const yearlyInsurance = costSettings?.insurance_yearly || 3200;
-    insuranceCost = (yearlyInsurance / 365) * activeDays;
-
-    const yearlyIpva = costSettings?.ipva_yearly || 1800;
-    ipvaCost = (yearlyIpva / 365) * activeDays;
-
-    const yearlyLicensing = costSettings?.licensing_yearly || 160;
-    licensingCost = (yearlyLicensing / 365) * activeDays;
-
-    // Lavagem (Washing)
-    washingCost = totalKm * 0.015; // Proportional cleaning cost
-
-    // Brakes and generic monthly maintenance
-    const brakeCost = costSettings?.brake_cost || 350;
-    const brakeInterval = costSettings?.brake_interval_km || 25000;
-    const brakesCostProportional = lifespanKmRate(totalKm, brakeCost, brakeInterval, 0.014);
-
-    const maintenanceMonthly = costSettings?.maintenance_monthly || 180;
-    const reserveMonthly = costSettings?.emergency_reserve_monthly || 120;
-    const genericMaintenanceCost = ((maintenanceMonthly + reserveMonthly) / 30) * activeDays;
-
-    maintenanceCost = brakesCostProportional + genericMaintenanceCost;
-
-    if (ownership === 'financed') {
-      const financingMonthly = costSettings?.financing_monthly || 1200;
-      const financingCostProportional = (financingMonthly / 30) * activeDays;
-      maintenanceCost += financingCostProportional;
-    }
-  }
+  // 4. Maintenance / Component Wear / Fixed / Periodic proportional costs
+  const energyCost = totalKm * breakdown.fuelPerKm;
+  const depreciation = totalKm * breakdown.depreciationPerKm;
+  const tiresCost = totalKm * breakdown.tirePerKm;
+  const oilCost = totalKm * breakdown.oilPerKm;
+  const insuranceCost = totalKm * breakdown.insurancePerKm;
+  const ipvaCost = totalKm * breakdown.ipvaPerKm;
+  const licensingCost = totalKm * breakdown.licensingPerKm;
+  const washingCost = totalKm * (breakdown.washPerKm + breakdown.cleaningPerKm);
+  const maintenanceCost = totalKm * (
+    breakdown.brakePerKm +
+    breakdown.maintenanceReservePerKm +
+    breakdown.financingPerKm +
+    breakdown.rentalPerKm +
+    breakdown.damagePerKm +
+    breakdown.foodPerKm +
+    breakdown.otherOperationalPerKm
+  );
 
   // 5. Consolidated Outcomes
   const totalOperatingExpenses = 

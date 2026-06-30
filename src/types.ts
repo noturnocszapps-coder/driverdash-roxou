@@ -314,3 +314,33 @@ export interface UberPassSettings {
   created_at?: string;
   updated_at?: string;
 }
+
+export interface RideOffer {
+  id: string;
+  user_id: string;
+  provider: 'uber' | '99' | 'indrive' | 'other';
+  raw_text?: string | null;
+  fare_amount: number;
+  estimated_distance_km: number;
+  estimated_duration_min: number;
+  pickup_text?: string | null;
+  destination_text?: string | null;
+  pickup_neighborhood?: string | null;
+  destination_neighborhood?: string | null;
+  pickup_city?: string | null;
+  destination_city?: string | null;
+  confidence_score: number;
+  source: 'android_accessibility' | 'manual' | 'ocr' | 'notification';
+  status: 'detected' | 'accepted' | 'rejected' | 'expired' | 'ignored';
+  calculated_revenue_per_km: number;
+  calculated_revenue_per_hour: number;
+  estimated_cost: number;
+  estimated_profit: number;
+  decision: 'excellent' | 'good' | 'attention' | 'only_if_returning' | 'bad';
+  decision_reason?: string | null;
+  detected_at: string;
+  accepted_at?: string | null;
+  rejected_at?: string | null;
+  created_at?: string;
+}
+

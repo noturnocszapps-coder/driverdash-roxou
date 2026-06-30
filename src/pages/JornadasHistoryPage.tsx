@@ -50,10 +50,9 @@ export const JornadasHistoryPage: React.FC = () => {
     };
   }, [routePoints, vehicle, vehicleCostSettings, earnings]);
 
-  // Filter completed sessions only
-  const completedSessions = useMemo(() => {
-    return driverSessions
-      .filter(s => s.status === 'completed')
+  // Sort all driver sessions by start time
+  const allSessions = useMemo(() => {
+    return [...driverSessions]
       .sort((a, b) => new Date(b.start_time).getTime() - new Date(a.start_time).getTime());
   }, [driverSessions]);
 
@@ -61,7 +60,7 @@ export const JornadasHistoryPage: React.FC = () => {
   const filteredSessions = useMemo(() => {
     const now = new Date();
     
-    return completedSessions.filter(s => {
+    return allSessions.filter(s => {
       const sessDate = new Date(s.start_time);
       
       if (filterPeriod === 'today') {
@@ -89,7 +88,7 @@ export const JornadasHistoryPage: React.FC = () => {
       
       return true;
     });
-  }, [completedSessions, filterPeriod, customStart, customEnd]);
+  }, [allSessions, filterPeriod, customStart, customEnd]);
 
   // Translate ISO Date string to gorgeous Portuguese text
   const formatSessDate = (isoString: string) => {
@@ -202,7 +201,7 @@ export const JornadasHistoryPage: React.FC = () => {
       {filteredSessions.length > 0 ? (
         <div className="space-y-4">
           <p className="text-xs text-slate-400 pl-1 font-mono">
-            Exibindo {filteredSessions.length} {filteredSessions.length === 1 ? 'jornada concluída' : 'jornadas concluídas'} encontrada(s):
+            Exibindo {filteredSessions.length} {filteredSessions.length === 1 ? 'jornada registrada' : 'jornadas registradas'} encontrada(s):
           </p>
 
           <div className="grid grid-cols-1 gap-4">
@@ -223,6 +222,19 @@ export const JornadasHistoryPage: React.FC = () => {
                       <span className="text-[10px] font-mono text-purple-400 bg-purple-950/60 border border-purple-900/40 px-2 py-0.5 rounded-md font-semibold select-none">
                         Ref: {sess.id.substring(5, 11).toUpperCase()}
                       </span>
+                      {sess.status === 'active' ? (
+                        <span className="text-[10px] bg-emerald-950/60 text-emerald-400 border border-emerald-900/40 px-2.5 py-0.5 rounded-md font-bold select-none animate-pulse">
+                          🟢 Em andamento
+                        </span>
+                      ) : (sess.total_distance_km || 0) === 0 && (sess.total_duration_minutes || 0) < 3 ? (
+                        <span className="text-[10px] bg-rose-950/60 text-rose-400 border border-rose-900/40 px-2.5 py-0.5 rounded-md font-bold select-none">
+                          ❌ Cancelada
+                        </span>
+                      ) : (
+                        <span className="text-[10px] bg-purple-950/60 text-purple-400 border border-purple-900/40 px-2.5 py-0.5 rounded-md font-bold select-none">
+                          🏁 Concluída
+                        </span>
+                      )}
                     </div>
 
                     <div className="flex flex-wrap items-center gap-y-1 gap-x-4 text-xs text-slate-400 font-mono">
@@ -242,7 +254,7 @@ export const JornadasHistoryPage: React.FC = () => {
                   <div className="grid grid-cols-2 sm:grid-cols-4 gap-4 pr-2 border-t md:border-t-0 md:border-l border-purple-950/30 pt-4 md:pt-0 md:pl-6 max-w-sm sm:max-w-xl w-full">
                     <div>
                       <span className="text-[9px] text-slate-500 font-mono font-bold block uppercase tracking-wider select-none">KM TOTAL</span>
-                      <span className="text-md font-extrabold text-purple-300 font-mono block mt-0.5">
+                      <span className={`text-md font-extrabold font-mono block mt-0.5 ${((sess.total_distance_km || 0) === 0 && (sess.total_duration_minutes || 0) < 3 && sess.status === 'completed') ? 'text-slate-500 line-through' : 'text-purple-300'}`}>
                         {stats.totalKm.toFixed(1)} km
                       </span>
                     </div>

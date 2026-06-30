@@ -5,6 +5,7 @@ import {
   HelpCircle, Sparkles, Award, ShieldAlert, Zap, Clock, Milestone, Activity, Compass, Info
 } from 'lucide-react';
 import { motion } from 'motion/react';
+import { calculateCostBreakdown } from '../modules/vehicle/vehicle.calculations';
 
 export const GoalsPage: React.FC = () => {
   const { 
@@ -93,18 +94,38 @@ export const GoalsPage: React.FC = () => {
   const parsedLicensing = Number(licensingYearly) || 0;
   const parsedReserve = Number(emergencyReserveMonthly) || 0;
 
-  // Formulate Real Cost per KM
-  const costFuelPerKm = kmPerLiter > 0 ? parsedFuel / kmPerLiter : 0;
-  const costTirePerKm = parsedTireKm > 0 ? parsedTirePrice / parsedTireKm : 0;
-  const costOilPerKm = parsedOilKm > 0 ? parsedOilPrice / parsedOilKm : 0;
-  const costBrakePerKm = parsedBrakeKm > 0 ? parsedBrakePrice / parsedBrakeKm : 0;
+  const tempCostSettings = React.useMemo(() => {
+    return {
+      fuel_price: parsedFuel,
+      tire_cost: parsedTirePrice,
+      tire_lifespan_km: parsedTireKm,
+      oil_change_cost: parsedOilPrice,
+      oil_change_interval_km: parsedOilKm,
+      brake_cost: parsedBrakePrice,
+      brake_interval_km: parsedBrakeKm,
+      insurance_yearly: parsedInsurance,
+      ipva_yearly: parsedIpva,
+      licensing_yearly: parsedLicensing,
+      emergency_reserve_monthly: parsedReserve,
+      financing_monthly: vehicleCostSettings?.financing_monthly || 0,
+      maintenance_monthly: vehicleCostSettings?.maintenance_monthly || 0,
+      user_id: vehicle?.user_id || '',
+    };
+  }, [parsedFuel, parsedTirePrice, parsedTireKm, parsedOilPrice, parsedOilKm, parsedBrakePrice, parsedBrakeKm, parsedInsurance, parsedIpva, parsedLicensing, parsedReserve, vehicleCostSettings, vehicle]);
 
-  const annualFixed = parsedInsurance + parsedIpva + parsedLicensing;
-  const monthlyFixedTotal = (annualFixed / 12) + parsedReserve;
-  const estimatedMonthlyKm = vehicle?.monthly_km_limit || 2500; // default estimated monthly kms
-  const costFixedPerKm = estimatedMonthlyKm > 0 ? monthlyFixedTotal / estimatedMonthlyKm : 0;
+  const estimatedMonthlyKm = vehicle?.monthly_km_limit || 2500;
+  const breakdown = React.useMemo(() => {
+    return calculateCostBreakdown(vehicle, tempCostSettings, estimatedMonthlyKm);
+  }, [vehicle, tempCostSettings, estimatedMonthlyKm]);
 
-  const realCostPerKmGrandTotal = costFuelPerKm + costTirePerKm + costOilPerKm + costBrakePerKm + costFixedPerKm;
+  // Formulate Real Cost per KM based on ownership rules
+  const costFuelPerKm = breakdown.fuelPerKm;
+  const costTirePerKm = breakdown.tirePerKm;
+  const costOilPerKm = breakdown.oilPerKm;
+  const costBrakePerKm = breakdown.brakePerKm;
+  const costFixedPerKm = breakdown.insurancePerKm + breakdown.ipvaPerKm + breakdown.licensingPerKm + breakdown.financingPerKm + breakdown.rentalPerKm;
+
+  const realCostPerKmGrandTotal = breakdown.totalCostPerKm;
 
   // --------------------------------------------------
   // 4. METRIC COMPUTATIONS (PROJECTIONS & PERFORMANCE)
@@ -592,20 +613,84 @@ export const GoalsPage: React.FC = () => {
             </p>
           </div>
 
-          <div className="p-3 bg-purple-950/20 rounded-xl border border-purple-950/30 text-[10px] text-slate-300 space-y-1.5 min-w-[200px]">
+          <div className="p-3 bg-purple-950/20 rounded-xl border border-purple-950/30 text-[10px] text-slate-300 space-y-1.5 min-w-[220px]">
             <span className="text-[9px] text-purple-400 uppercase block font-bold mb-1">Amortizações Individuais</span>
-            <div className="flex justify-between">
-              <span>Fator Combustível:</span>
-              <span className="text-white font-bold">{formatCurrency(costFuelPerKm)}/km</span>
-            </div>
-            <div className="flex justify-between">
-              <span>Manutenção (Pneu, Óleo, Freio):</span>
-              <span className="text-white font-bold">{formatCurrency(costTirePerKm + costOilPerKm + costBrakePerKm)}/km</span>
-            </div>
-            <div className="flex justify-between">
-              <span>Custos Fixos Parcelados (IPVA, etc):</span>
-              <span className="text-white font-bold">{formatCurrency(costFixedPerKm)}/km</span>
-            </div>
+            
+            {vehicle?.ownership_type === 'rented' ? (
+              // Rented vehicle specific costs
+              <>
+                <div className="flex justify-between border-b border-purple-950/20 pb-1 mb-1">
+                  <span className="text-purple-300">Posse:</span>
+                  <span className="text-white font-mono font-bold bg-purple-900/30 px-1 rounded uppercase">Alugado</span>
+                </div>
+                <div className="flex justify-between">
+                  <span>Aluguel ({vehicle.rental_period === 'weekly' ? 'Semanal' : 'Mensal'}):</span>
+                  <span className="text-white font-bold">{formatCurrency(breakdown.rentalPerKm)}/km</span>
+                </div>
+                <div className="flex justify-between">
+                  <span>Combustível / Energia:</span>
+                  <span className="text-white font-bold">{formatCurrency(breakdown.fuelPerKm)}/km</span>
+                </div>
+                {breakdown.damagePerKm > 0 && (
+                  <div className="flex justify-between">
+                    <span>Franquia/Avarias:</span>
+                    <span className="text-white font-bold">{formatCurrency(breakdown.damagePerKm)}/km</span>
+                  </div>
+                )}
+                {breakdown.cleaningPerKm > 0 && (
+                  <div className="flex justify-between">
+                    <span>Limpeza/Acessórios:</span>
+                    <span className="text-white font-bold">{formatCurrency(breakdown.cleaningPerKm)}/km</span>
+                  </div>
+                )}
+                {breakdown.foodPerKm > 0 && (
+                  <div className="flex justify-between">
+                    <span>Alimentação (Trabalho):</span>
+                    <span className="text-white font-bold">{formatCurrency(breakdown.foodPerKm)}/km</span>
+                  </div>
+                )}
+                <div className="flex justify-between text-slate-400">
+                  <span>Pedágios / Lavagem:</span>
+                  <span className="text-white font-bold">{formatCurrency(breakdown.washPerKm + breakdown.tollPerKm)}/km</span>
+                </div>
+              </>
+            ) : (
+              // Own / Financed vehicle costs
+              <>
+                <div className="flex justify-between border-b border-purple-950/20 pb-1 mb-1">
+                  <span className="text-purple-300">Posse:</span>
+                  <span className="text-white font-mono font-bold bg-purple-900/30 px-1 rounded uppercase font-sans">
+                    {vehicle?.ownership_type === 'financed' ? 'Financiado' : 'Próprio'}
+                  </span>
+                </div>
+                <div className="flex justify-between">
+                  <span>Fator Combustível:</span>
+                  <span className="text-white font-bold">{formatCurrency(breakdown.fuelPerKm)}/km</span>
+                </div>
+                <div className="flex justify-between">
+                  <span>Manutenção (Pneu, Óleo, Freio):</span>
+                  <span className="text-white font-bold">{formatCurrency(breakdown.tirePerKm + breakdown.oilPerKm + breakdown.brakePerKm)}/km</span>
+                </div>
+                <div className="flex justify-between">
+                  <span>Reserva & Oficinas:</span>
+                  <span className="text-white font-bold">{formatCurrency(breakdown.maintenanceReservePerKm)}/km</span>
+                </div>
+                <div className="flex justify-between">
+                  <span>Taxas Fixas (IPVA, Licença):</span>
+                  <span className="text-white font-bold">{formatCurrency(breakdown.insurancePerKm + breakdown.ipvaPerKm + breakdown.licensingPerKm)}/km</span>
+                </div>
+                {breakdown.financingPerKm > 0 && (
+                  <div className="flex justify-between">
+                    <span>Parcela Financiamento:</span>
+                    <span className="text-white font-bold">{formatCurrency(breakdown.financingPerKm)}/km</span>
+                  </div>
+                )}
+                <div className="flex justify-between text-slate-400">
+                  <span>Depreciação estimada:</span>
+                  <span className="text-white font-bold">{formatCurrency(breakdown.depreciationPerKm)}/km</span>
+                </div>
+              </>
+            )}
           </div>
         </div>
 
@@ -654,122 +739,140 @@ export const GoalsPage: React.FC = () => {
                 </div>
               </div>
 
-              <div className="bg-[#070313]/90 p-4 rounded-xl border border-purple-950/30 space-y-4 font-mono">
-                <span className="text-[10px] text-purple-400 block uppercase font-bold">2. Desgastes e Manutenção Preventiva</span>
-                
-                <div className="grid grid-cols-1 sm:grid-cols-2 gap-3 text-[11px]">
-                  <div>
-                    <label className="block text-slate-400 mb-1">Custo do Jogo de Pneus (R$)</label>
-                    <input 
-                      type="number" 
-                      placeholder="EX: 1200" 
-                      value={tireCost}
-                      onChange={(e) => setTireCost(e.target.value)}
-                      className="w-full bg-[#04010a] border border-purple-950/50 rounded-lg p-2.5 text-white"
-                    />
+              {vehicle?.ownership_type === 'rented' ? (
+                <div className="bg-[#070313]/90 p-5 rounded-xl border border-purple-950/30 font-sans space-y-3">
+                  <div className="flex items-center gap-2 text-purple-400 font-bold font-mono text-xs uppercase">
+                    <Info className="w-4 h-4 shrink-0 text-purple-400" />
+                    <span>Configuração de Veículo Alugado</span>
                   </div>
-                  <div>
-                    <label className="block text-slate-400 mb-1">Durabilidade dos Pneus (KM)</label>
-                    <input 
-                      type="number" 
-                      placeholder="EX: 45000" 
-                      value={tireLifespanKm}
-                      onChange={(e) => setTireLifespanKm(e.target.value)}
-                      className="w-full bg-[#04010a] border border-purple-950/50 rounded-lg p-2.5 text-white"
-                    />
-                  </div>
-
-                  <div>
-                    <label className="block text-slate-400 mb-1">Preço Troca de Óleo + Filtro (R$)</label>
-                    <input 
-                      type="number" 
-                      placeholder="EX: 220" 
-                      value={oilCost}
-                      onChange={(e) => setOilCost(e.target.value)}
-                      className="w-full bg-[#04010a] border border-purple-950/50 rounded-lg p-2.5 text-white"
-                    />
-                  </div>
-                  <div>
-                    <label className="block text-slate-400 mb-1">Intervalo de Troca de Óleo (KM)</label>
-                    <input 
-                      type="number" 
-                      placeholder="EX: 10000" 
-                      value={oilIntervalKm}
-                      onChange={(e) => setOilIntervalKm(e.target.value)}
-                      className="w-full bg-[#04010a] border border-purple-950/50 rounded-lg p-2.5 text-white"
-                    />
-                  </div>
-
-                  <div>
-                    <label className="block text-slate-400 mb-1">Manutenção dos Freios (Pastilhas/Discos R$)</label>
-                    <input 
-                      type="number" 
-                      placeholder="EX: 450" 
-                      value={brakeCost}
-                      onChange={(e) => setBrakeCost(e.target.value)}
-                      className="w-full bg-[#04010a] border border-purple-950/50 rounded-lg p-2.5 text-white"
-                    />
-                  </div>
-                  <div>
-                    <label className="block text-slate-400 mb-1">Intervalo de Revisão dos Freios (KM)</label>
-                    <input 
-                      type="number" 
-                      placeholder="EX: 30000" 
-                      value={brakeIntervalKm}
-                      onChange={(e) => setBrakeIntervalKm(e.target.value)}
-                      className="w-full bg-[#04010a] border border-purple-950/50 rounded-lg p-2.5 text-white"
-                    />
-                  </div>
+                  <p className="text-[11px] text-slate-300 leading-relaxed">
+                    Você configurou o seu veículo como <strong>Alugado</strong> no seu perfil. 
+                    Por esse motivo, despesas de desgaste de longo prazo (como <em>pneus, trocas de óleo, pastilhas de freio, IPVA, licenciamento e seguro anual</em>) <strong>não se aplicam a você</strong> e são tratadas automaticamente como R$ 0,00.
+                  </p>
+                  <p className="text-[11px] text-slate-400 leading-relaxed">
+                    Seus custos operacionais de aluguel e franquia/avarias são computados de forma unificada e proporcional no seu painel.
+                  </p>
                 </div>
-              </div>
+              ) : (
+                <>
+                  <div className="bg-[#070313]/90 p-4 rounded-xl border border-purple-950/30 space-y-4 font-mono">
+                    <span className="text-[10px] text-purple-400 block uppercase font-bold">2. Desgastes e Manutenção Preventiva</span>
+                    
+                    <div className="grid grid-cols-1 sm:grid-cols-2 gap-3 text-[11px]">
+                      <div>
+                        <label className="block text-slate-400 mb-1">Custo do Jogo de Pneus (R$)</label>
+                        <input 
+                          type="number" 
+                          placeholder="EX: 1200" 
+                          value={tireCost}
+                          onChange={(e) => setTireCost(e.target.value)}
+                          className="w-full bg-[#04010a] border border-purple-950/50 rounded-lg p-2.5 text-white"
+                        />
+                      </div>
+                      <div>
+                        <label className="block text-slate-400 mb-1">Durabilidade dos Pneus (KM)</label>
+                        <input 
+                          type="number" 
+                          placeholder="EX: 45000" 
+                          value={tireLifespanKm}
+                          onChange={(e) => setTireLifespanKm(e.target.value)}
+                          className="w-full bg-[#04010a] border border-purple-950/50 rounded-lg p-2.5 text-white"
+                        />
+                      </div>
 
-              <div className="bg-[#070313]/90 p-4 rounded-xl border border-purple-950/30 space-y-4 font-mono">
-                <span className="text-[10px] text-purple-400 block uppercase font-bold">3. Custos Fixos, Tributações e Provimentos</span>
-                
-                <div className="grid grid-cols-1 sm:grid-cols-2 gap-3 text-[11px]">
-                  <div>
-                    <label className="block text-slate-400 mb-1">Custo Seguro Anual (R$)</label>
-                    <input 
-                      type="number" 
-                      placeholder="EX: 2800" 
-                      value={insuranceYearly}
-                      onChange={(e) => setInsuranceYearly(e.target.value)}
-                      className="w-full bg-[#04010a] border border-purple-950/50 rounded-lg p-2.5 text-white"
-                    />
-                  </div>
-                  <div>
-                    <label className="block text-slate-400 mb-1">IPVA Anual (R$)</label>
-                    <input 
-                      type="number" 
-                      placeholder="EX: 1800" 
-                      value={ipvaYearly}
-                      onChange={(e) => setIpvaYearly(e.target.value)}
-                      className="w-full bg-[#04010a] border border-purple-950/50 rounded-lg p-2.5 text-white"
-                    />
+                      <div>
+                        <label className="block text-slate-400 mb-1">Preço Troca de Óleo + Filtro (R$)</label>
+                        <input 
+                          type="number" 
+                          placeholder="EX: 220" 
+                          value={oilCost}
+                          onChange={(e) => setOilCost(e.target.value)}
+                          className="w-full bg-[#04010a] border border-purple-950/50 rounded-lg p-2.5 text-white"
+                        />
+                      </div>
+                      <div>
+                        <label className="block text-slate-400 mb-1">Intervalo de Troca de Óleo (KM)</label>
+                        <input 
+                          type="number" 
+                          placeholder="EX: 10000" 
+                          value={oilIntervalKm}
+                          onChange={(e) => setOilIntervalKm(e.target.value)}
+                          className="w-full bg-[#04010a] border border-purple-950/50 rounded-lg p-2.5 text-white"
+                        />
+                      </div>
+
+                      <div>
+                        <label className="block text-slate-400 mb-1">Manutenção dos Freios (Pastilhas/Discos R$)</label>
+                        <input 
+                          type="number" 
+                          placeholder="EX: 450" 
+                          value={brakeCost}
+                          onChange={(e) => setBrakeCost(e.target.value)}
+                          className="w-full bg-[#04010a] border border-purple-950/50 rounded-lg p-2.5 text-white"
+                        />
+                      </div>
+                      <div>
+                        <label className="block text-slate-400 mb-1">Intervalo de Revisão dos Freios (KM)</label>
+                        <input 
+                          type="number" 
+                          placeholder="EX: 30000" 
+                          value={brakeIntervalKm}
+                          onChange={(e) => setBrakeIntervalKm(e.target.value)}
+                          className="w-full bg-[#04010a] border border-purple-950/50 rounded-lg p-2.5 text-white"
+                        />
+                      </div>
+                    </div>
                   </div>
 
-                  <div>
-                    <label className="block text-slate-400 mb-1">Licenciamento Anual (R$)</label>
-                    <input 
-                      type="number" 
-                      placeholder="EX: 155" 
-                      value={licensingYearly}
-                      onChange={(e) => setLicensingYearly(e.target.value)}
-                      className="w-full bg-[#04010a] border border-purple-950/50 rounded-lg p-2.5 text-white"
-                    />
+                  <div className="bg-[#070313]/90 p-4 rounded-xl border border-purple-950/30 space-y-4 font-mono">
+                    <span className="text-[10px] text-purple-400 block uppercase font-bold">3. Custos Fixos, Tributações e Provimentos</span>
+                    
+                    <div className="grid grid-cols-1 sm:grid-cols-2 gap-3 text-[11px]">
+                      <div>
+                        <label className="block text-slate-400 mb-1">Custo Seguro Anual (R$)</label>
+                        <input 
+                          type="number" 
+                          placeholder="EX: 2800" 
+                          value={insuranceYearly}
+                          onChange={(e) => setInsuranceYearly(e.target.value)}
+                          className="w-full bg-[#04010a] border border-purple-950/50 rounded-lg p-2.5 text-white"
+                        />
+                      </div>
+                      <div>
+                        <label className="block text-slate-400 mb-1">IPVA Anual (R$)</label>
+                        <input 
+                          type="number" 
+                          placeholder="EX: 1800" 
+                          value={ipvaYearly}
+                          onChange={(e) => setIpvaYearly(e.target.value)}
+                          className="w-full bg-[#04010a] border border-purple-950/50 rounded-lg p-2.5 text-white"
+                        />
+                      </div>
+
+                      <div>
+                        <label className="block text-slate-400 mb-1">Licenciamento Anual (R$)</label>
+                        <input 
+                          type="number" 
+                          placeholder="EX: 155" 
+                          value={licensingYearly}
+                          onChange={(e) => setLicensingYearly(e.target.value)}
+                          className="w-full bg-[#04010a] border border-purple-950/50 rounded-lg p-2.5 text-white"
+                        />
+                      </div>
+                      <div>
+                        <label className="block text-slate-400 mb-1">Reserva Emergência Mensal (Franquia, etc R$)</label>
+                        <input 
+                          type="number" 
+                          placeholder="EX: 150" 
+                          value={emergencyReserveMonthly}
+                          onChange={(e) => setEmergencyReserveMonthly(e.target.value)}
+                          className="w-full bg-[#04010a] border border-purple-950/50 rounded-lg p-2.5 text-white"
+                        />
+                      </div>
+                    </div>
                   </div>
-                  <div>
-                    <label className="block text-slate-400 mb-1">Reserva Emergência Mensal (Franquia, etc R$)</label>
-                    <input 
-                      type="number" 
-                      placeholder="EX: 150" 
-                      value={emergencyReserveMonthly}
-                      onChange={(e) => setEmergencyReserveMonthly(e.target.value)}
-                      className="w-full bg-[#04010a] border border-purple-950/50 rounded-lg p-2.5 text-white"
-                    />
-                  </div>
-                </div>
-              </div>
+                </>
+              )}
 
               <button
                 type="submit"

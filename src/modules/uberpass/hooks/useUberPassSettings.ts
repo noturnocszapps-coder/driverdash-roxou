@@ -2,6 +2,7 @@ import { useState, useEffect, useCallback, useMemo } from 'react';
 import { UberPassSettings } from '../../../types';
 import { uberPassService } from '../uberpass.service';
 import { STORAGE_PREFIX } from '../../shared/constants';
+import { isDbConnected } from '../../shared/supabase.helpers';
 
 export interface UberPassModalityConfig {
   pass_type: string;
@@ -96,44 +97,46 @@ export function useUberPassSettings(userId: string | undefined, activeVehicleCon
         setConfigs(localConfigs);
 
         // 3. Load from remote DB
-        const remoteSettings = await uberPassService.fetchUberPassSettings(userId);
-        if (remoteSettings) {
-          console.log('[UberPass] Parâmetros carregados do banco de dados remoto:', remoteSettings);
-          
-          let updatedConfigs = { ...localConfigs };
+        if (isDbConnected()) {
+          const remoteSettings = await uberPassService.fetchUberPassSettings(userId);
+          if (remoteSettings) {
+            console.log('[UberPass] Parâmetros carregados do banco de dados remoto:', remoteSettings);
+            
+            let updatedConfigs = { ...localConfigs };
 
-          // If the DB has independent configs nested inside detailed_vehicle_config
-          if (remoteSettings.detailed_vehicle_config?.all_pass_configs) {
-            updatedConfigs = {
-              ...updatedConfigs,
-              ...remoteSettings.detailed_vehicle_config.all_pass_configs,
-            };
-          } else {
-            // Populate loaded single settings into whichever pass type is saved as active
-            const dbType = remoteSettings.pass_type || initialActiveType;
-            updatedConfigs[dbType] = {
-              ...updatedConfigs[dbType],
-              pass_price: Number(remoteSettings.pass_price) || updatedConfigs[dbType].pass_price,
-              earnings_limit: Number(remoteSettings.earnings_limit) || updatedConfigs[dbType].earnings_limit,
-              old_fee_percent: Number(remoteSettings.old_fee_percent) || updatedConfigs[dbType].old_fee_percent,
-              target_profit_per_hour: Number(remoteSettings.target_profit_per_hour) || updatedConfigs[dbType].target_profit_per_hour,
-              target_daily_revenue: Number(remoteSettings.target_daily_revenue) || updatedConfigs[dbType].target_daily_revenue,
-              planned_hours: Number(remoteSettings.planned_hours) || updatedConfigs[dbType].planned_hours,
-              average_ticket: Number(remoteSettings.average_ticket) || updatedConfigs[dbType].average_ticket,
-              estimated_km: Number(remoteSettings.estimated_km) || updatedConfigs[dbType].estimated_km,
-            };
-          }
+            // If the DB has independent configs nested inside detailed_vehicle_config
+            if (remoteSettings.detailed_vehicle_config?.all_pass_configs) {
+              updatedConfigs = {
+                ...updatedConfigs,
+                ...remoteSettings.detailed_vehicle_config.all_pass_configs,
+              };
+            } else {
+              // Populate loaded single settings into whichever pass type is saved as active
+              const dbType = remoteSettings.pass_type || initialActiveType;
+              updatedConfigs[dbType] = {
+                ...updatedConfigs[dbType],
+                pass_price: Number(remoteSettings.pass_price) || updatedConfigs[dbType].pass_price,
+                earnings_limit: Number(remoteSettings.earnings_limit) || updatedConfigs[dbType].earnings_limit,
+                old_fee_percent: Number(remoteSettings.old_fee_percent) || updatedConfigs[dbType].old_fee_percent,
+                target_profit_per_hour: Number(remoteSettings.target_profit_per_hour) || updatedConfigs[dbType].target_profit_per_hour,
+                target_daily_revenue: Number(remoteSettings.target_daily_revenue) || updatedConfigs[dbType].target_daily_revenue,
+                planned_hours: Number(remoteSettings.planned_hours) || updatedConfigs[dbType].planned_hours,
+                average_ticket: Number(remoteSettings.average_ticket) || updatedConfigs[dbType].average_ticket,
+                estimated_km: Number(remoteSettings.estimated_km) || updatedConfigs[dbType].estimated_km,
+              };
+            }
 
-          setConfigs(updatedConfigs);
+            setConfigs(updatedConfigs);
 
-          // Save back to LocalStorage to sync
-          Object.keys(updatedConfigs).forEach((type) => {
-            localStorage.setItem(getLocalStorageKey(type), JSON.stringify(updatedConfigs[type]));
-          });
+            // Save back to LocalStorage to sync
+            Object.keys(updatedConfigs).forEach((type) => {
+              localStorage.setItem(getLocalStorageKey(type), JSON.stringify(updatedConfigs[type]));
+            });
 
-          if (remoteSettings.pass_type && ['24 horas', '72 horas', 'Por ganhos'].includes(remoteSettings.pass_type)) {
-            setActiveType(remoteSettings.pass_type);
-            localStorage.setItem(activeConfigKey, remoteSettings.pass_type);
+            if (remoteSettings.pass_type && ['24 horas', '72 horas', 'Por ganhos'].includes(remoteSettings.pass_type)) {
+              setActiveType(remoteSettings.pass_type);
+              localStorage.setItem(activeConfigKey, remoteSettings.pass_type);
+            }
           }
         }
       } catch (err) {
@@ -152,6 +155,10 @@ export function useUberPassSettings(userId: string | undefined, activeVehicleCon
     currentConfigs: Record<string, UberPassModalityConfig>
   ) => {
     if (!userId) return;
+    if (!isDbConnected()) {
+      console.log('[UberPass] Banco de dados não conectado. Ignorando sincronização remota.');
+      return;
+    }
     setSaving(true);
     try {
       const activeData = currentConfigs[targetActiveType];

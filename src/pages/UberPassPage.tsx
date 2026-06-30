@@ -38,7 +38,8 @@ export const UberPassPage: React.FC = () => {
     uberPassConfigs,
     changeUberPassType,
     updateUberPassField,
-    saveUberPassSettings
+    saveUberPassSettings,
+    dbStatus
   } = useApp();
 
   // Active configuration section/tab ('dashboard' | 'pass' | 'vehicle_form' | 'vehicle_wizard')
@@ -79,22 +80,50 @@ export const UberPassPage: React.FC = () => {
     if (!user) return;
 
     const fetchVehicleConfig = async () => {
+      // Fast responsive local storage loading
+      const localSaved = localStorage.getItem(`uberpass_detailed_vehicle_config_${user.id}`);
+      if (localSaved) {
+        try {
+          const parsed = JSON.parse(localSaved);
+          setVehicleConfig({
+            ...DEFAULT_DETAILED_CONFIG,
+            ...parsed,
+            ownership_type: parsed.ownership_type || vehicle?.ownership_type || 'own'
+          });
+          if (dbStatus !== 'connected') return;
+        } catch (e) {
+          console.warn('Error parsing local vehicle config:', e);
+        }
+      }
+
+      if (dbStatus !== 'connected') {
+        if (!localSaved) {
+          setVehicleConfig({
+            ...DEFAULT_DETAILED_CONFIG,
+            ownership_type: vehicle?.ownership_type || 'own'
+          });
+        }
+        return;
+      }
+
       try {
         const settings = await uberPassService.fetchUberPassSettings(user.id);
         if (settings) {
           if (settings.detailed_vehicle_config && typeof settings.detailed_vehicle_config === 'object') {
+            const remoteConfig = settings.detailed_vehicle_config;
             setVehicleConfig({
               ...DEFAULT_DETAILED_CONFIG,
-              ...settings.detailed_vehicle_config,
-              ownership_type: (settings.detailed_vehicle_config as any).ownership_type || vehicle?.ownership_type || 'own'
+              ...remoteConfig,
+              ownership_type: (remoteConfig as any).ownership_type || vehicle?.ownership_type || 'own'
             });
-          } else {
+            localStorage.setItem(`uberpass_detailed_vehicle_config_${user.id}`, JSON.stringify(remoteConfig));
+          } else if (!localSaved) {
             setVehicleConfig({
               ...DEFAULT_DETAILED_CONFIG,
               ownership_type: vehicle?.ownership_type || 'own'
             });
           }
-        } else {
+        } else if (!localSaved) {
           setVehicleConfig({
             ...DEFAULT_DETAILED_CONFIG,
             ownership_type: vehicle?.ownership_type || 'own'
@@ -106,7 +135,7 @@ export const UberPassPage: React.FC = () => {
     };
 
     fetchVehicleConfig();
-  }, [user, vehicle]);
+  }, [user, vehicle, dbStatus]);
 
   // Save Settings to database
   const handleSaveSettings = async (customConfig?: DetailedVehicleConfig) => {
@@ -122,29 +151,33 @@ export const UberPassPage: React.FC = () => {
       await saveUberPassSettings();
       
       // 2. We can also save detailed_vehicle_config via our Service
-      await uberPassService.upsertUberPassSettings({
-        user_id: user.id,
-        pass_type: passType,
-        pass_price: passPrice,
-        earnings_limit: passType === 'Por ganhos' ? earningsLimit : undefined,
-        old_fee_percent: oldFeePercent,
-        target_profit_per_hour: targetProfitPerHour,
-        target_daily_revenue: targetDailyRevenue,
-        planned_hours: plannedHours,
-        average_ticket: averageTicket,
-        cost_per_km: 0,
-        estimated_km: estimatedKm,
-        detailed_vehicle_config: {
-          ...configToSave,
-          all_pass_configs: uberPassConfigs
-        },
-      });
+      if (dbStatus === 'connected') {
+        await uberPassService.upsertUberPassSettings({
+          user_id: user.id,
+          pass_type: passType,
+          pass_price: passPrice,
+          earnings_limit: passType === 'Por ganhos' ? earningsLimit : undefined,
+          old_fee_percent: oldFeePercent,
+          target_profit_per_hour: targetProfitPerHour,
+          target_daily_revenue: targetDailyRevenue,
+          planned_hours: plannedHours,
+          average_ticket: averageTicket,
+          cost_per_km: 0,
+          estimated_km: estimatedKm,
+          detailed_vehicle_config: {
+            ...configToSave,
+            all_pass_configs: uberPassConfigs
+          },
+        });
+      } else {
+        localStorage.setItem(`uberpass_detailed_vehicle_config_${user.id}`, JSON.stringify(configToSave));
+      }
 
       setSuccessMsg('Configurações e Inteligência de Custos salvas com sucesso!');
       setTimeout(() => setSuccessMsg(null), 4000);
     } catch (err) {
       console.error('Erro ao salvar:', err);
-      setErrorMsg('Não foi possível sincronizar suas configurações com o banco de dados.');
+      setErrorMsg('Não foi possível sincronizar suas configurações.');
     } finally {
       setSaving(false);
     }
