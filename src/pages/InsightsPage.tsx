@@ -1,14 +1,30 @@
-import React, { useState } from 'react';
+import React, { useState, useMemo, useEffect } from 'react';
 import { useApp } from '../context/AppContext';
 import { 
   TrendingUp, BarChart4, AlertTriangle, HelpCircle, Sparkles, Check, 
-  Calendar, Award, Trash, Filter, Info, ShieldAlert, CheckCircle2, ShieldCheck, Clock, Layers, Car, Milestone
+  Calendar, Award, Trash, Filter, Info, ShieldAlert, CheckCircle2, ShieldCheck, 
+  Clock, Layers, Car, Milestone, ArrowUpRight, ArrowDownRight, RefreshCw, 
+  Zap, DollarSign, Percent, Play, Gauge, Eye, HelpCircle as HelpIcon, Flame
 } from 'lucide-react';
 import { motion } from 'motion/react';
-import { SmartAlert } from '../types';
+import { 
+  AreaChart, Area, BarChart, Bar, XAxis, YAxis, CartesianGrid, 
+  Tooltip, ResponsiveContainer, Legend, LineChart, Line, Cell 
+} from 'recharts';
+import { SmartAlert, Earning, Expense, UberPassSettings } from '../types';
+import { uberPassService } from '../modules/uberpass/uberpass.service';
+import {
+  calculateHealthScore,
+  calculateDynamicSimulation,
+  calculateCostsRanking,
+  calculateTimelineData,
+  generatePreventiveAlertsAndInsights,
+  calculatePeriodComparison
+} from '../modules/insights/insights.calculations';
 
 export const InsightsPage: React.FC = () => {
   const { 
+    user,
     earnings, 
     expenses, 
     metrics, 
@@ -16,12 +32,31 @@ export const InsightsPage: React.FC = () => {
     financialGoal, 
     vehicleCostSettings, 
     smartAlerts, 
-    markAlertAsRead 
+    markAlertAsRead,
+    customCosts,
+    dbStatus,
+    uberPassSettings
   } = useApp();
 
+  // Active filters and tab states
   const [activeAlertFilter, setActiveAlertFilter] = useState<'all' | 'unread' | 'read'>('unread');
+  const [timelinePeriod, setTimelinePeriod] = useState<'day' | 'week' | 'month' | 'year'>('week');
+  const [comparisonPeriod, setComparisonPeriod] = useState<'day' | 'week' | 'month' | 'year'>('week');
 
-  // Helpers
+  // --- Dynamic Simulator State (Module 3) ---
+  const [simCarType, setSimCarType] = useState<'combustion' | 'hybrid' | 'electric'>('combustion');
+  const [simRentCost, setSimRentCost] = useState<number>(0);
+  const [simRentFreq, setSimRentFreq] = useState<'weekly' | 'monthly'>('weekly');
+  const [simFuelPrice, setSimFuelPrice] = useState<number>(5.85);
+  const [simKmPerLiter, setSimKmPerLiter] = useState<number>(11.5);
+  const [simUberCommission, setSimUberCommission] = useState<number>(25);
+  const [simMonthlyGoal, setSimMonthlyGoal] = useState<number>(financialGoal?.monthly_goal || 4000);
+
+  // --- STATE FOR DEMO / SIMULATED DATA ---
+  const isDatabaseEmpty = earnings.length === 0 && expenses.length === 0;
+  const [useSimulatedData, setUseSimulatedData] = useState<boolean>(isDatabaseEmpty);
+
+  // Formatting helpers
   const formatCurrency = (val: number) => {
     return new Intl.NumberFormat('pt-BR', {
       style: 'currency',
@@ -29,629 +64,1077 @@ export const InsightsPage: React.FC = () => {
     }).format(val);
   };
 
-  // Helper date parsing ignoring timezone shifting
-  const parseDateSecure = (dateStr: string) => {
-    const parts = dateStr.split('-');
-    if (parts.length !== 3) return new Date(dateStr);
-    return new Date(Number(parts[0]), Number(parts[1]) - 1, Number(parts[2]), 12, 0, 0);
+  const formatPercent = (val: number) => {
+    return `${val.toFixed(1)}%`;
   };
 
-  // ----------------------------------------------------
-  // Part 1: Performance Indicators
-  // ----------------------------------------------------
-  const totalRides = earnings.reduce((sum, e) => sum + Number(e.rides_count), 0);
-  const totalHours = earnings.reduce((sum, e) => sum + Number(e.online_minutes), 0) / 60;
-  const totalKm = metrics.totalKm;
-  const totalGross = metrics.totalRevenue;
-  const netProfit = metrics.netProfit;
-
-  // 1. Ticket Médio (overall and comparison)
-  const ticketMedio = totalRides > 0 ? totalGross / totalRides : 0;
-  
-  // Previous Period: split current earnings in halves to mock high-fidelity period comparisons in a static or live DB
-  const halfCount = Math.floor(earnings.length / 2);
-  const currentPeriodEarnings = earnings.slice(0, halfCount || 1);
-  const previousPeriodEarnings = earnings.slice(halfCount);
-
-  const prevPeriodGross = previousPeriodEarnings.reduce((sum, e) => sum + Number(e.gross_amount), 0);
-  const prevPeriodRides = previousPeriodEarnings.reduce((sum, e) => sum + Number(e.rides_count), 0);
-  const prevTicketMedio = prevPeriodRides > 0 ? prevPeriodGross / prevPeriodRides : 0;
-  const ticketChangePercent = prevTicketMedio > 0 ? ((ticketMedio - prevTicketMedio) / prevTicketMedio) * 100 : 0;
-
-  // 2. Ganho Médio por Hora
-  const ganhoPorHora = totalHours > 0 ? totalGross / totalHours : 0;
-
-  // 3. Ganho Médio por KM
-  const ganhoPorKm = totalKm > 0 ? totalGross / totalKm : 0;
-
-  // 4. Lucro Médio por Corrida
-  const lucroPorCorrida = totalRides > 0 ? netProfit / totalRides : 0;
-
-  // 5. Lucro Médio por Hora
-  const lucroPorHora = totalHours > 0 ? netProfit / totalHours : 0;
-
-  // 6. Lucro Médio por KM
-  const lucroPorKm = totalKm > 0 ? netProfit / totalKm : 0;
-
-  // ----------------------------------------------------
-  // Part 2: Best & Worst performance
-  // ----------------------------------------------------
-  // Days of week calculations
-  const daySums: Record<number, number> = {};
-  const dayCounts: Record<number, Set<string>> = {};
-  earnings.forEach(e => {
-    const d = parseDateSecure(e.date);
-    const day = d.getDay();
-    daySums[day] = (daySums[day] || 0) + Number(e.gross_amount);
-    if (!dayCounts[day]) dayCounts[day] = new Set<string>();
-    dayCounts[day].add(e.date);
-  });
-
-  const namesOfDays = ['Domingo', 'Segunda-feira', 'Terça-feira', 'Quarta-feira', 'Quinta-feira', 'Sexta-feira', 'Sábado-feira'];
-  let bestDayIdx = -1;
-  let maxDayAvg = -1;
-  let worstDayIdx = -1;
-  let minDayAvg = Infinity;
-
-  Object.keys(daySums).forEach(k => {
-    const idx = Number(k);
-    const avg = daySums[idx] / (dayCounts[idx]?.size || 1);
-    if (avg > maxDayAvg) {
-      maxDayAvg = avg;
-      bestDayIdx = idx;
-    }
-    if (avg < minDayAvg) {
-      minDayAvg = avg;
-      worstDayIdx = idx;
-    }
-  });
-
-  const bestDayName = bestDayIdx !== -1 ? namesOfDays[bestDayIdx] : 'Insira dados';
-  const worstDayName = worstDayIdx !== -1 ? namesOfDays[worstDayIdx] : 'Insira dados';
-
-  // Platform calculations
-  const platformSums: Record<string, number> = {};
-  const platformCounts: Record<string, number> = {};
-  earnings.forEach(e => {
-    platformSums[e.platform] = (platformSums[e.platform] || 0) + Number(e.gross_amount);
-    platformCounts[e.platform] = (platformCounts[e.platform] || 0) + 1;
-  });
-
-  let bestPlat = 'Nenhuma';
-  let worstPlat = 'Nenhuma';
-  let maxPlatVal = -1;
-  let minPlatVal = Infinity;
-
-  Object.keys(platformSums).forEach(k => {
-    const avg = platformSums[k] / (platformCounts[k] || 1);
-    if (avg > maxPlatVal) {
-      maxPlatVal = avg;
-      bestPlat = k;
-    }
-    if (avg < minPlatVal) {
-      minPlatVal = avg;
-      worstPlat = k;
-    }
-  });
-
-  const formatPlatform = (p: string) => {
-    if (p === 'uber') return 'Uber';
-    if (p === '99') return '99';
-    if (p === 'indriver') return 'InDrive';
-    if (p === 'private') return 'Particular';
-    return p.charAt(0).toUpperCase() + p.slice(1);
+  // Safe parsing helper
+  const safeNumber = (v: any) => {
+    const n = Number(v);
+    return isNaN(n) ? 0 : n;
   };
 
-  const bestPlatDisplay = bestPlat !== 'Nenhuma' ? formatPlatform(bestPlat) : 'Insira dados';
-  const worstPlatDisplay = worstPlat !== 'Nenhuma' ? formatPlatform(worstPlat) : 'Insira dados';
-
-  // Hours Slot calculations: inspect Notes for morning/afternoon/night
-  // Defaulting slot metrics
-  let morningGross = 0, morningCount = 0;
-  let afternoonGross = 0, afternoonCount = 0;
-  let eveningGross = 0, eveningCount = 0;
-  let dawnGross = 0, dawnCount = 0;
-
-  earnings.forEach(e => {
-    const note = (e.notes || '').toLowerCase();
-    const gr = Number(e.gross_amount);
-    if (note.includes('manha') || note.includes('manhã') || note.includes('morning')) {
-      morningGross += gr;
-      morningCount++;
-    } else if (note.includes('tarde') || note.includes('afternoon')) {
-      afternoonGross += gr;
-      afternoonCount++;
-    } else if (note.includes('noite') || note.includes('evening') || note.includes('night')) {
-      eveningGross += gr;
-      eveningCount++;
-    } else if (note.includes('madruga') || note.includes('dawn')) {
-      dawnGross += gr;
-      dawnCount++;
-    } else {
-      // distribute default based on general driving behavior
-      eveningGross += gr * 0.4;
-      morningGross += gr * 0.3;
-      afternoonGross += gr * 0.2;
-      dawnGross += gr * 0.1;
-      eveningCount += 0.4;
-      morningCount += 0.3;
-      afternoonCount += 0.2;
-      dawnCount += 0.1;
+  // Synchronize simulator settings with real vehicle profile and Uber Pass settings
+  useEffect(() => {
+    if (uberPassSettings?.old_fee_percent) {
+      setSimUberCommission(uberPassSettings.old_fee_percent);
     }
-  });
+  }, [uberPassSettings]);
 
-  const slots = [
-    { name: 'Manhã (06h - 12h)', avg: morningCount > 0 ? morningGross / morningCount : 0 },
-    { name: 'Tarde (12h - 18h)', avg: afternoonCount > 0 ? afternoonGross / afternoonCount : 0 },
-    { name: 'Noite (18h - 00h)', avg: eveningCount > 0 ? eveningGross / eveningCount : 0 },
-    { name: 'Madrugada (00h - 06h)', avg: dawnCount > 0 ? dawnGross / dawnCount : 0 }
-  ];
+  // Synchronize simulator settings with real vehicle profile if available
+  useEffect(() => {
+    if (vehicle) {
+      if (vehicle.fuel_type === 'electric') {
+        setSimCarType('electric');
+        setSimKmPerLiter(16.5);
+        setSimFuelPrice(1.10);
+      } else if (vehicle.fuel_type === 'hybrid') {
+        setSimCarType('hybrid');
+        setSimKmPerLiter(16.5);
+        setSimFuelPrice(5.85);
+      } else {
+        setSimCarType('combustion');
+        setSimKmPerLiter(vehicle.km_per_liter || 11.5);
+        setSimFuelPrice(5.85);
+      }
 
-  slots.sort((a, b) => b.avg - a.avg);
-  const bestHourDisplay = slots[0].avg > 0 ? slots[0].name : '18h às 22h (Estimado)';
-  const worstHourDisplay = slots[slots.length - 1].avg > 0 ? slots[slots.length - 1].name : '11h às 14h (Estimado)';
+      if (vehicle.ownership_type === 'rented' && vehicle.rental_amount) {
+        setSimRentCost(vehicle.rental_amount);
+        setSimRentFreq(vehicle.rental_period || 'weekly');
+      } else if (vehicle.ownership_type === 'financed' && vehicleCostSettings?.financing_monthly) {
+        setSimRentCost(vehicleCostSettings.financing_monthly);
+        setSimRentFreq('monthly');
+      } else {
+        setSimRentCost(0);
+      }
+    }
+  }, [vehicle, vehicleCostSettings]);
 
-  // ----------------------------------------------------
-  // Part 3: Locadora Franchise Management & Predictions
-  // ----------------------------------------------------
-  const today = new Date();
-  const dayOfWeek = today.getDay();
-  const diffWeek = today.getDate() - dayOfWeek + (dayOfWeek === 0 ? -6 : 1);
-  const mondayOfThisWeek = new Date(today.getFullYear(), today.getMonth(), diffWeek);
-  mondayOfThisWeek.setHours(0,0,0,0);
+  // Keep simulator's monthly goal sync with database changes
+  useEffect(() => {
+    if (financialGoal?.monthly_goal) {
+      setSimMonthlyGoal(financialGoal.monthly_goal);
+    }
+  }, [financialGoal]);
 
-  const thisWeekEarnings = earnings.filter(e => parseDateSecure(e.date) >= mondayOfThisWeek);
-  const kmUtilizadoSemanal = thisWeekEarnings.reduce((sum, e) => sum + Number(e.total_km), 0);
+  // --- BASE STATISTICS ACCUMULATION & FALLBACKS ---
+  const realRides = useMemo(() => earnings.reduce((sum, e) => sum + safeNumber(e.rides_count), 0), [earnings]);
+  const realHours = useMemo(() => earnings.reduce((sum, e) => sum + safeNumber(e.online_minutes), 0) / 60, [earnings]);
+  const realKm = useMemo(() => metrics.totalKm || earnings.reduce((sum, e) => sum + safeNumber(e.total_km), 0), [metrics.totalKm, earnings]);
+  const realGross = useMemo(() => metrics.totalRevenue || earnings.reduce((sum, e) => sum + safeNumber(e.gross_amount), 0), [metrics.totalRevenue, earnings]);
+  const realExpenses = useMemo(() => metrics.totalExpenses || expenses.reduce((sum, exp) => sum + safeNumber(exp.amount), 0), [metrics.totalExpenses, expenses]);
+  const realEmptyKm = useMemo(() => earnings.reduce((sum, e) => sum + safeNumber(e.empty_km || 0), 0), [earnings]);
+  const realWaitingMinutes = useMemo(() => earnings.reduce((sum, e) => sum + safeNumber(e.waiting_minutes), 0), [earnings]);
 
-  const firstDayOfMonth = new Date(today.getFullYear(), today.getMonth(), 1);
-  firstDayOfMonth.setHours(0,0,0,0);
-  const thisMonthEarnings = earnings.filter(e => parseDateSecure(e.date) >= firstDayOfMonth);
-  const kmUtilizadoMensal = thisMonthEarnings.reduce((sum, e) => sum + Number(e.total_km), 0);
+  // Base constants selection
+  const baselineGross = useMemo(() => useSimulatedData ? 4850 : realGross, [useSimulatedData, realGross]);
+  const baselineExpenses = useMemo(() => useSimulatedData ? 1720 : realExpenses, [useSimulatedData, realExpenses]);
+  const baselineNet = useMemo(() => baselineGross - baselineExpenses, [baselineGross, baselineExpenses]);
+  const baselineKm = useMemo(() => useSimulatedData ? 2200 : realKm, [useSimulatedData, realKm]);
+  const baselineHours = useMemo(() => useSimulatedData ? 130 : realHours, [useSimulatedData, realHours]);
+  const baselineRides = useMemo(() => useSimulatedData ? 210 : realRides, [useSimulatedData, realRides]);
+  const baselineEmptyKm = useMemo(() => useSimulatedData ? 450 : realEmptyKm, [useSimulatedData, realEmptyKm]);
+  const baselineWaitingMinutes = useMemo(() => useSimulatedData ? 520 : realWaitingMinutes, [useSimulatedData, realWaitingMinutes]);
+  const baselineGoal = useMemo(() => financialGoal?.monthly_goal || 3800, [financialGoal]);
 
-  const weeklyKmLimit = vehicle?.weekly_km_limit || 0;
-  const monthlyKmLimit = vehicle?.monthly_km_limit || 0;
+  // --- MÓDULO 1: HEALTH SCORE ENGINE ---
+  const healthScoreReport = useMemo(() => {
+    return calculateHealthScore(
+      baselineNet,
+      baselineGross,
+      baselineExpenses,
+      baselineKm,
+      baselineHours,
+      baselineRides,
+      baselineEmptyKm,
+      baselineWaitingMinutes,
+      baselineGoal
+    );
+  }, [baselineNet, baselineGross, baselineExpenses, baselineKm, baselineHours, baselineRides, baselineEmptyKm, baselineWaitingMinutes, baselineGoal]);
 
-  const restanteSemanal = Math.max(0, weeklyKmLimit - kmUtilizadoSemanal);
-  const restanteMensal = Math.max(0, monthlyKmLimit - kmUtilizadoMensal);
+  // --- MÓDULO 3: SIMULADOR FINANCEIRO INTERATIVO ---
+  const simulationResult = useMemo(() => {
+    return calculateDynamicSimulation(
+      baselineGross,
+      baselineExpenses,
+      baselineKm,
+      baselineHours,
+      baselineNet,
+      simCarType,
+      simRentCost,
+      simRentFreq,
+      simFuelPrice,
+      simKmPerLiter,
+      simUberCommission,
+      simMonthlyGoal
+    );
+  }, [baselineGross, baselineExpenses, baselineKm, baselineHours, baselineNet, simCarType, simRentCost, simRentFreq, simFuelPrice, simKmPerLiter, simUberCommission, simMonthlyGoal]);
 
-  const percentUtilizadoSemanal = weeklyKmLimit > 0 ? (kmUtilizadoSemanal / weeklyKmLimit) * 100 : 0;
-  const percentUtilizadoMensal = monthlyKmLimit > 0 ? (kmUtilizadoMensal / monthlyKmLimit) * 100 : 0;
+  // --- MÓDULO 4: RANKING DE CUSTOS ---
+  const costsRankingData = useMemo(() => {
+    return calculateCostsRanking(
+      expenses,
+      customCosts || [],
+      baselineExpenses,
+      simCarType,
+      vehicle,
+      baselineKm
+    );
+  }, [expenses, customCosts, baselineExpenses, simCarType, vehicle, baselineKm]);
 
-  // Predictions (previsão)
-  const elapsedDaysWeek = Math.max(1, today.getDay() === 0 ? 7 : today.getDay());
-  const previsaoSemanaKm = (kmUtilizadoSemanal / elapsedDaysWeek) * 7;
+  // --- MÓDULO 5: LINHA DO TEMPO OPERACIONAL ---
+  const timelineData = useMemo(() => {
+    return calculateTimelineData(
+      timelinePeriod,
+      earnings,
+      expenses,
+      customCosts || [],
+      baselineNet,
+      baselineExpenses,
+      baselineKm,
+      baselineHours,
+      healthScoreReport.roi
+    );
+  }, [timelinePeriod, earnings, expenses, customCosts, baselineNet, baselineExpenses, baselineKm, baselineHours, healthScoreReport.roi]);
 
-  const elapsedDaysMonth = Math.max(1, today.getDate());
-  const daysInCurrentMonth = new Date(today.getFullYear(), today.getMonth() + 1, 0).getDate();
-  const previsaoMesKm = (kmUtilizadoMensal / elapsedDaysMonth) * daysInCurrentMonth;
+  // --- MÓDULOS 2 & 6 & 9: IA COPILOTO, ALERTA PREVENTIVO & RECOMENDAÇÕES ---
+  const preventiveAlertsAndInsights = useMemo(() => {
+    return generatePreventiveAlertsAndInsights(
+      vehicle,
+      simKmPerLiter,
+      baselineExpenses,
+      baselineKm,
+      baselineEmptyKm,
+      baselineHours,
+      baselineWaitingMinutes,
+      baselineNet,
+      baselineRides,
+      baselineGross,
+      uberPassSettings
+    );
+  }, [vehicle, simKmPerLiter, baselineExpenses, baselineKm, baselineEmptyKm, baselineHours, baselineWaitingMinutes, baselineNet, baselineRides, baselineGross, uberPassSettings]);
 
-  const weeklyEstouro = weeklyKmLimit > 0 && previsaoSemanaKm > weeklyKmLimit;
-  const monthlyEstouro = monthlyKmLimit > 0 && previsaoMesKm > monthlyKmLimit;
+  // --- MÓDULO 7: PERIOD COMPARISONS ---
+  const comparisonReport = useMemo(() => {
+    return calculatePeriodComparison(
+      comparisonPeriod,
+      baselineNet,
+      baselineGross,
+      baselineExpenses,
+      baselineKm
+    );
+  }, [comparisonPeriod, baselineNet, baselineGross, baselineExpenses, baselineKm]);
 
-  // Filtered Smart Alerts
-  const filteredAlerts = smartAlerts.filter(a => {
-    if (activeAlertFilter === 'unread') return !a.is_read;
-    if (activeAlertFilter === 'read') return a.is_read;
-    return true;
-  });
+  // --- ALERTS COMPILATION ---
+  const allAlerts = useMemo(() => {
+    const databaseAlerts = smartAlerts || [];
+    
+    // Inject dynamic analytical warnings from rule engine
+    const systemAlerts = preventiveAlertsAndInsights.alerts.map((al, idx) => ({
+      id: `sys-alert-${idx}`,
+      title: al.title,
+      description: al.description,
+      severity: al.severity,
+      type: al.type,
+      is_read: false,
+      created_at: new Date().toISOString(),
+      isSystem: true
+    }));
+
+    return [...systemAlerts, ...databaseAlerts];
+  }, [smartAlerts, preventiveAlertsAndInsights.alerts]);
+
+  const filteredAlerts = useMemo(() => {
+    if (activeAlertFilter === 'unread') {
+      return allAlerts.filter(a => !a.is_read);
+    }
+    if (activeAlertFilter === 'read') {
+      return allAlerts.filter(a => a.is_read);
+    }
+    return allAlerts;
+  }, [allAlerts, activeAlertFilter]);
+
+  // Render Onboarding Empty State if database is completely empty and demo mode is turned off
+  if (isDatabaseEmpty && !useSimulatedData) {
+    return (
+      <div className="flex items-center justify-center min-h-[70vh] px-4 py-8">
+        <div className="max-w-md w-full text-center p-10 bg-[#0b0720]/85 border border-purple-950/40 rounded-3xl space-y-6 shadow-2xl">
+          <div className="w-16 h-16 bg-purple-950/40 border border-purple-500/20 rounded-2xl flex items-center justify-center mx-auto shadow-inner">
+            <Gauge className="w-8 h-8 text-purple-400" />
+          </div>
+          <div className="space-y-2">
+            <h3 className="text-xl font-bold text-white tracking-wide">Seu Histórico Está Vazio</h3>
+            <p className="text-xs text-purple-300/60 leading-relaxed font-sans">
+              Para ativar as análises de saúde financeira, monitor de riscos operacionais e projeções do Painel Financeiro, registre seus ganhos e despesas no Centro Financeiro.
+            </p>
+          </div>
+          <div className="flex flex-col gap-3 pt-2">
+            <button 
+              onClick={() => setUseSimulatedData(true)}
+              className="w-full py-3 bg-gradient-to-r from-purple-600 to-indigo-600 hover:from-purple-500 hover:to-indigo-500 text-white font-bold rounded-xl shadow-lg shadow-purple-500/10 cursor-pointer flex items-center justify-center gap-2 font-sans text-xs transition-all"
+            >
+              <Sparkles className="w-4 h-4 shrink-0" />
+              Explorar com Dados Simulados
+            </button>
+            <p className="text-[10px] text-slate-500 font-mono uppercase tracking-wider">
+              Modo de Simulação / Dados de Exemplo
+            </p>
+          </div>
+        </div>
+      </div>
+    );
+  }
 
   return (
-    <div className="space-y-6">
+    <div className="space-y-6 pb-12">
       
-      {/* Title Bar layout context */}
+      {/* Title Header with status bar */}
       <div className="border-b border-purple-950/20 pb-4 flex flex-col md:flex-row md:items-center md:justify-between gap-4">
         <div>
-          <h2 className="text-xl font-bold text-white tracking-wide flex items-center gap-2">
+          <div className="flex items-center gap-2">
             <Sparkles className="w-5 h-5 text-purple-400" />
-            <span>Inteligência Operacional</span>
-          </h2>
-          <p className="text-xs text-purple-300/50 mt-1">Sua centralizada de controle analítico, gestão de franquia alugada, eficiência por litro e tomada de decisão.</p>
+            <h2 className="text-xl font-bold text-white tracking-wide">
+              Copiloto IA & Consultoria Financeira
+            </h2>
+            <span className="text-[9px] font-mono font-bold bg-purple-950 text-purple-400 border border-purple-800/30 px-2 py-0.5 rounded-full uppercase">
+              Premium Ativo
+            </span>
+          </div>
+          <p className="text-xs text-purple-300/50 mt-1">
+            Análises preditivas, saúde operacional, simulador em tempo real e monitor de riscos do motorista.
+          </p>
         </div>
+
+        {/* Dynamic / Simulated Mode Switcher */}
+        {!isDatabaseEmpty && (
+          <div className="flex items-center gap-2 bg-purple-950/10 border border-purple-900/30 p-1.5 rounded-2xl">
+            <span className="text-[9px] text-slate-400 font-mono font-bold uppercase pl-2">Fonte de Dados:</span>
+            <button 
+              onClick={() => setUseSimulatedData(!useSimulatedData)}
+              className={`px-3 py-1.5 rounded-xl border font-sans text-[11px] font-bold cursor-pointer transition-all ${
+                useSimulatedData 
+                  ? 'bg-purple-600 text-white border-purple-500 shadow-md shadow-purple-500/10' 
+                  : 'bg-slate-950/45 text-slate-400 border-transparent'
+              }`}
+            >
+              {useSimulatedData ? 'Simulação' : 'Histórico Real'}
+            </button>
+          </div>
+        )}
       </div>
 
-      {/* SECTION 1: PERFORMANCE ANALYTICS */}
-      <div className="space-y-4">
-        <h3 className="text-xs font-bold text-purple-400 uppercase tracking-widest font-mono flex items-center gap-1.5">
-          <TrendingUp className="w-4.5 h-4.5 text-purple-500" />
-          <span>Análise de Performance Operacional</span>
-        </h3>
-
-        <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-5">
-          
-          {/* 1. Ticket Médio */}
-          <div className="p-5 bg-[#0b0720]/80 border border-purple-950/40 rounded-2xl relative overflow-hidden flex flex-col justify-between">
-            <div className="absolute top-0 right-0 w-24 h-24 bg-gradient-to-bl from-purple-500/5 to-transparent rounded-full pointer-events-none" />
+      {/* ALERT/BANNER FOR DEMO MODE ACTIVE */}
+      {useSimulatedData && (
+        <div className="p-4 bg-gradient-to-r from-[#0f0a2e]/60 via-[#160f42]/60 to-[#0f0a2e]/60 border border-purple-500/25 rounded-3xl flex flex-col sm:flex-row items-center justify-between gap-4 shadow-xl">
+          <div className="flex items-center gap-3">
+            <div className="w-10 h-10 bg-purple-900/30 border border-purple-500/20 rounded-xl flex items-center justify-center shrink-0">
+              <Flame className="w-5 h-5 text-purple-400 animate-pulse" />
+            </div>
             <div>
-              <span className="text-[10px] text-slate-400 font-bold uppercase tracking-wider font-mono">Ticket Médio</span>
-              <h4 className="text-2xl font-black text-white font-mono mt-1">{formatCurrency(ticketMedio)}</h4>
-            </div>
-            <div className="border-t border-purple-950/20 pt-3 mt-4 flex items-center justify-between text-[11px] font-mono">
-              <span className="text-slate-500">Corrida Anterior</span>
-              {ticketChangePercent !== 0 ? (
-                <span className={ticketChangePercent >= 0 ? 'text-emerald-400 font-medium' : 'text-rose-400 font-medium'}>
-                  {ticketChangePercent >= 0 ? '▲' : '▼'} {Math.abs(ticketChangePercent).toFixed(1)}%
-                </span>
-              ) : (
-                <span className="text-slate-400">R$ --</span>
-              )}
+              <h4 className="text-sm font-bold text-white flex items-center gap-1.5">
+                Simulação Ativa
+                <span className="text-[8px] bg-purple-500 text-white font-mono font-black uppercase tracking-wider px-1.5 py-0.5 rounded">SIMULADO</span>
+              </h4>
+              <p className="text-[11px] text-purple-300/60 font-sans mt-0.5">
+                Exibindo dados operacionais fictícios e calibrados devido ao seu histórico real estar limpo ou para experimentação rápida.
+              </p>
             </div>
           </div>
-
-          {/* 2. Ganho Médio por Hora */}
-          <div className="p-5 bg-[#0b0720]/80 border border-purple-950/40 rounded-2xl relative overflow-hidden flex flex-col justify-between">
-            <div className="absolute top-0 right-0 w-24 h-24 bg-gradient-to-bl from-indigo-500/5 to-transparent rounded-full pointer-events-none" />
-            <div>
-              <span className="text-[10px] text-slate-400 font-bold uppercase tracking-wider font-mono">Ganho Médio / Hora Online</span>
-              <h4 className="text-2xl font-black text-white font-mono mt-1">{formatCurrency(ganhoPorHora)}</h4>
-            </div>
-            <div className="border-t border-purple-950/20 pt-3 mt-4 flex items-center justify-between text-[11px] font-mono">
-              <span className="text-slate-500">Capacidade de Faturamento</span>
-              <span className="text-indigo-300">Tempo real</span>
-            </div>
-          </div>
-
-          {/* 3. Ganho Médio por KM */}
-          <div className="p-5 bg-[#0b0720]/80 border border-purple-950/40 rounded-2xl relative overflow-hidden flex flex-col justify-between">
-            <div className="absolute top-0 right-0 w-24 h-24 bg-gradient-to-bl from-pink-500/5 to-transparent rounded-full pointer-events-none" />
-            <div>
-              <span className="text-[10px] text-slate-400 font-bold uppercase tracking-wider font-mono">Ganho Médio / KM Total</span>
-              <h4 className="text-2xl font-black text-white font-mono mt-1">{formatCurrency(ganhoPorKm)}</h4>
-            </div>
-            <div className="border-t border-purple-950/20 pt-3 mt-4 flex items-center justify-between text-[11px] font-mono">
-              <span className="text-slate-500">Faturamento por Odômetro</span>
-              <span className="text-pink-300">Rendimento Bruto</span>
-            </div>
-          </div>
-
-          {/* 4. Lucro Médio por Corrida */}
-          <div className="p-5 bg-[#0b0720]/80 border border-purple-950/40 rounded-2xl relative overflow-hidden flex flex-col justify-between">
-            <div className="absolute top-0 right-0 w-24 h-24 bg-gradient-to-bl from-emerald-500/5 to-transparent rounded-full pointer-events-none" />
-            <div>
-              <span className="text-[10px] text-slate-400 font-bold uppercase tracking-wider font-mono">Lucro Líquido / Corrida</span>
-              <h4 className="text-2xl font-black text-emerald-400 font-mono mt-1">{formatCurrency(lucroPorCorrida)}</h4>
-            </div>
-            <div className="border-t border-purple-950/20 pt-3 mt-4 flex items-center justify-between text-[11px] font-mono">
-              <span className="text-slate-500">Líquido Descontadas Amortizações</span>
-              <span className="text-emerald-400">Eficiência Limpa</span>
-            </div>
-          </div>
-
-          {/* 5. Lucro Médio por Hora */}
-          <div className="p-5 bg-[#0b0720]/80 border border-purple-950/40 rounded-2xl relative overflow-hidden flex flex-col justify-between">
-            <div className="absolute top-0 right-0 w-24 h-24 bg-gradient-to-bl from-purple-500/5 to-transparent rounded-full pointer-events-none" />
-            <div>
-              <span className="text-[10px] text-slate-400 font-bold uppercase tracking-wider font-mono">Lucro Líquido / Hora Online</span>
-              <h4 className="text-2xl font-black text-emerald-400 font-mono mt-1">{formatCurrency(lucroPorHora)}</h4>
-            </div>
-            <div className="border-t border-purple-950/20 pt-3 mt-4 flex items-center justify-between text-[11px] font-mono">
-              <span className="text-slate-500">Métrica Real de Rentabilidade</span>
-              <span className="text-purple-300">Lucro Limpo</span>
-            </div>
-          </div>
-
-          {/* 6. Lucro Médio por KM */}
-          <div className="p-5 bg-[#0b0720]/80 border border-purple-950/40 rounded-2xl relative overflow-hidden flex flex-col justify-between">
-            <div className="absolute top-0 right-0 w-24 h-24 bg-gradient-to-bl from-indigo-500/5 to-transparent rounded-full pointer-events-none" />
-            <div>
-              <span className="text-[10px] text-slate-400 font-bold uppercase tracking-wider font-mono">Lucro Líquido / KM Total</span>
-              <h4 className="text-2xl font-black text-emerald-400 font-mono mt-1">{formatCurrency(lucroPorKm)}</h4>
-            </div>
-            <div className="border-t border-purple-950/20 pt-3 mt-4 flex items-center justify-between text-[11px] font-mono">
-              <span className="text-slate-500">Sobra Amortizada por KM Rodado</span>
-              <span className="text-indigo-400">Suficiência Real</span>
-            </div>
-          </div>
-
-        </div>
-      </div>
-
-      {/* SECTION 2: BEST AND WORST MARGINAL PERFORMANCE */}
-      <div className="space-y-4">
-        <h3 className="text-xs font-bold text-slate-400 uppercase tracking-widest font-mono flex items-center gap-1.5">
-          <Calendar className="w-4.5 h-4.5 text-purple-400" />
-          <span>Extremos de Desempenho (Histórico Consolidado)</span>
-        </h3>
-
-        <div className="grid grid-cols-1 md:grid-cols-2 gap-6 font-mono text-xs">
-          
-          {/* BEST COLUMN */}
-          <div className="bg-emerald-950/15 border border-emerald-950/40 rounded-2xl p-6 space-y-4 shadow-lg">
-            <div className="flex items-center gap-2 border-b border-emerald-900/30 pb-3">
-              <Award className="w-5 h-5 text-emerald-400" />
-              <h4 className="text-sm font-bold text-white uppercase font-sans">Destaques de Maior Performance</h4>
-            </div>
-
-            <div className="space-y-3">
-              <div className="flex justify-between items-center p-3.5 bg-emerald-950/30 border border-emerald-900/20 rounded-xl">
-                <div>
-                  <p className="text-[10px] uppercase text-emerald-400 font-bold">🏆 Melhor Dia da Semana</p>
-                  <p className="text-lg font-black text-white mt-1">{bestDayName}</p>
-                </div>
-                {maxDayAvg > 0 && <span className="text-xs bg-emerald-950 text-emerald-300 px-2.5 py-1 rounded-lg border border-emerald-900/30 font-bold">{formatCurrency(maxDayAvg)} (méd)</span>}
-              </div>
-
-              <div className="flex justify-between items-center p-3.5 bg-emerald-950/30 border border-emerald-900/20 rounded-xl">
-                <div>
-                  <p className="text-[10px] uppercase text-emerald-400 font-bold">🏆 Melhor Plataforma Ativa</p>
-                  <p className="text-lg font-black text-white mt-1">{bestPlatDisplay}</p>
-                </div>
-                {maxPlatVal > 0 && <span className="text-xs bg-emerald-950 text-emerald-300 px-2.5 py-1 rounded-lg border border-emerald-900/30 font-bold">{formatCurrency(maxPlatVal)} (méd)</span>}
-              </div>
-
-              <div className="flex justify-between items-center p-3.5 bg-emerald-950/30 border border-emerald-900/20 rounded-xl">
-                <div>
-                  <p className="text-[10px] uppercase text-emerald-400 font-bold">🏆 Melhor Período / Horário</p>
-                  <p className="text-base font-black text-white mt-1">{bestHourDisplay}</p>
-                </div>
-              </div>
-            </div>
-          </div>
-
-          {/* WORST COLUMN */}
-          <div className="bg-rose-950/10 border border-rose-950/40 rounded-2xl p-6 space-y-4 shadow-lg">
-            <div className="flex items-center gap-2 border-b border-rose-900/30 pb-3">
-              <AlertTriangle className="w-5 h-5 text-rose-400" />
-              <h4 className="text-sm font-bold text-white uppercase font-sans">Gargalos e Menores Índices</h4>
-            </div>
-
-            <div className="space-y-3">
-              <div className="flex justify-between items-center p-3.5 bg-rose-950/30 border border-rose-900/20 rounded-xl">
-                <div>
-                  <p className="text-[10px] uppercase text-rose-400 font-bold">⚠️ Pior Dia da Semana</p>
-                  <p className="text-lg font-black text-white mt-1">{worstDayName}</p>
-                </div>
-                {minDayAvg !== Infinity && minDayAvg > 0 && <span className="text-xs bg-rose-950 text-rose-300 px-2.5 py-1 rounded-lg border border-rose-900/30 font-bold">{formatCurrency(minDayAvg)} (méd)</span>}
-              </div>
-
-              <div className="flex justify-between items-center p-3.5 bg-rose-950/30 border border-rose-900/20 rounded-xl">
-                <div>
-                  <p className="text-[10px] uppercase text-rose-400 font-bold">⚠️ Pior Plataforma Ativa</p>
-                  <p className="text-lg font-black text-white mt-1">{worstPlatDisplay}</p>
-                </div>
-                {minPlatVal !== Infinity && minPlatVal > 0 && <span className="text-xs bg-rose-950 text-rose-300 px-2.5 py-1 rounded-lg border border-rose-900/30 font-bold">{formatCurrency(minPlatVal)} (méd)</span>}
-              </div>
-
-              <div className="flex justify-between items-center p-3.5 bg-rose-950/30 border border-rose-900/20 rounded-xl">
-                <div>
-                  <p className="text-[10px] uppercase text-rose-400 font-bold">⚠️ Pior Período / Horário</p>
-                  <p className="text-base font-black text-white mt-1">{worstHourDisplay}</p>
-                </div>
-              </div>
-            </div>
-          </div>
-
-        </div>
-      </div>
-
-      {/* SECTION 3: ALERT CENTER */}
-      <div className="grid grid-cols-1 lg:grid-cols-3 gap-6">
-        
-        {/* SMART ALERTS LOGGER PANEL */}
-        <div className="lg:col-span-2 bg-[#0b0720]/80 border border-purple-950/40 rounded-2xl p-6 space-y-4">
-          <div className="flex flex-col sm:flex-row sm:items-center justify-between border-b border-purple-950/20 pb-4 gap-2">
-            <div className="flex items-center gap-2">
-              <AlertTriangle className="w-5 h-5 text-purple-400" />
-              <h4 className="text-sm font-bold text-white uppercase tracking-wider font-mono">Central de Alertas Rápidos</h4>
-            </div>
-            
-            {/* Filter buttons */}
-            <div className="flex items-center gap-1.5 font-mono text-[9px] uppercase">
-              <button 
-                onClick={() => setActiveAlertFilter('unread')}
-                className={`px-2 py-1 rounded border cursor-pointer ${activeAlertFilter === 'unread' ? 'bg-purple-950 text-purple-300 border-purple-800' : 'text-slate-400 border-purple-950/40'}`}
-              >
-                Pendentes ({smartAlerts.filter(a => !a.is_read).length})
-              </button>
-              <button 
-                onClick={() => setActiveAlertFilter('all')}
-                className={`px-2 py-1 rounded border cursor-pointer ${activeAlertFilter === 'all' ? 'bg-purple-950 text-purple-300 border-purple-800' : 'text-slate-400 border-purple-950/40'}`}
-              >
-                Todos ({smartAlerts.length})
-              </button>
-            </div>
-          </div>
-
-          <div className="space-y-3 max-h-[350px] overflow-y-auto pr-1">
-            {filteredAlerts.length === 0 ? (
-              <div className="p-8 text-center bg-[#070313] border border-purple-950/20 rounded-xl space-y-2">
-                <CheckCircle2 className="w-8 h-8 text-emerald-500 mx-auto animate-pulse" />
-                <p className="font-mono text-xs text-slate-300">Nenhum alerta relevante encontrado!</p>
-                <p className="font-sans text-[11px] text-slate-500">Tudo operando nos limites recomendáveis de autonomia, metas e franqueados.</p>
-              </div>
-            ) : (
-              filteredAlerts.map((alert, idx) => (
-                <div 
-                  key={alert.id || idx}
-                  className={`p-4 border rounded-xl flex items-start gap-3 transition-colors ${
-                    alert.is_read 
-                      ? 'bg-purple-950/5 border-purple-950/20 opacity-55' 
-                      : alert.severity === 'high' 
-                        ? 'bg-rose-950/5 border-rose-950/50' 
-                        : 'bg-purple-950/10 border-purple-950/45'
-                  }`}
-                >
-                  <span className={`p-1.5 rounded-lg shrink-0 ${
-                    alert.severity === 'high' 
-                      ? 'bg-rose-950 border border-rose-900/30' 
-                      : 'bg-purple-950 border border-purple-900/30'
-                  }`}>
-                    <AlertTriangle className={`w-4 h-4 ${alert.severity === 'high' ? 'text-rose-400' : 'text-purple-400'}`} />
-                  </span>
-                  
-                  <div className="flex-1 min-w-0 font-sans text-xs">
-                    <div className="flex items-center gap-2 flex-wrap">
-                      <h5 className="font-bold text-white leading-tight">{alert.title}</h5>
-                      <span className={`text-[8px] font-mono font-bold uppercase rounded px-1.5 py-0.2 ${
-                        alert.severity === 'high' ? 'bg-rose-950/80 text-rose-300' : 'bg-purple-950 text-purple-300'
-                      }`}>
-                        {alert.type}
-                      </span>
-                    </div>
-                    <p className="text-slate-300 text-[11px] mt-1 leading-snug">{alert.description}</p>
-                  </div>
-
-                  {!alert.is_read && (
-                    <button 
-                      onClick={() => markAlertAsRead(alert.id, idx)}
-                      className="p-1 px-2.5 rounded-lg bg-emerald-950 hover:bg-emerald-900 text-emerald-400 border border-emerald-900/30 hover:text-white transition-colors cursor-pointer text-[10px] font-mono leading-none align-middle"
-                    >
-                      Resolver
-                    </button>
-                  )}
-                </div>
-              ))
-            )}
-          </div>
-        </div>
-
-        {/* DRIVER RECOMMENDATIONS ENGINE */}
-        <div className="bg-[#0b0720]/80 border border-purple-950/40 rounded-2xl p-6 flex flex-col justify-between">
-          <div className="space-y-4">
-            <div className="flex items-center gap-2 border-b border-purple-950/20 pb-3">
-              <Sparkles className="w-4 h-4 text-purple-400" />
-              <h4 className="text-xs font-bold text-white uppercase tracking-wider font-mono text-purple-400">Recomendações DriverDash</h4>
-            </div>
-
-            <p className="text-[11px] text-purple-300/60 leading-relaxed font-sans">
-              Nosso motor cognitivo analisou seu rendimento da semana e elaborou recomendações prioritárias para elevar seu rendimento líquido por quilômetro:
-            </p>
-
-            <div className="space-y-3 font-sans text-[11.5px] leading-relaxed text-slate-300">
-              
-              <div className="p-3 bg-purple-950/10 border border-purple-950/30 rounded-xl flex items-start gap-2.5">
-                <span className="text-purple-400 font-bold">⚡</span>
-                <p>Você gera em média mais lucros às **{bestDayName}**. Considere concentrar seus maiores turnos neste dia.</p>
-              </div>
-
-              <div className="p-3 bg-purple-950/10 border border-purple-950/30 rounded-xl flex items-start gap-2.5">
-                <span className="text-indigo-400 font-bold">⚡</span>
-                <p>Seu melhor intervalo produtivo é o período da **{bestHourDisplay}**. Evite trânsito parado entre 11h e 14h.</p>
-              </div>
-
-              <div className="p-3 bg-purple-950/10 border border-purple-950/30 rounded-xl flex items-start gap-2.5">
-                <span className="text-pink-400 font-bold">⚡</span>
-                <p>A plataforma **{bestPlatDisplay}** registrou maior faturamento médio por corrida que os concorrentes.</p>
-              </div>
-
-              {lucroPorKm < 1.2 && (
-                <div className="p-3 bg-rose-950/10 border border-rose-950/30 rounded-xl flex items-start gap-2.5">
-                  <span className="text-rose-400 font-bold">⚠️</span>
-                  <p>Incentivamos limitar corridas extras fora do fluxo. Sua margem líquida por KM está em nível alarmante de {formatCurrency(lucroPorKm)}/KM.</p>
-                </div>
-              )}
-            </div>
-          </div>
-
-          <div className="border-t border-purple-950/20 pt-4 mt-6">
-            <p className="text-[10px] text-slate-500 font-mono">GERADO DINAMICAMENTE EM 2026-06-09</p>
-          </div>
-        </div>
-
-      </div>
-
-      {/* SECTION 4: GESTÃO DE LOCADORA (CONDITIONAL) */}
-      {vehicle && (
-        <div className="bg-[#0b0720]/80 border border-purple-950/40 rounded-2xl p-6 space-y-6">
-          <div className="flex flex-col sm:flex-row sm:items-center justify-between border-b border-purple-950/20 pb-4 gap-2">
-            <div className="flex items-center gap-2">
-              <Car className="w-5 h-5 text-indigo-400" />
-              <div>
-                <h4 className="text-sm font-bold text-white uppercase font-sans">Módulo Estendido: Gestão de Locadora</h4>
-                <p className="text-[11px] text-purple-300/40 font-mono">Apenas aplicável para veículos rented / em contrato de locação</p>
-              </div>
-            </div>
-            {vehicle.ownership_type !== 'rented' && (
-              <span className="text-[10px] bg-purple-950/40 text-purple-400 border border-purple-900/30 rounded-lg px-2 py-0.5 font-mono">
-                Modo Próprio (Histórico Estimativo)
-              </span>
-            )}
-          </div>
-
-          <div className="grid grid-cols-1 md:grid-cols-3 gap-6 font-mono text-xs">
-            
-            {/* SEMANAL FRANCHISE */}
-            <div className="p-4 bg-purple-950/10 border border-purple-950/20 rounded-xl space-y-3">
-              <div className="flex justify-between items-center text-[10px] uppercase">
-                <span className="text-purple-300">Franquia Semanal ({weeklyKmLimit || 'Ilimitada'} KM)</span>
-                <span className="text-purple-400 font-bold">{percentUtilizadoSemanal.toFixed(0)}%</span>
-              </div>
-              <div className="flex justify-between items-baseline">
-                <span className="text-xl font-black text-white">{kmUtilizadoSemanal.toFixed(0)} KM</span>
-                <span className="text-[10px] text-slate-500">usados de {weeklyKmLimit || 'Ilimitada'}</span>
-              </div>
-              <div className="h-2 w-full bg-purple-950/50 rounded-full overflow-hidden">
-                <div 
-                  className={`h-full bg-gradient-to-r from-purple-500 to-indigo-500 transition-all duration-300`}
-                  style={{ width: `${Math.min(100, percentUtilizadoSemanal)}%` }}
-                ></div>
-              </div>
-              <div className="flex justify-between text-[10px] text-slate-400">
-                <span>Restam: {restanteSemanal.toFixed(0)} KM</span>
-                {weeklyEstouro ? (
-                  <span className="text-rose-400 font-bold">Risco de Estouro! ⚠️</span>
-                ) : (
-                  <span className="text-emerald-400 font-bold">Franquia Segura! ✓</span>
-                )}
-              </div>
-            </div>
-
-            {/* MENSAL FRANCHISE */}
-            <div className="p-4 bg-purple-950/10 border border-purple-950/20 rounded-xl space-y-3">
-              <div className="flex justify-between items-center text-[10px] uppercase">
-                <span className="text-purple-300">Franquia Mensal ({monthlyKmLimit || 'Ilimitada'} KM)</span>
-                <span className="text-purple-400 font-bold">{percentUtilizadoMensal.toFixed(0)}%</span>
-              </div>
-              <div className="flex justify-between items-baseline">
-                <span className="text-xl font-black text-white">{kmUtilizadoMensal.toFixed(0)} KM</span>
-                <span className="text-[10px] text-slate-500">usados de {monthlyKmLimit || 'Ilimitada'}</span>
-              </div>
-              <div className="h-2 w-full bg-purple-950/50 rounded-full overflow-hidden">
-                <div 
-                  className="h-full bg-gradient-to-r from-purple-500 to-pink-500 transition-all duration-300"
-                  style={{ width: `${Math.min(100, percentUtilizadoMensal)}%` }}
-                ></div>
-              </div>
-              <div className="flex justify-between text-[10px] text-slate-400">
-                <span>Restam: {restanteMensal.toFixed(0)} KM</span>
-                {monthlyEstouro ? (
-                  <span className="text-rose-400 font-bold">Risco de Estouro! ⚠️</span>
-                ) : (
-                  <span className="text-emerald-400 font-bold">Franquia Segura! ✓</span>
-                )}
-              </div>
-            </div>
-
-            {/* PREDICTIVE INSIGHTS */}
-            <div className="p-4 bg-[#0a051c] border border-purple-950/40 rounded-xl space-y-3 font-sans">
-              <h5 className="text-xs font-bold text-white uppercase tracking-wider font-mono">Previsão e Extrapolação</h5>
-              
-              <div className="space-y-2 text-xs">
-                <div className="flex justify-between">
-                  <span className="text-slate-400">Previsão KM (Semana):</span>
-                  <span className={`font-mono font-bold ${weeklyEstouro ? 'text-rose-400' : 'text-slate-100'}`}>
-                    {previsaoSemanaKm.toFixed(0)} KM / {weeklyKmLimit || '∞'}
-                  </span>
-                </div>
-                <div className="flex justify-between">
-                  <span className="text-slate-400">Previsão KM (Mês):</span>
-                  <span className={`font-mono font-bold ${monthlyEstouro ? 'text-rose-400' : 'text-slate-100'}`}>
-                    {previsaoMesKm.toFixed(0)} KM / {monthlyKmLimit || '∞'}
-                  </span>
-                </div>
-                <div className="flex justify-between items-center text-[11px] pt-1 border-t border-purple-950/20 font-mono">
-                  <span className="text-slate-500">Risco Contratual:</span>
-                  {weeklyEstouro || monthlyEstouro ? (
-                    <span className="text-rose-400 font-bold bg-rose-950/40 px-2 py-0.5 rounded border border-rose-900/30">ALTÍSSIMO RISCO</span>
-                  ) : (
-                    <span className="text-emerald-400 font-bold bg-emerald-950/40 px-2 py-0.5 rounded border border-emerald-900/30">BAIXO RISCO ✓</span>
-                  )}
-                </div>
-              </div>
-            </div>
-
-          </div>
+          {!isDatabaseEmpty && (
+            <button 
+              onClick={() => setUseSimulatedData(false)}
+              className="px-4 py-2 bg-purple-950 text-purple-300 border border-purple-500/20 hover:bg-purple-900/40 text-xs font-bold rounded-xl font-sans cursor-pointer transition-all"
+            >
+              Voltar para Dados Reais
+            </button>
+          )}
         </div>
       )}
+
+      {/* --- MÓDULO 8 & 1: RESUMO EXECUTIVO & HEALTH SCORE --- */}
+      <div className="grid grid-cols-1 lg:grid-cols-3 gap-6">
+        
+        {/* HEALTH SCORE CARD */}
+        <div className="lg:col-span-1 p-6 bg-[#0b0720]/80 border border-purple-950/40 rounded-3xl flex flex-col justify-between relative overflow-hidden group">
+          <div className="absolute -right-12 -bottom-12 w-48 h-48 bg-purple-600/5 rounded-full filter blur-3xl pointer-events-none group-hover:bg-purple-600/10 transition-colors duration-500" />
+          
+          <div className="space-y-4">
+            <div className="flex justify-between items-start">
+              <div>
+                <span className="text-[10px] text-purple-400/75 font-mono font-bold uppercase tracking-wider">MÓDULO 1</span>
+                <h4 className="text-sm font-bold text-slate-300 font-sans flex items-center gap-1.5 mt-0.5">
+                  <Gauge className="w-4 h-4 text-purple-400" />
+                  Saúde Financeira
+                </h4>
+              </div>
+              <span className={`text-[11px] font-bold px-2.5 py-1 rounded-xl border ${healthScoreReport.borderColor} ${healthScoreReport.textBgColor} ${healthScoreReport.color} shadow-sm font-sans`}>
+                {healthScoreReport.rating}
+              </span>
+            </div>
+
+            {/* Gauge dial representation */}
+            <div className="py-4 flex flex-col items-center justify-center relative">
+              <div className="relative w-36 h-36 flex items-center justify-center">
+                
+                {/* Gauge Background circle */}
+                <svg className="w-full h-full transform -rotate-90" viewBox="0 0 100 100">
+                  <circle
+                    cx="50"
+                    cy="50"
+                    r="42"
+                    stroke="#1e1548"
+                    strokeWidth="8"
+                    fill="transparent"
+                    strokeDasharray="264"
+                    strokeDashoffset="66" // Semi-circle/arc representation
+                    strokeLinecap="round"
+                  />
+                  {/* Gauge Active circle */}
+                  <circle
+                    cx="50"
+                    cy="50"
+                    r="42"
+                    className="transition-all duration-1000 ease-out"
+                    stroke="url(#healthScoreGrad)"
+                    strokeWidth="8"
+                    fill="transparent"
+                    strokeDasharray="264"
+                    strokeDashoffset={264 - (198 * healthScoreReport.score) / 100} // Dynamic filling of arc
+                    strokeLinecap="round"
+                  />
+                  <defs>
+                    <linearGradient id="healthScoreGrad" x1="0%" y1="0%" x2="100%" y2="100%">
+                      <stop offset="0%" stopColor="#d946ef" />
+                      <stop offset="100%" stopColor="#3b82f6" />
+                    </linearGradient>
+                  </defs>
+                </svg>
+
+                {/* Score central content */}
+                <div className="absolute text-center">
+                  <span className="block text-4xl font-black text-white font-mono tracking-tight">
+                    {healthScoreReport.score}
+                  </span>
+                  <span className="text-[9px] text-slate-400 font-mono font-bold uppercase tracking-widest">
+                    PONTOS
+                  </span>
+                </div>
+              </div>
+
+              {/* KPI metrics supporting the score */}
+              <div className="w-full grid grid-cols-2 gap-2 text-center mt-3 pt-2 border-t border-purple-950/10 font-mono text-[10px]">
+                <div className="p-1.5 bg-slate-950/20 rounded-xl">
+                  <span className="block text-[8px] text-slate-500 uppercase">Lucro/Hora</span>
+                  <span className="text-xs font-bold text-white mt-0.5 block">{formatCurrency(healthScoreReport.profitPerHour)}/h</span>
+                </div>
+                <div className="p-1.5 bg-slate-950/20 rounded-xl">
+                  <span className="block text-[8px] text-slate-500 uppercase">Lucro/Km</span>
+                  <span className="text-xs font-bold text-white mt-0.5 block">{formatCurrency(healthScoreReport.profitPerKm)}/km</span>
+                </div>
+              </div>
+            </div>
+          </div>
+
+          <p className="text-[10px] text-slate-400/80 leading-relaxed font-sans pt-2 border-t border-purple-950/20">
+            Calculado automaticamente a partir do lucro líquido, tempo ocioso, quilometragem produtiva e metas de faturamento ativo.
+          </p>
+        </div>
+
+        {/* RESUMO EXECUTIVO GRID (MÓDULO 8) */}
+        <div className="lg:col-span-2 p-6 bg-[#0b0720]/80 border border-purple-950/40 rounded-3xl flex flex-col justify-between">
+          <div className="space-y-4">
+            <div className="flex justify-between items-center border-b border-purple-950/15 pb-2">
+              <div>
+                <span className="text-[10px] text-purple-400/75 font-mono font-bold uppercase tracking-wider">MÓDULO 8</span>
+                <h4 className="text-sm font-bold text-white font-sans flex items-center gap-1.5 mt-0.5">
+                  <Layers className="w-4 h-4 text-purple-400" />
+                  Painel Executivo Operacional
+                </h4>
+              </div>
+              <span className="text-[9px] text-slate-500 font-mono font-bold">LIVE UPDATE</span>
+            </div>
+
+            <div className="grid grid-cols-2 md:grid-cols-4 gap-4">
+              
+              {/* Gross Revenue */}
+              <div className="p-4 bg-[#050211] border border-purple-950/30 rounded-2xl">
+                <span className="text-[9px] text-slate-500 font-mono font-bold uppercase tracking-wider">Receita Bruta</span>
+                <p className="text-lg font-black text-white font-mono mt-1">{formatCurrency(baselineGross)}</p>
+                <span className="text-[9px] text-emerald-400 font-mono font-bold block mt-1">✓ Faturado</span>
+              </div>
+
+              {/* Total Expenses */}
+              <div className="p-4 bg-[#050211] border border-purple-950/30 rounded-2xl">
+                <span className="text-[9px] text-slate-500 font-mono font-bold uppercase tracking-wider">Custos Totais</span>
+                <p className="text-lg font-black text-rose-400 font-mono mt-1">{formatCurrency(baselineExpenses)}</p>
+                <span className="text-[9px] text-slate-500 font-mono block mt-1">
+                  Ratio: {((baselineExpenses / Math.max(1, baselineGross)) * 100).toFixed(0)}% faturado
+                </span>
+              </div>
+
+              {/* Net Profit */}
+              <div className="p-4 bg-purple-950/15 border border-purple-500/10 rounded-2xl">
+                <span className="text-[9px] text-purple-400 font-mono font-bold uppercase tracking-wider">Lucro Líquido</span>
+                <p className="text-lg font-black text-emerald-400 font-mono mt-1">{formatCurrency(baselineNet)}</p>
+                <span className="text-[9px] text-purple-400 font-mono block mt-1">Sua sobra real</span>
+              </div>
+
+              {/* ROI */}
+              <div className="p-4 bg-[#050211] border border-purple-950/30 rounded-2xl">
+                <span className="text-[9px] text-slate-500 font-mono font-bold uppercase tracking-wider">Retorno (ROI)</span>
+                <p className="text-lg font-black text-white font-mono mt-1">{healthScoreReport.roi.toFixed(0)}%</p>
+                <span className="text-[9px] text-indigo-400 font-mono font-bold block mt-1">Eficiência limpa</span>
+              </div>
+
+            </div>
+
+            <div className="grid grid-cols-2 md:grid-cols-4 gap-4 pt-1">
+              
+              {/* Productive KM */}
+              <div className="p-3.5 bg-slate-950/45 rounded-xl font-mono text-xs">
+                <span className="text-slate-500 text-[9px] uppercase tracking-wider">Km Produtivo</span>
+                <p className="text-sm font-bold text-slate-200 mt-1">
+                  {Math.round(baselineKm - baselineEmptyKm)} Km <span className="text-[10px] text-emerald-400">({((1 - baselineEmptyKm / Math.max(1, baselineKm)) * 100).toFixed(0)}%)</span>
+                </p>
+              </div>
+
+              {/* Empty KM */}
+              <div className="p-3.5 bg-slate-950/45 rounded-xl font-mono text-xs">
+                <span className="text-slate-500 text-[9px] uppercase tracking-wider">Km Vazio</span>
+                <p className="text-sm font-bold text-rose-400 mt-1">
+                  {Math.round(baselineEmptyKm)} Km <span className="text-[10px] text-rose-400">({healthScoreReport.emptyKmPercent.toFixed(0)}%)</span>
+                </p>
+              </div>
+
+              {/* Total Hours */}
+              <div className="p-3.5 bg-slate-950/45 rounded-xl font-mono text-xs">
+                <span className="text-slate-500 text-[9px] uppercase tracking-wider">Tempo Logado</span>
+                <p className="text-sm font-bold text-slate-200 mt-1">
+                  {baselineHours.toFixed(1)} h
+                </p>
+              </div>
+
+              {/* Cost per hour */}
+              <div className="p-3.5 bg-slate-[#050211] border border-purple-950/10 rounded-xl font-mono text-xs">
+                <span className="text-purple-400 text-[9px] uppercase tracking-wider">Custo de Operação/Hora</span>
+                <p className="text-sm font-bold text-purple-300 mt-1">
+                  {formatCurrency(baselineExpenses / Math.max(1, baselineHours))}/h
+                </p>
+              </div>
+
+            </div>
+          </div>
+
+          <div className="flex items-center gap-2 text-xs text-purple-300/60 pt-4 border-t border-purple-950/20 mt-4">
+            <ShieldCheck className="w-4 h-4 text-emerald-500 shrink-0" />
+            <span>Dados consolidados em tempo real a partir das suas corridas da semana.</span>
+          </div>
+        </div>
+
+      </div>
+
+      {/* --- MÓDULOS 2, 6 & 9: COPILOTO IA, IA PREVENTIVA & MOTOR DE INSIGHTS --- */}
+      <div className="grid grid-cols-1 lg:grid-cols-3 gap-6">
+        
+        {/* IA COPILOTO FEED (MÓDULO 2 & 9) */}
+        <div className="lg:col-span-2 p-6 bg-[#0b0720]/80 border border-purple-950/40 rounded-3xl space-y-4">
+          <div className="flex justify-between items-start border-b border-purple-950/15 pb-3">
+            <div>
+              <span className="text-[10px] text-purple-400/75 font-mono font-bold uppercase tracking-wider">MÓDULO 2 & 9</span>
+              <h4 className="text-sm font-bold text-white font-sans flex items-center gap-1.5 mt-0.5">
+                <Sparkles className="w-4 h-4 text-purple-400" />
+                Copiloto de IA Roxou
+              </h4>
+            </div>
+            <span className="text-[9px] bg-purple-950/50 text-purple-400 px-2.5 py-1 rounded-lg border border-purple-900/30 font-mono font-bold">
+              Cognição Ativa
+            </span>
+          </div>
+
+          <p className="text-xs text-purple-300/75 leading-relaxed font-sans">
+            Seu assistente cognitivo gerou as seguintes recomendações baseadas exclusivamente nos seus padrões de faturamento e quilometragem:
+          </p>
+
+          <div className="space-y-3 max-h-[310px] overflow-y-auto pr-1">
+            {preventiveAlertsAndInsights.insights.map((insight, idx) => (
+              <div key={idx} className="p-4 bg-purple-950/15 border border-purple-950/30 rounded-2xl flex items-start gap-3 transition-all hover:bg-purple-950/25">
+                <span className="p-1 rounded-lg bg-purple-900/40 text-purple-400 mt-0.5 font-bold shrink-0">
+                  ⚡
+                </span>
+                <p className="text-slate-200 text-xs leading-relaxed font-sans font-medium">
+                  {insight}
+                </p>
+              </div>
+            ))}
+          </div>
+        </div>
+
+        {/* IA PREVENTIVA ALERT CONSOLE (MÓDULO 6) */}
+        <div className="lg:col-span-1 p-6 bg-[#0b0720]/80 border border-purple-950/40 rounded-3xl flex flex-col justify-between">
+          <div className="space-y-4">
+            <div className="flex justify-between items-start border-b border-purple-950/15 pb-3">
+              <div>
+                <span className="text-[10px] text-purple-400/75 font-mono font-bold uppercase tracking-wider">MÓDULO 6</span>
+                <h4 className="text-sm font-bold text-white font-sans flex items-center gap-1.5 mt-0.5">
+                  <ShieldAlert className="w-4 h-4 text-rose-400" />
+                  Alerta IA Preventivo
+                </h4>
+              </div>
+              
+              {/* Simple count filter tab */}
+              <div className="flex items-center gap-1 font-mono text-[9px] uppercase">
+                <button 
+                  onClick={() => setActiveAlertFilter('unread')}
+                  className={`px-2 py-0.5 rounded cursor-pointer ${activeAlertFilter === 'unread' ? 'bg-purple-950 text-purple-300' : 'text-slate-500'}`}
+                >
+                  Unread ({allAlerts.filter(a => !a.is_read).length})
+                </button>
+              </div>
+            </div>
+
+            <p className="text-[11px] text-slate-400/90 leading-relaxed font-sans">
+              Monitorando desvios mecânicos e operacionais antes de impactarem suas margens de lucro líquido:
+            </p>
+
+            <div className="space-y-3 max-h-[220px] overflow-y-auto pr-1">
+              {filteredAlerts.length === 0 ? (
+                <div className="p-6 text-center bg-slate-950/40 border border-purple-950/10 rounded-2xl space-y-2">
+                  <CheckCircle2 className="w-7 h-7 text-emerald-500 mx-auto animate-pulse" />
+                  <p className="font-mono text-[11px] text-slate-300">Tudo operando normalmente!</p>
+                  <p className="font-sans text-[10px] text-slate-500">Nenhum risco de prejuízo detectado.</p>
+                </div>
+              ) : (
+                filteredAlerts.map((alert) => (
+                  <div 
+                    key={alert.id}
+                    className={`p-3.5 border rounded-xl flex items-start gap-2.5 transition-colors ${
+                      alert.is_read 
+                        ? 'bg-purple-950/5 border-purple-950/20 opacity-50' 
+                        : alert.severity === 'high' 
+                          ? 'bg-rose-950/10 border-rose-500/20' 
+                          : 'bg-purple-950/10 border-purple-500/10'
+                    }`}
+                  >
+                    <AlertTriangle className={`w-4 h-4 mt-0.5 shrink-0 ${alert.severity === 'high' ? 'text-rose-400' : 'text-purple-400'}`} />
+                    <div className="flex-1 min-w-0">
+                      <div className="flex items-center justify-between gap-1 flex-wrap">
+                        <span className="text-[10px] font-bold text-slate-200">{alert.title}</span>
+                        <span className="text-[7.5px] font-mono font-bold uppercase tracking-wider px-1 bg-slate-950 text-purple-400 rounded">
+                          {alert.type}
+                        </span>
+                      </div>
+                      <p className="text-[10.5px] text-slate-300 leading-normal mt-1">{alert.description}</p>
+                    </div>
+
+                    {(alert as any).isSystem && !alert.is_read && (
+                      <button 
+                        onClick={() => markAlertAsRead(alert.id || '', 0)}
+                        className="text-[9px] font-mono text-emerald-400 cursor-pointer hover:underline self-start mt-0.5"
+                      >
+                        ✓
+                      </button>
+                    )}
+                  </div>
+                ))
+              )}
+            </div>
+          </div>
+
+          <div className="pt-2 border-t border-purple-950/10 mt-2 text-[9.5px] text-slate-500 font-mono flex items-center justify-between">
+            <span>PREVENCÃO AUTOMÁTICA</span>
+            <span>2026 ACTIVE</span>
+          </div>
+        </div>
+
+      </div>
+
+      {/* --- MÓDULO 3: SIMULADOR FINANCEIRO INTERATIVO --- */}
+      <div className="p-6 bg-[#0b0720]/80 border border-purple-950/40 rounded-3xl space-y-6">
+        <div className="border-b border-purple-950/15 pb-3">
+          <span className="text-[10px] text-purple-400/75 font-mono font-bold uppercase tracking-wider">MÓDULO 3</span>
+          <h4 className="text-base font-bold text-white font-sans flex items-center gap-2 mt-0.5">
+            <RefreshCw className="w-5 h-5 text-purple-400 animate-spin-slow" />
+            Simulador Operacional & Troca de Cenários
+          </h4>
+          <p className="text-xs text-purple-300/40 mt-1">
+            Simule alterações na sua estrutura operacional (combustível, aluguel, comissão) e descubra o impacto financeiro imediatamente antes de decidir.
+          </p>
+        </div>
+
+        <div className="grid grid-cols-1 lg:grid-cols-3 gap-8">
+          
+          {/* SIMULATION FORM */}
+          <div className="lg:col-span-2 grid grid-cols-1 md:grid-cols-2 gap-5 font-sans text-xs">
+            
+            {/* 1. Novo Carro e Energia */}
+            <div className="space-y-2">
+              <label className="block text-[11px] font-bold text-slate-400 font-mono uppercase tracking-wider">
+                1. Tipo de Motorização / Carro
+              </label>
+              <div className="grid grid-cols-3 gap-2">
+                {[
+                  { id: 'combustion', label: 'Combustão', icon: '⛽' },
+                  { id: 'hybrid', label: 'Híbrido', icon: '🔋' },
+                  { id: 'electric', label: 'Elétrico', icon: '⚡' }
+                ].map((item) => (
+                  <button
+                    key={item.id}
+                    onClick={() => {
+                      setSimCarType(item.id as any);
+                      if (item.id === 'electric') {
+                        setSimKmPerLiter(16.5); // electric efficiency
+                        setSimFuelPrice(1.10); // rate
+                      } else if (item.id === 'hybrid') {
+                        setSimKmPerLiter(16.5);
+                        setSimFuelPrice(5.85);
+                      } else {
+                        setSimKmPerLiter(11.5);
+                        setSimFuelPrice(5.85);
+                      }
+                    }}
+                    className={`p-3 rounded-2xl border text-center transition-all cursor-pointer ${
+                      simCarType === item.id 
+                        ? 'bg-purple-950/40 border-purple-500 text-purple-300 font-bold' 
+                        : 'bg-slate-950/40 border-purple-950/40 text-slate-400 hover:bg-purple-950/10'
+                    }`}
+                  >
+                    <span className="block text-base mb-1">{item.icon}</span>
+                    <span>{item.label}</span>
+                  </button>
+                ))}
+              </div>
+            </div>
+
+            {/* 2. Novo Aluguel ou Parcela */}
+            <div className="space-y-2">
+              <label className="block text-[11px] font-bold text-slate-400 font-mono uppercase tracking-wider">
+                2. Custo do Veículo / Aluguel
+              </label>
+              <div className="flex gap-2">
+                <input
+                  type="number"
+                  value={simRentCost}
+                  onChange={(e) => setSimRentCost(Math.max(0, parseFloat(e.target.value) || 0))}
+                  className="flex-1 bg-slate-950/40 border border-purple-950/40 rounded-xl p-3 text-white font-bold"
+                  placeholder="Valor"
+                />
+                <select
+                  value={simRentFreq}
+                  onChange={(e) => setSimRentFreq(e.target.value as any)}
+                  className="bg-slate-950/40 border border-purple-950/40 rounded-xl p-3 text-slate-300 font-mono"
+                >
+                  <option value="weekly">Semanal</option>
+                  <option value="monthly">Mensal</option>
+                </select>
+              </div>
+            </div>
+
+            {/* 3. Preço do combustível */}
+            <div className="space-y-2">
+              <div className="flex justify-between text-[11px] font-mono">
+                <span className="font-bold text-slate-400 uppercase tracking-wider">
+                  3. Preço {simCarType === 'electric' ? 'kWh' : 'Combustível'}
+                </span>
+                <span className="text-white font-bold">{formatCurrency(simFuelPrice)}/{simCarType === 'electric' ? 'kWh' : 'Litro'}</span>
+              </div>
+              <input
+                type="range"
+                min={simCarType === 'electric' ? 0.40 : 3.00}
+                max={simCarType === 'electric' ? 2.80 : 8.50}
+                step="0.05"
+                value={simFuelPrice}
+                onChange={(e) => setSimFuelPrice(parseFloat(e.target.value))}
+                className="w-full accent-purple-500 h-1 bg-purple-950 rounded-lg cursor-pointer"
+              />
+            </div>
+
+            {/* 4. Rendimento Km/L ou kWh/100km */}
+            <div className="space-y-2">
+              <div className="flex justify-between text-[11px] font-mono">
+                <span className="font-bold text-slate-400 uppercase tracking-wider">
+                  4. Rendimento ({simCarType === 'electric' ? 'kWh/100km' : 'Km/Litro'})
+                </span>
+                <span className="text-white font-bold">{simKmPerLiter.toFixed(1)} {simCarType === 'electric' ? 'kWh' : 'Km/L'}</span>
+              </div>
+              <input
+                type="range"
+                min={simCarType === 'electric' ? 10.0 : 5.0}
+                max={simCarType === 'electric' ? 24.0 : 22.0}
+                step="0.1"
+                value={simKmPerLiter}
+                onChange={(e) => setSimKmPerLiter(parseFloat(e.target.value))}
+                className="w-full accent-purple-500 h-1 bg-purple-950 rounded-lg cursor-pointer"
+              />
+            </div>
+
+            {/* 5. Nova Comissão Uber */}
+            <div className="space-y-2">
+              <div className="flex justify-between text-[11px] font-mono">
+                <span className="font-bold text-slate-400 uppercase tracking-wider">
+                  5. Nova Comissão Uber / App
+                </span>
+                <span className="text-purple-400 font-bold">{simUberCommission}%</span>
+              </div>
+              <input
+                type="range"
+                min="5"
+                max="45"
+                value={simUberCommission}
+                onChange={(e) => setSimUberCommission(parseInt(e.target.value) || 25)}
+                className="w-full accent-purple-500 h-1 bg-purple-950 rounded-lg cursor-pointer"
+              />
+              <p className="text-[10px] text-slate-500">Média normal cobrada pelas plataformas é de 25% a 32%.</p>
+            </div>
+
+            {/* 6. Nova Meta Mensal */}
+            <div className="space-y-2">
+              <label className="block text-[11px] font-bold text-slate-400 font-mono uppercase tracking-wider">
+                6. Nova Meta de Lucro Líquido
+              </label>
+              <input
+                type="number"
+                value={simMonthlyGoal}
+                onChange={(e) => setSimMonthlyGoal(Math.max(0, parseInt(e.target.value) || 0))}
+                className="w-full bg-slate-950/40 border border-purple-950/40 rounded-xl p-3 text-white font-bold"
+                placeholder="R$ Meta"
+              />
+            </div>
+
+          </div>
+
+          {/* SIMULATION REAL-TIME RESULTS PANEL */}
+          <div className="lg:col-span-1 p-6 bg-purple-950/15 border border-purple-500/15 rounded-3xl flex flex-col justify-between font-mono text-xs">
+            <div className="space-y-4">
+              <h5 className="text-xs font-bold text-purple-400 flex items-center gap-1.5 font-sans">
+                <RefreshCw className="w-4 h-4 text-purple-400 animate-spin-slow" />
+                Resultado da Simulação
+              </h5>
+
+              <div className="space-y-3.5 pt-2">
+                
+                {/* Simulated Net Profit */}
+                <div className="p-3.5 bg-slate-950/60 rounded-2xl border border-purple-500/5">
+                  <span className="text-[9px] text-slate-400 uppercase">Projeção Lucro Líquido</span>
+                  <p className="text-xl font-black text-emerald-400 mt-1">{formatCurrency(simulationResult.profit)}</p>
+                  
+                  {/* Difference Badge */}
+                  <span className={`text-[10px] font-bold block mt-1.5 ${simulationResult.profitDiff >= 0 ? 'text-emerald-400' : 'text-rose-400'}`}>
+                    {simulationResult.profitDiff >= 0 ? '▲ Ganho de ' : '▼ Redução de '} 
+                    {formatCurrency(Math.abs(simulationResult.profitDiff))} /mês
+                  </span>
+                </div>
+
+                {/* Simulated ROI */}
+                <div className="flex justify-between items-center py-2 border-b border-purple-950/15">
+                  <span className="text-slate-400 text-[11px]">ROI Simulado:</span>
+                  <span className="font-bold text-white text-sm">{simulationResult.roi.toFixed(0)}%</span>
+                </div>
+
+                {/* Simulated Cost per KM */}
+                <div className="flex justify-between items-center py-2 border-b border-purple-950/15">
+                  <span className="text-slate-400 text-[11px]">Custo por Km:</span>
+                  <span className={`font-bold text-sm ${simulationResult.costPerKmDiff <= 0 ? 'text-emerald-400' : 'text-rose-400'}`}>
+                    {formatCurrency(simulationResult.costPerKm)}/km
+                  </span>
+                </div>
+
+                {/* Simulated Cost per hour */}
+                <div className="flex justify-between items-center py-1">
+                  <span className="text-slate-400 text-[11px]">Custo por Hora:</span>
+                  <span className="font-bold text-white text-sm">{formatCurrency(simulationResult.costPerHour)}/h</span>
+                </div>
+
+              </div>
+            </div>
+
+            <div className="pt-4 border-t border-purple-950/20 mt-4 text-[10px] text-slate-500 leading-relaxed font-sans">
+              O simulador recalcula as despesas de forma inteligente cruzando combustíveis e taxas administrativas em tempo real.
+            </div>
+          </div>
+
+        </div>
+      </div>
+
+      {/* --- MÓDULO 4 & 5: RANKING DE CUSTOS & LINHA DO TEMPO --- */}
+      <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
+        
+        {/* MÓDULO 4: RANKING DE CUSTOS CHART */}
+        <div className="p-6 bg-[#0b0720]/80 border border-purple-950/40 rounded-3xl space-y-4 flex flex-col justify-between">
+          <div>
+            <div className="flex justify-between items-start border-b border-purple-950/15 pb-2">
+              <div>
+                <span className="text-[10px] text-purple-400/75 font-mono font-bold uppercase tracking-wider">MÓDULO 4</span>
+                <h4 className="text-sm font-bold text-white font-sans flex items-center gap-1.5 mt-0.5">
+                  <BarChart4 className="w-4 h-4 text-purple-400" />
+                  Ranking Geral de Custos Operacionais
+                </h4>
+              </div>
+              <span className="text-[9px] text-slate-500 font-mono font-bold">DESCRESCENTE</span>
+            </div>
+            
+            <p className="text-xs text-slate-400 leading-normal pt-2 font-sans">
+              Visão consolidada e ordenada das despesas de manutenção, abastecimento e contratos fixos. Otimize os maiores blocos primeiro:
+            </p>
+          </div>
+
+          {/* Recharts Horizontal Bar Chart */}
+          <div className="h-64 w-full pt-4">
+            <ResponsiveContainer width="100%" height="100%">
+              <BarChart
+                data={costsRankingData}
+                layout="vertical"
+                margin={{ top: 5, right: 30, left: 20, bottom: 5 }}
+              >
+                <XAxis type="number" stroke="#64748b" fontSize={10} fontStyle="italic" tickFormatter={(v) => `R$${v}`} />
+                <YAxis dataKey="name" type="category" stroke="#64748b" fontSize={10} width={100} />
+                <Tooltip 
+                  formatter={(value: any) => [`R$ ${value}`, 'Custo Amortizado']} 
+                  contentStyle={{ backgroundColor: '#070314', borderColor: '#4c1d95', borderRadius: '12px' }}
+                />
+                <Bar dataKey="value" radius={[0, 8, 8, 0]}>
+                  {costsRankingData.map((entry, index) => (
+                    <Cell key={`cell-${index}`} fill={entry.fill} />
+                  ))}
+                </Bar>
+              </BarChart>
+            </ResponsiveContainer>
+          </div>
+
+          <div className="grid grid-cols-2 gap-2 text-[10px] font-mono text-slate-400 pt-2 border-t border-purple-950/15">
+            <div>
+              💡 **Combustível** e **Aluguel** somam {(((costsRankingData[0]?.value || 0) + (costsRankingData[1]?.value || 0)) / Math.max(1, baselineExpenses) * 100).toFixed(0)}% de todo o seu custo.
+            </div>
+            <div className="text-right">
+              Foco prioritário de poupança ativo.
+            </div>
+          </div>
+        </div>
+
+        {/* MÓDULO 5: LINHA DO TEMPO EVOLUTION */}
+        <div className="p-6 bg-[#0b0720]/80 border border-purple-950/40 rounded-3xl space-y-4 flex flex-col justify-between">
+          <div className="flex flex-col sm:flex-row sm:items-center justify-between border-b border-purple-950/15 pb-2 gap-2">
+            <div>
+              <span className="text-[10px] text-purple-400/75 font-mono font-bold uppercase tracking-wider">MÓDULO 5</span>
+              <h4 className="text-sm font-bold text-white font-sans flex items-center gap-1.5 mt-0.5">
+                <Clock className="w-4 h-4 text-purple-400" />
+                Linha do Tempo e Evolução
+              </h4>
+            </div>
+
+            {/* Time resolution filters */}
+            <div className="flex items-center gap-1.5 font-mono text-[9px] uppercase">
+              {[
+                { id: 'day', label: 'Dia' },
+                { id: 'week', label: 'Semana' },
+                { id: 'month', label: 'Mês' },
+                { id: 'year', label: 'Ano' }
+              ].map((tab) => (
+                <button
+                  key={tab.id}
+                  onClick={() => setTimelinePeriod(tab.id as any)}
+                  className={`px-2 py-1 rounded cursor-pointer transition-colors ${
+                    timelinePeriod === tab.id 
+                      ? 'bg-purple-950 text-purple-300 border border-purple-800/30 font-bold' 
+                      : 'text-slate-400 border border-transparent'
+                  }`}
+                >
+                  {tab.label}
+                </button>
+              ))}
+            </div>
+          </div>
+
+          {/* Area Chart of Lucro vs Custos */}
+          <div className="h-64 w-full pt-2">
+            <ResponsiveContainer width="100%" height="100%">
+              <AreaChart
+                data={timelineData}
+                margin={{ top: 10, right: 10, left: 0, bottom: 0 }}
+              >
+                <defs>
+                  <linearGradient id="colorLucro" x1="0" y1="0" x2="0" y2="1">
+                    <stop offset="5%" stopColor="#10b981" stopOpacity={0.25}/>
+                    <stop offset="95%" stopColor="#10b981" stopOpacity={0}/>
+                  </linearGradient>
+                  <linearGradient id="colorCustos" x1="0" y1="0" x2="0" y2="1">
+                    <stop offset="5%" stopColor="#ef4444" stopOpacity={0.25}/>
+                    <stop offset="95%" stopColor="#ef4444" stopOpacity={0}/>
+                  </linearGradient>
+                </defs>
+                <CartesianGrid strokeDasharray="3 3" stroke="#1e1b4b" opacity={0.2} />
+                <XAxis dataKey="name" stroke="#64748b" fontSize={9} />
+                <YAxis stroke="#64748b" fontSize={9} />
+                <Tooltip 
+                  contentStyle={{ backgroundColor: '#070314', borderColor: '#4c1d95', borderRadius: '12px' }}
+                />
+                <Legend verticalAlign="top" height={36} iconSize={8} wrapperStyle={{ fontSize: '10px', fontFamily: 'monospace' }} />
+                <Area type="monotone" dataKey="Lucro" stroke="#10b981" strokeWidth={2} fillOpacity={1} fill="url(#colorLucro)" />
+                <Area type="monotone" dataKey="Custos" stroke="#ef4444" strokeWidth={2} fillOpacity={1} fill="url(#colorCustos)" />
+              </AreaChart>
+            </ResponsiveContainer>
+          </div>
+
+          <div className="grid grid-cols-3 gap-2 text-center text-[10px] font-mono pt-2 border-t border-purple-950/15">
+            <div className="p-2 bg-slate-950/30 rounded-xl">
+              <span className="block text-slate-500 uppercase text-[8px]">Média KM</span>
+              <span className="text-white font-bold mt-0.5 block">
+                {timelineData.length > 0 
+                  ? Math.round(timelineData.reduce((sum, item) => sum + item.Km, 0) / timelineData.length) 
+                  : 0} Km
+              </span>
+            </div>
+            <div className="p-2 bg-slate-950/30 rounded-xl">
+              <span className="block text-slate-500 uppercase text-[8px]">Média Horas</span>
+              <span className="text-white font-bold mt-0.5 block">
+                {timelineData.length > 0 
+                  ? (timelineData.reduce((sum, item) => sum + item.Horas, 0) / timelineData.length).toFixed(1) 
+                  : '0.0'} h
+              </span>
+            </div>
+            <div className="p-2 bg-slate-950/30 rounded-xl">
+              <span className="block text-slate-500 uppercase text-[8px]">Média ROI</span>
+              <span className="text-white font-bold mt-0.5 block">
+                {timelineData.length > 0 
+                  ? Math.round(timelineData.reduce((sum, item) => sum + item.ROI, 0) / timelineData.length) 
+                  : 0}%
+              </span>
+            </div>
+          </div>
+        </div>
+
+      </div>
+
+      {/* --- MÓDULO 7: COMPARATIVOS HISTÓRICOS --- */}
+      <div className="p-6 bg-[#0b0720]/80 border border-purple-950/40 rounded-3xl space-y-4">
+        <div className="flex flex-col sm:flex-row sm:items-center justify-between border-b border-purple-950/15 pb-2 gap-2">
+          <div>
+            <span className="text-[10px] text-purple-400/75 font-mono font-bold uppercase tracking-wider">MÓDULO 7</span>
+            <h4 className="text-sm font-bold text-white font-sans flex items-center gap-1.5 mt-0.5">
+              <Layers className="w-4 h-4 text-purple-400" />
+              Comparativo de Períodos de Faturamento
+            </h4>
+          </div>
+
+          {/* Period choices */}
+          <div className="flex items-center gap-1.5 font-mono text-[9px] uppercase">
+            {[
+              { id: 'day', label: 'Hoje x Ontem' },
+              { id: 'week', label: 'Semana x Semana' },
+              { id: 'month', label: 'Mês x Mês' },
+              { id: 'year', label: 'Ano x Ano' }
+            ].map((p) => (
+              <button
+                key={p.id}
+                onClick={() => setComparisonPeriod(p.id as any)}
+                className={`px-2.5 py-1 rounded cursor-pointer transition-colors ${
+                  comparisonPeriod === p.id 
+                    ? 'bg-purple-950 text-purple-300 border border-purple-800/30 font-bold' 
+                    : 'text-slate-400 border border-transparent'
+                }`}
+              >
+                {p.label}
+              </button>
+            ))}
+          </div>
+        </div>
+
+        <div className="grid grid-cols-1 md:grid-cols-4 gap-4">
+          
+          {/* Comparison profit */}
+          <div className="p-4 bg-slate-950/40 border border-purple-950/20 rounded-2xl flex flex-col justify-between font-mono text-xs">
+            <div>
+              <span className="text-slate-500 text-[9px] uppercase font-bold block">Lucro Líquido</span>
+              <p className="text-base font-black text-white mt-1.5">{formatCurrency(comparisonReport.profit.cur)}</p>
+              <p className="text-[10.5px] text-slate-400/75 mt-0.5">Anterior: {formatCurrency(comparisonReport.profit.prev)}</p>
+            </div>
+            <div className="flex items-center gap-1.5 pt-2 border-t border-purple-950/15 mt-3">
+              {comparisonReport.profit.val >= 0 ? (
+                <>
+                  <ArrowUpRight className="w-4 h-4 text-emerald-400 shrink-0" />
+                  <span className="text-emerald-400 font-bold">+{formatPercent(comparisonReport.profit.pct)}</span>
+                  <span className="text-emerald-500/80 text-[10px]">(+{formatCurrency(comparisonReport.profit.val)})</span>
+                </>
+              ) : (
+                <>
+                  <ArrowDownRight className="w-4 h-4 text-rose-400 shrink-0" />
+                  <span className="text-rose-400 font-bold">{formatPercent(comparisonReport.profit.pct)}</span>
+                  <span className="text-rose-500/80 text-[10px]">({formatCurrency(comparisonReport.profit.val)})</span>
+                </>
+              )}
+            </div>
+          </div>
+
+          {/* Comparison gross */}
+          <div className="p-4 bg-slate-950/40 border border-purple-950/20 rounded-2xl flex flex-col justify-between font-mono text-xs">
+            <div>
+              <span className="text-slate-500 text-[9px] uppercase font-bold block">Receita Bruta</span>
+              <p className="text-base font-black text-white mt-1.5">{formatCurrency(comparisonReport.gross.cur)}</p>
+              <p className="text-[10.5px] text-slate-400/75 mt-0.5">Anterior: {formatCurrency(comparisonReport.gross.prev)}</p>
+            </div>
+            <div className="flex items-center gap-1.5 pt-2 border-t border-purple-950/15 mt-3">
+              {comparisonReport.gross.val >= 0 ? (
+                <>
+                  <ArrowUpRight className="w-4 h-4 text-emerald-400 shrink-0" />
+                  <span className="text-emerald-400 font-bold">+{formatPercent(comparisonReport.gross.pct)}</span>
+                </>
+              ) : (
+                <>
+                  <ArrowDownRight className="w-4 h-4 text-rose-400 shrink-0" />
+                  <span className="text-rose-400 font-bold">{formatPercent(comparisonReport.gross.pct)}</span>
+                </>
+              )}
+            </div>
+          </div>
+
+          {/* Comparison costs */}
+          <div className="p-4 bg-slate-950/40 border border-purple-950/20 rounded-2xl flex flex-col justify-between font-mono text-xs">
+            <div>
+              <span className="text-slate-500 text-[9px] uppercase font-bold block">Despesas</span>
+              <p className="text-base font-black text-rose-400 mt-1.5">{formatCurrency(comparisonReport.costs.cur)}</p>
+              <p className="text-[10.5px] text-slate-400/75 mt-0.5">Anterior: {formatCurrency(comparisonReport.costs.prev)}</p>
+            </div>
+            {/* Note: Lower costs is a positive change! */}
+            <div className="flex items-center gap-1.5 pt-2 border-t border-purple-950/15 mt-3">
+              {comparisonReport.costs.val <= 0 ? (
+                <>
+                  <ArrowDownRight className="w-4 h-4 text-emerald-400 shrink-0" />
+                  <span className="text-emerald-400 font-bold">-{formatPercent(Math.abs(comparisonReport.costs.pct))}</span>
+                  <span className="text-emerald-500/80 text-[10px]">(Redução)</span>
+                </>
+              ) : (
+                <>
+                  <ArrowUpRight className="w-4 h-4 text-rose-400 shrink-0" />
+                  <span className="text-rose-400 font-bold">+{formatPercent(comparisonReport.costs.pct)}</span>
+                  <span className="text-rose-500/80 text-[10px]">(Aumento)</span>
+                </>
+              )}
+            </div>
+          </div>
+
+          {/* Comparison km */}
+          <div className="p-4 bg-slate-950/40 border border-purple-950/20 rounded-2xl flex flex-col justify-between font-mono text-xs">
+            <div>
+              <span className="text-slate-500 text-[9px] uppercase font-bold block">Distância Km</span>
+              <p className="text-base font-black text-white mt-1.5">{Math.round(comparisonReport.km.cur)} Km</p>
+              <p className="text-[10.5px] text-slate-400/75 mt-0.5">Anterior: {Math.round(comparisonReport.km.prev)} Km</p>
+            </div>
+            <div className="flex items-center gap-1.5 pt-2 border-t border-purple-950/15 mt-3">
+              {comparisonReport.km.val >= 0 ? (
+                <>
+                  <ArrowUpRight className="w-4 h-4 text-slate-400 shrink-0" />
+                  <span className="text-slate-200 font-bold">+{formatPercent(comparisonReport.km.pct)}</span>
+                </>
+              ) : (
+                <>
+                  <ArrowDownRight className="w-4 h-4 text-slate-400 shrink-0" />
+                  <span className="text-slate-400 font-bold">{formatPercent(comparisonReport.km.pct)}</span>
+                </>
+              )}
+            </div>
+          </div>
+
+        </div>
+      </div>
 
     </div>
   );

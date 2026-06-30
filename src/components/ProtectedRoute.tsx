@@ -104,7 +104,7 @@ export const ProtectedRoute: React.FC<ProtectedRouteProps> = ({ children, allowe
           <div className="grid grid-cols-2 gap-3 mt-8">
             <button
               onClick={() => {
-                window.location.href = `mailto:noturnocszapps@gmail.com?subject=Solicitação de Acesso Beta - DriverDash Roxou&body=Olá,%0D%0A%0D%0AGostaria de solicitar acesso à fase de testes fechados do DriverDash Roxou.%0D%0A%0D%0AEmail da Conta: ${profile?.email}%0D%0AID: ${profile?.id}`;
+                window.location.href = `mailto:noturnocszapps@gmail.com?subject=Solicitação de Acesso - DriverDash Roxou&body=Olá,%0D%0A%0D%0AGostaria de solicitar liberação de acesso para o DriverDash Roxou.%0D%0A%0D%0AEmail da Conta: ${profile?.email}%0D%0AID: ${profile?.id}`;
               }}
               className="bg-purple-700 hover:bg-purple-600 active:scale-95 text-white text-xs font-bold py-3 px-4 rounded-xl transition-all cursor-pointer flex items-center justify-center gap-1.5 shadow-md shadow-purple-900/30"
             >

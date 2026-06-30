@@ -36,13 +36,23 @@ export const calculateCostPerKmEstimate = (
 ): number => {
   if (!vehicle) return 0;
 
+  const ownership = vehicle.ownership_type || 'own';
+  console.log(`[VehicleCost] ownership detected: ${ownership}`);
+  if (ownership === 'rented') {
+    console.log('[VehicleCost] rental cost rules applied');
+  } else if (ownership === 'own') {
+    console.log('[VehicleCost] own vehicle rules applied');
+  } else if (ownership === 'financed') {
+    console.log('[VehicleCost] financed vehicle rules applied');
+  }
+
   // Handle Electric Vehicles
   if (isElectricVehicle(vehicle)) {
     const consumptionKwh100 = vehicle.electric_consumption_kwh_100km || 0;
     const priceKwh = calculateElectricityPriceKwh(vehicle);
     const energyCostPerKm = (consumptionKwh100 * priceKwh) / 100;
 
-    if (vehicle.ownership_type === 'rented') {
+    if (ownership === 'rented') {
       const monthlyFixed = calculateMonthlyFixedCost(vehicle, costSettings);
       const kmsMensais = vehicle.monthly_km_limit 
         || (vehicle.weekly_km_limit ? vehicle.weekly_km_limit * 4.33 : 4330);
@@ -71,7 +81,7 @@ export const calculateCostPerKmEstimate = (
   const fuelCostPerKm = kmPerLiter > 0 ? fuelPrice / kmPerLiter : 0;
 
   // If vehicle is rented, preventive maintenance (tires, oil, brakes) is not included
-  if (vehicle.ownership_type === 'rented') {
+  if (ownership === 'rented') {
     const monthlyFixed = calculateMonthlyFixedCost(vehicle, costSettings);
     const fixedCostPerKm = monthlyFixed > 0 ? (monthlyFixed / 4.33) / 1000 : 0;
     return fuelCostPerKm + fixedCostPerKm;
@@ -100,7 +110,17 @@ export const calculateMonthlyFixedCost = (
 ): number => {
   if (!vehicle) return 0;
 
-  if (vehicle.ownership_type === 'rented') {
+  const ownership = vehicle.ownership_type || 'own';
+  console.log(`[VehicleCost] ownership detected: ${ownership}`);
+  if (ownership === 'rented') {
+    console.log('[VehicleCost] rental cost rules applied');
+  } else if (ownership === 'own') {
+    console.log('[VehicleCost] own vehicle rules applied');
+  } else if (ownership === 'financed') {
+    console.log('[VehicleCost] financed vehicle rules applied');
+  }
+
+  if (ownership === 'rented') {
     const amount = vehicle.rental_amount || 0;
     const period = vehicle.rental_period || 'weekly';
     const baseRentalMonthly = period === 'weekly' ? amount * 4.33 : amount;
@@ -118,11 +138,11 @@ export const calculateMonthlyFixedCost = (
   const reserveMonthly = costSettings ? (costSettings.emergency_reserve_monthly || 0) : 0;
   const maintenanceMonthly = costSettings ? (costSettings.maintenance_monthly || 0) : 0;
 
-  if (vehicle.ownership_type === 'own') {
+  if (ownership === 'own') {
     return insuranceMonthly + ipvaMonthly + licensingMonthly + reserveMonthly + maintenanceMonthly;
   }
 
-  if (vehicle.ownership_type === 'financed') {
+  if (ownership === 'financed') {
     const financingMonthly = costSettings ? (costSettings.financing_monthly || 0) : 0;
     return financingMonthly + insuranceMonthly + ipvaMonthly + licensingMonthly + reserveMonthly + maintenanceMonthly;
   }

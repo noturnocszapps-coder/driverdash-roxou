@@ -499,7 +499,7 @@ export const AdminPage: React.FC = () => {
                       <th className="py-4 px-4">Último Acesso</th>
                       <th className="py-4 px-4">Plano Ativo</th>
                       <th className="py-4 px-4">Assinatura Status</th>
-                      <th className="py-4 px-4 text-center">Beta Tester</th>
+                      <th className="py-4 px-4 text-center">Acesso Liberado</th>
                       <th className="py-4 px-6 text-right">Ações Rápidas</th>
                     </tr>
                   </thead>

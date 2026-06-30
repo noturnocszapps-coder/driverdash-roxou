@@ -6,6 +6,7 @@ export type FlexMode = 'gasoline' | 'ethanol' | 'auto';
 
 export interface DetailedVehicleConfig {
   motorizationType: MotorizationType;
+  ownership_type?: 'own' | 'financed' | 'rented';
   
   // Fuel & Energy
   fuelPrice: number; // R$/L
@@ -25,6 +26,7 @@ export interface DetailedVehicleConfig {
   publicChargingPercent: number; // %
   homeKwhPrice: number; // R$/kWh
   publicKwhPrice: number; // R$/kWh
+  avgChargeTime?: number; // hours
   
   // Hybrid specific
   hybridGasConsumption: number; // Km/L
@@ -73,10 +75,25 @@ export interface DetailedVehicleConfig {
   
   otherCost: number;
   otherFreq: CostFrequency;
+
+  // Rental specific (Phase 1 & 2)
+  rental_food_daily?: number;
+  rental_damage_monthly?: number;
+  rental_cleaning_monthly?: number;
+
+  includedSeguro?: boolean;
+  includedPneus?: boolean;
+  includedManutencao?: boolean;
+  includedIpva?: boolean;
+  includedLicenciamento?: boolean;
+  includedCarroReserva?: boolean;
+  includedGuincho?: boolean;
+  includedRevisoes?: boolean;
 }
 
 export const DEFAULT_DETAILED_CONFIG: DetailedVehicleConfig = {
   motorizationType: 'gasoline',
+  ownership_type: 'own',
   fuelPrice: 5.80,
   fuelConsumption: 11.5,
   
@@ -137,6 +154,21 @@ export const DEFAULT_DETAILED_CONFIG: DetailedVehicleConfig = {
   
   otherCost: 0,
   otherFreq: 'monthly',
+
+  // Rental defaults
+  rental_food_daily: 0,
+  rental_damage_monthly: 0,
+  rental_cleaning_monthly: 0,
+
+  includedSeguro: true,
+  includedPneus: true,
+  includedManutencao: true,
+  includedIpva: true,
+  includedLicenciamento: true,
+  includedCarroReserva: true,
+  includedGuincho: true,
+  includedRevisoes: true,
+  avgChargeTime: 4,
 };
 
 // Standard conversion helper to convert frequency costs into cost per KM
@@ -216,6 +248,16 @@ export function calculateDetailedVehicleCost(
   dailyKm: number
 ): CostBreakdown {
   const km = dailyKm > 0 ? dailyKm : 100; // avoid divide by zero, fallback to 100km
+
+  const ownership = config.ownership_type || 'own';
+  console.log(`[VehicleCost] ownership detected: ${ownership}`);
+  if (ownership === 'rented') {
+    console.log('[VehicleCost] rental cost rules applied');
+  } else if (ownership === 'own') {
+    console.log('[VehicleCost] own vehicle rules applied');
+  } else if (ownership === 'financed') {
+    console.log('[VehicleCost] financed vehicle rules applied');
+  }
 
   let fuelOrEnergyPerKm = 0;
   let activeFuelType: 'gasoline' | 'ethanol' | 'diesel' | 'hybrid' | 'electric' = 'gasoline';
@@ -314,43 +356,89 @@ export function calculateDetailedVehicleCost(
   }
 
   // 2. Calculate Maintenance Components (per KM)
+  let tiresPerKm = 0;
+  let brakesPerKm = 0;
+  let oilPerKm = 0;
+  let filterPerKm = 0;
+  let alignmentPerKm = 0;
+  let balancingPerKm = 0;
   let maintenancePerKm = 0;
+
+  const calcPneus = ownership !== 'rented' || config.includedPneus === false;
+  const calcManutencao = ownership !== 'rented' || config.includedManutencao === false;
+
+  if (calcPneus) {
+    // Tires (Pneus) cost per km
+    tiresPerKm = config.tireIntervalKm > 0 ? config.tireCost / config.tireIntervalKm : 0;
+  }
   
-  // Tires (Pneus) cost per km
-  const tiresPerKm = config.tireIntervalKm > 0 ? config.tireCost / config.tireIntervalKm : 0;
-  
-  // Brakes (Freios) cost per km
-  const brakesPerKm = config.brakeIntervalKm > 0 ? config.brakeCost / config.brakeIntervalKm : 0;
-  
-  // Oil (Troca de Óleo) and Filter are only for combustion/hybrid
-  const hasEngineOil = type !== 'electric';
-  const oilPerKm = (hasEngineOil && config.oilIntervalKm > 0) ? config.oilCost / config.oilIntervalKm : 0;
-  const filterPerKm = (hasEngineOil && config.filterIntervalKm > 0) ? config.filterCost / config.filterIntervalKm : 0;
-  
-  // Alignment & Balancing
-  const alignmentPerKm = config.alignmentIntervalKm > 0 ? config.alignmentCost / config.alignmentIntervalKm : 0;
-  const balancingPerKm = config.balancingIntervalKm > 0 ? config.balancingCost / config.balancingIntervalKm : 0;
+  if (calcManutencao) {
+    // Brakes (Freios) cost per km
+    brakesPerKm = config.brakeIntervalKm > 0 ? config.brakeCost / config.brakeIntervalKm : 0;
+    
+    // Oil (Troca de Óleo) and Filter are only for combustion/hybrid
+    const hasEngineOil = type !== 'electric';
+    oilPerKm = (hasEngineOil && config.oilIntervalKm > 0) ? config.oilCost / config.oilIntervalKm : 0;
+    filterPerKm = (hasEngineOil && config.filterIntervalKm > 0) ? config.filterCost / config.filterIntervalKm : 0;
+    
+    // Alignment & Balancing
+    alignmentPerKm = config.alignmentIntervalKm > 0 ? config.alignmentCost / config.alignmentIntervalKm : 0;
+    balancingPerKm = config.balancingIntervalKm > 0 ? config.balancingCost / config.balancingIntervalKm : 0;
+  }
   
   maintenancePerKm = tiresPerKm + brakesPerKm + oilPerKm + filterPerKm + alignmentPerKm + balancingPerKm;
 
   // 3. Calculate Fixed Costs (IPVA, Seguro, Licenciamento, Aluguel/Parcela)
-  const insurancePerKm = convertFrequencyToCostPerKm(config.insuranceCost, config.insuranceFreq, km);
-  const ipvaPerKm = convertFrequencyToCostPerKm(config.ipvaCost, config.ipvaFreq, km);
-  const licensingPerKm = convertFrequencyToCostPerKm(config.licensingCost, config.licensingFreq, km);
-  const rentPerKm = convertFrequencyToCostPerKm(config.rentCost, config.rentFreq, km);
+  let insurancePerKm = 0;
+  let ipvaPerKm = 0;
+  let licensingPerKm = 0;
+  let rentPerKm = 0;
+
+  const calcSeguro = ownership !== 'rented' || config.includedSeguro === false;
+  const calcIpva = ownership !== 'rented' || config.includedIpva === false;
+  const calcLicensing = ownership !== 'rented' || config.includedLicenciamento === false;
+
+  if (calcSeguro) {
+    insurancePerKm = convertFrequencyToCostPerKm(config.insuranceCost, config.insuranceFreq, km);
+  }
+  
+  if (calcIpva) {
+    ipvaPerKm = convertFrequencyToCostPerKm(config.ipvaCost, config.ipvaFreq, km);
+  }
+  
+  if (calcLicensing) {
+    licensingPerKm = convertFrequencyToCostPerKm(config.licensingCost, config.licensingFreq, km);
+  }
+
+  if (ownership === 'rented') {
+    rentPerKm = convertFrequencyToCostPerKm(config.rentCost, config.rentFreq, km);
+  } else if (ownership === 'financed') {
+    rentPerKm = convertFrequencyToCostPerKm(config.rentCost, config.rentFreq, km);
+  }
   
   const fixedPerKm = insurancePerKm + ipvaPerKm + licensingPerKm + rentPerKm;
 
-  // 4. Calculate Variable Other Costs (Wash, Parking, Tolls, Others)
+  // 4. Calculate Variable Other Costs (Wash, Parking, Tolls, Others, Food, Damage, Cleaning)
   const washPerKm = convertFrequencyToCostPerKm(config.washCost, config.washFreq, km);
   const parkingPerKm = convertFrequencyToCostPerKm(config.parkingCost, config.parkingFreq, km);
   const tollPerKm = convertFrequencyToCostPerKm(config.tollCost, config.tollFreq, km);
   const otherPerKm = convertFrequencyToCostPerKm(config.otherCost, config.otherFreq, km);
   
-  const variableOtherPerKm = washPerKm + parkingPerKm + tollPerKm + otherPerKm;
+  // Rental specific variables
+  let rentalFoodPerKm = 0;
+  let rentalDamagePerKm = 0;
+  let rentalCleaningPerKm = 0;
 
-  // 5. Depreciation (per KM)
-  const depreciationPerKm = config.depreciationCost > 0 ? config.depreciationCost : 0;
+  if (ownership === 'rented') {
+    rentalFoodPerKm = (config.rental_food_daily || 0) / km;
+    rentalDamagePerKm = ((config.rental_damage_monthly || 0) / 26) / km;
+    rentalCleaningPerKm = ((config.rental_cleaning_monthly || 0) / 26) / km;
+  }
+
+  const variableOtherPerKm = washPerKm + parkingPerKm + tollPerKm + otherPerKm + rentalFoodPerKm + rentalDamagePerKm + rentalCleaningPerKm;
+
+  // 5. Depreciation (per KM) - never applies to rented
+  const depreciationPerKm = ownership !== 'rented' ? (config.depreciationCost > 0 ? config.depreciationCost : 0) : 0;
 
   // 6. Aggregate Total Per KM
   const totalPerKm = fuelOrEnergyPerKm + maintenancePerKm + fixedPerKm + variableOtherPerKm + depreciationPerKm;
@@ -366,7 +454,7 @@ export function calculateDetailedVehicleCost(
 
   return {
     fuelOrEnergy: fuelOrEnergyPerKm,
-    maintenance: tiresPerKm + brakesPerKm + oilPerKm + filterPerKm + alignmentPerKm + balancingPerKm,
+    maintenance: maintenancePerKm,
     fixed: fixedPerKm,
     variableOther: variableOtherPerKm,
     depreciation: depreciationPerKm,

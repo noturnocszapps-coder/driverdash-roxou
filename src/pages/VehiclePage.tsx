@@ -754,7 +754,16 @@ export const VehiclePage: React.FC = () => {
             )}
 
             {/* Section 4: General Custos for Proprietary or Financed vehicle */}
-            {ownershipType !== 'rented' && (
+            {ownershipType === 'rented' ? (
+              <motion.div 
+                initial={{ opacity: 0 }}
+                animate={{ opacity: 1 }}
+                className="p-4 rounded-xl bg-purple-950/20 border border-purple-900/30 text-purple-300 text-xs mt-4"
+              >
+                <p className="font-semibold text-purple-400 mb-1">Custos Embutidos na Locação</p>
+                <p>Em veículo alugado, estes custos normalmente ficam embutidos no valor da locação.</p>
+              </motion.div>
+            ) : (
               <motion.div 
                 initial={{ opacity: 0 }}
                 animate={{ opacity: 1 }}

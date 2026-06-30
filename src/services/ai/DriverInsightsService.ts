@@ -14,7 +14,8 @@ export class DriverInsightsService {
     expenses: Expense[],
     vehicle: Vehicle | null,
     costPerKm: number,
-    goals: FinancialGoal | null
+    goals: FinancialGoal | null,
+    uberPassSettings?: any
   ): DriverDailyDiagnostic {
     logger.debug('Running analyzeDailyOutlook diagnostic analysis');
 
@@ -84,21 +85,29 @@ export class DriverInsightsService {
     const expectedNetProfit = Math.max(0, expectedGross - totalCost);
 
     // Pass rules
-    const breakEvenThreshold = 180; // Approximate gross break-even
+    const breakEvenThreshold = uberPassSettings 
+      ? (Number(uberPassSettings.pass_price || 0) / (Number(uberPassSettings.old_fee_percent || 20) / 100))
+      : 180; // Default approximate gross break-even
+    
     const shouldActivatePass = expectedGross >= breakEvenThreshold;
     let passTypeRecommendation: '24 horas' | '72 horas' | 'Por ganhos' | 'Não ativar' = 'Não ativar';
-    let passReason = 'Faturamento estimado baixo demais para justificar a taxa do passe.';
+    let passReason = `Faturamento estimado de R$ ${expectedGross.toFixed(2)} é baixo demais para justificar o passe (Ponto de Equilíbrio: R$ ${breakEvenThreshold.toFixed(2)}).`;
 
     if (shouldActivatePass) {
-      if (dayOfWeek === 5) { // Friday -> recommend 72h to cover entire weekend
-        passTypeRecommendation = '72 horas';
-        passReason = 'Final de semana começando! Ative o passe de 72h para isentar a comissão de sexta a domingo e poupar até R$ 200.';
-      } else if (dayOfWeek === 6 || dayOfWeek === 0) {
-        passTypeRecommendation = '24 horas';
-        passReason = 'Faturamento de final de semana atinge o ponto de equilíbrio rapidamente. Ative o passe de 24h.';
+      if (uberPassSettings?.pass_type) {
+        passTypeRecommendation = uberPassSettings.pass_type;
+        passReason = `RECOMENDADO! Seu faturamento projetado de R$ ${expectedGross.toFixed(2)} superou o ponto de equilíbrio real de R$ ${breakEvenThreshold.toFixed(2)} para o passe de ${uberPassSettings.pass_type === 'Por ganhos' ? 'Por Ganhos' : uberPassSettings.pass_type === '24 horas' ? '24 Horas' : '72 Horas'}.`;
       } else {
-        passTypeRecommendation = 'Por ganhos';
-        passReason = 'Meta diária corporativa consistente alcançada. O passe por limite de ganhos trará maior ROI.';
+        if (dayOfWeek === 5) { // Friday -> recommend 72h to cover entire weekend
+          passTypeRecommendation = '72 horas';
+          passReason = 'Final de semana começando! Ative o passe de 72h para isentar a comissão de sexta a domingo e poupar até R$ 200.';
+        } else if (dayOfWeek === 6 || dayOfWeek === 0) {
+          passTypeRecommendation = '24 horas';
+          passReason = 'Faturamento de final de semana atinge o ponto de equilíbrio rapidamente. Ative o passe de 24h.';
+        } else {
+          passTypeRecommendation = 'Por ganhos';
+          passReason = 'Meta diária corporativa consistente alcançada. O passe por limite de ganhos trará maior ROI.';
+        }
       }
     }
 

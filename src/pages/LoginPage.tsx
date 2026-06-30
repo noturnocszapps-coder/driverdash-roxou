@@ -37,22 +37,8 @@ export const LoginPage: React.FC = () => {
     try {
       await loginWithGoogle();
     } catch (err: any) {
-      console.warn('Google login flow missed physical redirect configuration. Auto-entering driver local demo.', err);
-      // Fallback straight into driver demo as a pleasant developer flow!
-      localDemoLogin('driver');
-      navigate('/dashboard');
-    } finally {
-      setLoadingState('idle');
-    }
-  };
-
-  const handleDemoAccess = () => {
-    setLoadingState('demo');
-    try {
-      localDemoLogin('driver');
-      navigate('/dashboard');
-    } catch (err: any) {
-      setErrorLocal(err.message);
+      console.error('Google login error:', err);
+      setErrorLocal(err.message || 'Erro ao conectar com Google. Verifique se o Supabase está configurado corretamente.');
     } finally {
       setLoadingState('idle');
     }
@@ -108,30 +94,6 @@ export const LoginPage: React.FC = () => {
             {loadingState === 'google' ? 'Conectando...' : 'Entrar com Google'}
           </button>
         </div>
-
-        {/* DETAILED SANDBOX DEMO FALLBACK - HIDE ON PRODUCTION */}
-        {!isProduction && (
-          <div className="mt-8 border-t border-purple-950/30 pt-6" id="sandbox-demo-section">
-            <div className="flex items-center justify-between mb-3 text-purple-400/70">
-              <span className="text-[10px] font-semibold font-mono tracking-wider uppercase">Acesso de Avaliação</span>
-              <span className="inline-flex items-center gap-1 text-[9px] bg-purple-950/80 text-purple-400 px-1.5 py-0.5 rounded border border-purple-900/30">
-                <Sparkles className="w-2.5 h-2.5" /> Simulação
-              </span>
-            </div>
-            
-            <p className="text-[11px] text-purple-300/60 leading-relaxed mb-4">
-              Para fins de testes e homologação rápida da interface, acesse o painel em modo offline:
-            </p>
-
-            <button
-              onClick={handleDemoAccess}
-              className="w-full flex items-center justify-center gap-1.5 py-2.5 px-3 bg-[#0d0922] border border-purple-950 hover:bg-purple-950/20 rounded-xl text-xs font-semibold text-purple-300 transition-all cursor-pointer hover:border-purple-700/50"
-              id="demo-driver-button"
-            >
-              Entrar como Convidado (Simular Painel)
-            </button>
-          </div>
-        )}
       </motion.div>
 
       {/* Supabase connection hint */}

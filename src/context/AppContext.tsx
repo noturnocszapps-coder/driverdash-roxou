@@ -4,10 +4,10 @@
  * When to edit: When adding a global state shared between separate modules, or modifying legacy adapters.
  */
 
-import React, { createContext, useContext, useState, useEffect } from 'react';
+import React, { createContext, useContext, useState, useEffect, useMemo } from 'react';
 import { supabase } from '../modules/shared/supabase.helpers';
 import { STORAGE_PREFIX } from '../modules/shared/constants';
-import { Profile, UserRole, UserPlan, Vehicle, Earning, Expense, DailyClosing, WeeklyClosing, AdminPeakRule, PassengerReport, FinancialGoal, VehicleCostSettings, SmartAlert, Subscription, Payment, DriverSession, RoutePoint, DriverCustomCost } from '../types';
+import { Profile, UserRole, UserPlan, Vehicle, Earning, Expense, DailyClosing, WeeklyClosing, AdminPeakRule, PassengerReport, FinancialGoal, VehicleCostSettings, SmartAlert, Subscription, Payment, DriverSession, RoutePoint, DriverCustomCost, UberPassSettings } from '../types';
 
 import { AuthProvider, useAuth } from '../modules/auth/auth.hooks';
 import { FinanceProvider, useFinance } from '../modules/finance/finance.hooks';
@@ -19,6 +19,7 @@ import { JourneyProvider, useJourney } from '../modules/journey/journey.hooks';
 import { GpsTestResult } from '../modules/journey/journey.types';
 import { DemandProvider, useDemand } from '../modules/demand/demand.hooks';
 import { AlertsProvider, useAlerts } from '../modules/alerts/alerts.hooks';
+import { useUberPassSettings } from '../modules/uberpass/hooks/useUberPassSettings';
 
 interface AppContextType {
   user: any | null;
@@ -128,6 +129,14 @@ interface AppContextType {
     onlineMinutes: number;
     waitingMinutes: number;
   };
+
+  // Uber Pass States & Actions
+  uberPassSettings: UberPassSettings | null;
+  uberPassActiveType: string;
+  uberPassConfigs: any;
+  changeUberPassType: (newType: string) => void;
+  updateUberPassField: (type: string, field: any, value: any) => void;
+  saveUberPassSettings: () => Promise<void>;
 }
 
 const AppContext = createContext<AppContextType | undefined>(undefined);
@@ -141,6 +150,29 @@ const LegacyAppBridgeProvider: React.FC<{ children: React.ReactNode }> = ({ chil
   const subscriptions = useSubscriptions();
   const journey = useJourney();
   const alerts = useAlerts();
+
+  const uberPass = useUberPassSettings(auth.user?.id, (vehicle.vehicleCostSettings as any)?.detailed_vehicle_config);
+
+  const activeSettings = useMemo<UberPassSettings | null>(() => {
+    if (!auth.user) return null;
+    const active = uberPass.activeConfig;
+    return {
+      user_id: auth.user.id,
+      pass_type: uberPass.activeType,
+      pass_price: active.pass_price,
+      earnings_limit: active.earnings_limit,
+      old_fee_percent: active.old_fee_percent,
+      target_profit_per_hour: active.target_profit_per_hour,
+      target_daily_revenue: active.target_daily_revenue,
+      planned_hours: active.planned_hours,
+      average_ticket: active.average_ticket,
+      cost_per_km: 0,
+      estimated_km: active.estimated_km,
+      detailed_vehicle_config: {
+        all_pass_configs: uberPass.configs
+      }
+    };
+  }, [auth.user, uberPass.activeType, uberPass.activeConfig, uberPass.configs]);
 
   const [users, setUsers] = useState<Profile[]>([]);
   const [errorMessage] = useState<string | null>(null);
@@ -392,7 +424,14 @@ const LegacyAppBridgeProvider: React.FC<{ children: React.ReactNode }> = ({ chil
         approvePayment: subscriptions.approvePayment,
         rejectPayment: subscriptions.rejectPayment,
 
-        metrics: finance.metrics
+        metrics: finance.metrics,
+
+        uberPassSettings: activeSettings,
+        uberPassActiveType: uberPass.activeType,
+        uberPassConfigs: uberPass.configs,
+        changeUberPassType: uberPass.changePassType,
+        updateUberPassField: uberPass.updateField,
+        saveUberPassSettings: uberPass.saveAll
       }}
     >
       {children}

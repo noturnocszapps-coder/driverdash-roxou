@@ -359,7 +359,7 @@ ALTER TABLE IF EXISTS public.profiles ENABLE ROW LEVEL SECURITY;
               onClick={() => setShowSqlPopup(true)} 
               className="text-[10px] bg-amber-950/40 text-amber-400 font-mono px-2 py-0.5 rounded border border-amber-900/30 flex items-center gap-1 active:scale-95"
             >
-              Sandbox Local
+              Armazenamento Local
             </button>
           )}
           

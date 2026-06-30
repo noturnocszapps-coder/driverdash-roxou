@@ -4,7 +4,7 @@ import { DriverInsightsService } from '../../../services/ai/DriverInsightsServic
 import { DriverDailyDiagnostic } from '../../../services/ai/base.types';
 
 export function useDailyOutlook() {
-  const { earnings, expenses, vehicle, vehicleCostSettings, financialGoal } = useApp();
+  const { earnings, expenses, vehicle, vehicleCostSettings, financialGoal, uberPassSettings } = useApp();
 
   const currentCostPerKm = useMemo(() => {
     return vehicleCostSettings?.fuel_price 
@@ -18,9 +18,10 @@ export function useDailyOutlook() {
       expenses,
       vehicle,
       currentCostPerKm,
-      financialGoal
+      financialGoal,
+      uberPassSettings
     );
-  }, [earnings, expenses, vehicle, currentCostPerKm, financialGoal]);
+  }, [earnings, expenses, vehicle, currentCostPerKm, financialGoal, uberPassSettings]);
 
   return { dailyOutlook, currentCostPerKm };
 }

@@ -385,6 +385,15 @@ export const calculateJourneyFinancials = (
   // 4. Maintenance / Component Wear
   const ownership = vehicle?.ownership_type || 'own';
 
+  console.log(`[VehicleCost] ownership detected: ${ownership}`);
+  if (ownership === 'rented') {
+    console.log('[VehicleCost] rental cost rules applied');
+  } else if (ownership === 'own') {
+    console.log('[VehicleCost] own vehicle rules applied');
+  } else if (ownership === 'financed') {
+    console.log('[VehicleCost] financed vehicle rules applied');
+  }
+
   let depreciation = 0;
   let tiresCost = 0;
   let oilCost = 0;

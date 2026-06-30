@@ -14,7 +14,7 @@ export const authService = {
    */
   async loginWithGoogle(): Promise<void> {
     if (!isSupabaseConfigured()) {
-      throw new Error('Supabase is not configured yet. Use Local Sandbox Mode instead.');
+      throw new Error('O Supabase não está configurado ainda. Use o Modo de Armazenamento Local.');
     }
     const isProdDomain = window.location.origin.includes('motorista.roxou.com.br');
     const redirectTo = isProdDomain 

@@ -309,7 +309,7 @@ export const DashboardPage: React.FC = () => {
       <div className="flex flex-col md:flex-row justify-between items-start md:items-center gap-6 border-b border-purple-950/20 pb-6">
         <div>
           <span className="text-[10px] font-bold tracking-widest text-purple-400 font-mono uppercase block mb-1">
-            SISTEMA INTEGRADO DE MOBILIDADE V3
+            SISTEMA INTEGRADO DE MOBILIDADE
           </span>
           <h1 className="text-3xl font-extrabold text-white tracking-tight leading-tight">
             Painel Geral <span className="text-transparent bg-clip-text bg-gradient-to-r from-purple-400 to-indigo-300">Roxou Premium</span>
@@ -431,7 +431,7 @@ export const DashboardPage: React.FC = () => {
                 <div className="flex flex-col md:flex-row md:items-center justify-between gap-4">
                   <div>
                     <h3 className="text-xs font-bold font-mono tracking-wider text-purple-400 uppercase">
-                      Bento Dashboard Executivo V3 (Fase 6)
+                      Dashboard Executivo
                     </h3>
                     <p className="text-[10px] text-slate-400">Dados consolidados operacionais recalculados em tempo real.</p>
                   </div>

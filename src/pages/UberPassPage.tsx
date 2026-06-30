@@ -27,22 +27,35 @@ import { useVehicleCostCalculator } from '../modules/uberpass/hooks/useVehicleCo
 import { useUberPassSimulation } from '../modules/uberpass/hooks/useUberPassSimulation';
 import { useFinancialDiagnosis } from '../modules/uberpass/hooks/useFinancialDiagnosis';
 
+import { DEFAULT_MODALITIES_CONFIGS } from '../modules/uberpass/hooks/useUberPassSettings';
+
 export const UberPassPage: React.FC = () => {
-  const { user } = useApp();
+  const { 
+    user, 
+    vehicle,
+    uberPassSettings,
+    uberPassActiveType,
+    uberPassConfigs,
+    changeUberPassType,
+    updateUberPassField,
+    saveUberPassSettings
+  } = useApp();
 
   // Active configuration section/tab ('dashboard' | 'pass' | 'vehicle_form' | 'vehicle_wizard')
   const [activeTab, setActiveTab] = useState<'dashboard' | 'pass' | 'vehicle_form' | 'vehicle_wizard'>('dashboard');
 
-  // Uber Pass Settings states
-  const [passType, setPassType] = useState<string>('24 horas');
-  const [passPrice, setPassPrice] = useState<number>(30);
-  const [earningsLimit, setEarningsLimit] = useState<number>(200);
-  const [oldFeePercent, setOldFeePercent] = useState<number>(20);
-  const [targetProfitPerHour, setTargetProfitPerHour] = useState<number>(30);
-  const [targetDailyRevenue, setTargetDailyRevenue] = useState<number>(250);
-  const [plannedHours, setPlannedHours] = useState<number>(8);
-  const [averageTicket, setAverageTicket] = useState<number>(15);
-  const [estimatedKm, setEstimatedKm] = useState<number>(150);
+  // Map settings dynamically from AppContext
+  const passType = uberPassActiveType;
+  const activeConfig = uberPassConfigs[uberPassActiveType] || DEFAULT_MODALITIES_CONFIGS[uberPassActiveType];
+
+  const passPrice = activeConfig.pass_price;
+  const earningsLimit = activeConfig.earnings_limit || 200;
+  const oldFeePercent = activeConfig.old_fee_percent;
+  const targetProfitPerHour = activeConfig.target_profit_per_hour;
+  const targetDailyRevenue = activeConfig.target_daily_revenue;
+  const plannedHours = activeConfig.planned_hours;
+  const averageTicket = activeConfig.average_ticket;
+  const estimatedKm = activeConfig.estimated_km;
 
   // Detailed Vehicle Cost State
   const [vehicleConfig, setVehicleConfig] = useState<DetailedVehicleConfig>(DEFAULT_DETAILED_CONFIG);
@@ -51,48 +64,49 @@ export const UberPassPage: React.FC = () => {
   const [estimatedRevenue, setEstimatedRevenue] = useState<number>(300);
 
   // Feedback states
-  const [loading, setLoading] = useState<boolean>(true);
+  const [loading, setLoading] = useState<boolean>(false);
   const [saving, setSaving] = useState<boolean>(false);
   const [successMsg, setSuccessMsg] = useState<string | null>(null);
   const [errorMsg, setErrorMsg] = useState<string | null>(null);
 
-  // Load from database on startup
+  // Update local slider whenever targetDailyRevenue changes
+  useEffect(() => {
+    setEstimatedRevenue(targetDailyRevenue);
+  }, [targetDailyRevenue, passType]);
+
+  // Load from database on startup for detailed vehicle config
   useEffect(() => {
     if (!user) return;
 
-    const fetchSettings = async () => {
+    const fetchVehicleConfig = async () => {
       try {
-        setLoading(true);
         const settings = await uberPassService.fetchUberPassSettings(user.id);
         if (settings) {
-          setPassType(settings.pass_type || '24 horas');
-          setPassPrice(Number(settings.pass_price) || 30);
-          setEarningsLimit(Number(settings.earnings_limit) || 200);
-          setOldFeePercent(Number(settings.old_fee_percent) || 20);
-          setTargetProfitPerHour(Number(settings.target_profit_per_hour) || 30);
-          setTargetDailyRevenue(Number(settings.target_daily_revenue) || 250);
-          setPlannedHours(Number(settings.planned_hours) || 8);
-          setAverageTicket(Number(settings.average_ticket) || 15);
-          setEstimatedKm(Number(settings.estimated_km) || 150);
-          setEstimatedRevenue(Number(settings.target_daily_revenue) || 300);
-
           if (settings.detailed_vehicle_config && typeof settings.detailed_vehicle_config === 'object') {
             setVehicleConfig({
               ...DEFAULT_DETAILED_CONFIG,
-              ...settings.detailed_vehicle_config
+              ...settings.detailed_vehicle_config,
+              ownership_type: (settings.detailed_vehicle_config as any).ownership_type || vehicle?.ownership_type || 'own'
+            });
+          } else {
+            setVehicleConfig({
+              ...DEFAULT_DETAILED_CONFIG,
+              ownership_type: vehicle?.ownership_type || 'own'
             });
           }
+        } else {
+          setVehicleConfig({
+            ...DEFAULT_DETAILED_CONFIG,
+            ownership_type: vehicle?.ownership_type || 'own'
+          });
         }
       } catch (err) {
         console.error('Erro ao buscar configurações:', err);
-        setErrorMsg('Erro ao buscar configurações no servidor. Carregados valores padrão.');
-      } finally {
-        setLoading(false);
       }
     };
 
-    fetchSettings();
-  }, [user]);
+    fetchVehicleConfig();
+  }, [user, vehicle]);
 
   // Save Settings to database
   const handleSaveSettings = async (customConfig?: DetailedVehicleConfig) => {
@@ -104,6 +118,10 @@ export const UberPassPage: React.FC = () => {
     const configToSave = customConfig || vehicleConfig;
 
     try {
+      // 1. Save global parameters
+      await saveUberPassSettings();
+      
+      // 2. We can also save detailed_vehicle_config via our Service
       await uberPassService.upsertUberPassSettings({
         user_id: user.id,
         pass_type: passType,
@@ -114,9 +132,12 @@ export const UberPassPage: React.FC = () => {
         target_daily_revenue: targetDailyRevenue,
         planned_hours: plannedHours,
         average_ticket: averageTicket,
-        cost_per_km: 0, // derived dynamically
+        cost_per_km: 0,
         estimated_km: estimatedKm,
-        detailed_vehicle_config: configToSave,
+        detailed_vehicle_config: {
+          ...configToSave,
+          all_pass_configs: uberPassConfigs
+        },
       });
 
       setSuccessMsg('Configurações e Inteligência de Custos salvas com sucesso!');
@@ -173,7 +194,7 @@ export const UberPassPage: React.FC = () => {
       <div className="flex flex-col md:flex-row md:items-center justify-between gap-6 border-b border-purple-950/20 pb-6">
         <div>
           <span className="text-[11px] font-bold tracking-widest text-purple-400 font-display uppercase block mb-1">
-            MÓDULO DE DECISÃO PREMIUM V2
+            Uber Pass Intelligence
           </span>
           <h1 className="text-[30px] md:text-[34px] lg:text-[40px] font-extrabold text-white tracking-tight font-display leading-tight">
             Uber Pass <span className="text-transparent bg-clip-text bg-gradient-to-r from-purple-400 to-indigo-300">Intelligence</span>
@@ -307,53 +328,137 @@ export const UberPassPage: React.FC = () => {
                       <button
                         key={type}
                         type="button"
-                        onClick={() => setPassType(type)}
+                        onClick={() => changeUberPassType(type)}
                         className={`py-2.5 px-1.5 rounded-xl text-xs font-bold border transition-all text-center cursor-pointer ${
                           passType === type 
-                            ? 'bg-purple-900/30 border-purple-500 text-purple-200 shadow-md' 
-                            : 'bg-slate-950/40 border-purple-950/40 text-slate-400 hover:border-purple-900/30'
+                            ? 'bg-purple-900/40 border-purple-500 text-purple-200 shadow-lg scale-[1.02]' 
+                            : 'bg-[#04010a]/50 border-purple-950/40 text-slate-400 hover:border-purple-900/30'
                         }`}
                       >
-                        {type}
+                        {type === 'Por ganhos' ? 'Por Ganhos' : type === '24 horas' ? '24 Horas' : '72 Horas'}
                       </button>
                     ))}
                   </div>
                 </div>
 
+                {/* Intelligent Interface & Live Specs Card based on Selected Pass Type (ETAPA 4) */}
+                <AnimatePresence mode="wait">
+                  <motion.div
+                    key={passType}
+                    initial={{ opacity: 0, y: 10 }}
+                    animate={{ opacity: 1, y: 0 }}
+                    exit={{ opacity: 0, y: -10 }}
+                    transition={{ duration: 0.2 }}
+                    className="p-5 rounded-2xl bg-gradient-to-r from-purple-950/20 to-indigo-950/10 border border-purple-500/10 space-y-3.5"
+                  >
+                    <div className="flex justify-between items-center">
+                      <span className="text-[10px] font-bold font-mono tracking-wider text-purple-400 uppercase">
+                        Especificações Ativas do Passe
+                      </span>
+                      <span className="text-[10px] bg-purple-950/80 text-purple-200 px-2.5 py-1 rounded-full font-bold font-mono uppercase tracking-wider">
+                        Validade: {passType === '24 horas' ? '24 Horas' : passType === '72 horas' ? '72 Horas' : 'Até Limite'}
+                      </span>
+                    </div>
+
+                    <div className="grid grid-cols-2 sm:grid-cols-3 gap-4 pt-1">
+                      {passType === '24 horas' && (
+                        <>
+                          <div className="bg-[#04010a]/40 p-3 rounded-xl border border-purple-950/30">
+                            <span className="text-[9px] text-slate-500 font-mono block">LUCRO DIÁRIO PROJETADO</span>
+                            <span className="text-sm font-bold text-emerald-400 font-mono">{formatBRL(simulation.estimatedNetProfit)}</span>
+                          </div>
+                          <div className="bg-[#04010a]/40 p-3 rounded-xl border border-purple-950/30">
+                            <span className="text-[9px] text-slate-500 font-mono block">CUSTO DO PASSE (DIA)</span>
+                            <span className="text-sm font-bold text-purple-300 font-mono">{formatBRL(passPrice)}</span>
+                          </div>
+                          <div className="bg-[#04010a]/40 p-3 rounded-xl border border-purple-950/30 col-span-2 sm:col-span-1">
+                            <span className="text-[9px] text-slate-500 font-mono block">CUSTO POR HORA</span>
+                            <span className="text-sm font-bold text-slate-300 font-mono">{formatBRL(simulation.totalDayCost / (plannedHours || 1))}/h</span>
+                          </div>
+                        </>
+                      )}
+
+                      {passType === '72 horas' && (
+                        <>
+                          <div className="bg-[#04010a]/40 p-3 rounded-xl border border-purple-950/30">
+                            <span className="text-[9px] text-slate-500 font-mono block">LUCRO ESPERADO (3 DIAS)</span>
+                            <span className="text-sm font-bold text-emerald-400 font-mono">{formatBRL(simulation.estimatedNetProfit * 3)}</span>
+                          </div>
+                          <div className="bg-[#04010a]/40 p-3 rounded-xl border border-purple-950/30">
+                            <span className="text-[9px] text-slate-500 font-mono block">META ACUMULADA (3 DIAS)</span>
+                            <span className="text-sm font-bold text-purple-300 font-mono">{formatBRL(targetDailyRevenue * 3)}</span>
+                          </div>
+                          <div className="bg-[#04010a]/40 p-3 rounded-xl border border-purple-950/30 col-span-2 sm:col-span-1">
+                            <span className="text-[9px] text-slate-500 font-mono block">PROJEÇÃO SEMANAL</span>
+                            <span className="text-sm font-bold text-slate-300 font-mono">{formatBRL(simulation.monthlyRevenue / 4)}</span>
+                          </div>
+                        </>
+                      )}
+
+                      {passType === 'Por ganhos' && (
+                        <>
+                          <div className="bg-[#04010a]/40 p-3 rounded-xl border border-purple-950/30">
+                            <span className="text-[9px] text-slate-500 font-mono block">LIMITE DE CONTRATO</span>
+                            <span className="text-sm font-bold text-purple-300 font-mono">{formatBRL(earningsLimit)}</span>
+                          </div>
+                          <div className="bg-[#04010a]/40 p-3 rounded-xl border border-purple-950/30">
+                            <span className="text-[9px] text-slate-500 font-mono block">GANHOS RESTANTES</span>
+                            <span className="text-sm font-bold text-emerald-400 font-mono">{formatBRL(Math.max(0, earningsLimit - estimatedRevenue))}</span>
+                          </div>
+                          <div className="bg-[#04010a]/40 p-3 rounded-xl border border-purple-950/30 col-span-2 sm:col-span-1">
+                            <span className="text-[9px] text-slate-500 font-mono block">ECONOMIA PREVISTA (DIA)</span>
+                            <span className="text-sm font-bold text-indigo-400 font-mono">{formatBRL(simulation.estimatedSavings)}</span>
+                          </div>
+                        </>
+                      )}
+                    </div>
+                  </motion.div>
+                </AnimatePresence>
+
+                {/* Form Inputs with Independent Mapping (ETAPA 2, 4) */}
                 <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
                   <CurrencyInput 
                     label="Preço do Passe"
                     value={passPrice}
-                    onChange={(v) => setPassPrice(v)}
+                    onChange={(v) => updateUberPassField(passType, 'pass_price', v)}
                   />
 
-                  <CurrencyInput 
-                    label="Limite de Ganhos"
-                    value={earningsLimit}
-                    onChange={(v) => setEarningsLimit(v)}
-                    disabled={passType !== 'Por ganhos'}
-                  />
+                  {passType === 'Por ganhos' ? (
+                    <CurrencyInput 
+                      label="Limite de Ganhos Contratado"
+                      value={earningsLimit}
+                      onChange={(v) => updateUberPassField(passType, 'earnings_limit', v)}
+                    />
+                  ) : (
+                    <div className="p-4 bg-[#04010a]/30 border border-purple-950/20 rounded-xl flex items-center justify-between">
+                      <div>
+                        <span className="text-xs text-slate-400 block font-semibold">Sem limite de ganhos</span>
+                        <span className="text-[10px] text-slate-500">Ilimitado até expirar o prazo</span>
+                      </div>
+                      <ShieldCheck className="w-5 h-5 text-purple-500/60" />
+                    </div>
+                  )}
                 </div>
 
                 <div className="grid grid-cols-1 md:grid-cols-2 gap-4 border-t border-purple-950/10 pt-4">
                   <PercentageInput 
                     label="Taxa Uber Clássica"
                     value={oldFeePercent}
-                    onChange={(v) => setOldFeePercent(v)}
+                    onChange={(v) => updateUberPassField(passType, 'old_fee_percent', v)}
                   />
 
                   <CurrencyInput 
                     label="Meta de Lucro / Hora"
                     value={targetProfitPerHour}
-                    onChange={(v) => setTargetProfitPerHour(v)}
+                    onChange={(v) => updateUberPassField(passType, 'target_profit_per_hour', v)}
                   />
                 </div>
 
                 <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
                   <CurrencyInput 
-                    label="Meta Faturamento Diário"
+                    label={passType === '72 horas' ? 'Meta Diária Média (R$)' : 'Meta Faturamento Diário'}
                     value={targetDailyRevenue}
-                    onChange={(v) => setTargetDailyRevenue(v)}
+                    onChange={(v) => updateUberPassField(passType, 'target_daily_revenue', v)}
                   />
 
                   <div className="space-y-1.5">
@@ -361,7 +466,7 @@ export const UberPassPage: React.FC = () => {
                     <input 
                       type="number" 
                       value={plannedHours} 
-                      onChange={(e) => setPlannedHours(Number(e.target.value) || 0)}
+                      onChange={(e) => updateUberPassField(passType, 'planned_hours', Number(e.target.value) || 0)}
                       className="w-full bg-[#04010a] border border-purple-950/40 rounded-xl py-3 px-4 text-sm text-slate-200 font-bold"
                     />
                   </div>
@@ -371,7 +476,7 @@ export const UberPassPage: React.FC = () => {
                   <CurrencyInput 
                     label="Ticket Médio Corrida"
                     value={averageTicket}
-                    onChange={(v) => setAverageTicket(v)}
+                    onChange={(v) => updateUberPassField(passType, 'average_ticket', v)}
                   />
 
                   <div className="space-y-1.5">
@@ -379,7 +484,7 @@ export const UberPassPage: React.FC = () => {
                     <input 
                       type="number" 
                       value={estimatedKm} 
-                      onChange={(e) => setEstimatedKm(Number(e.target.value) || 0)}
+                      onChange={(e) => updateUberPassField(passType, 'estimated_km', Number(e.target.value) || 0)}
                       className="w-full bg-[#04010a] border border-purple-950/40 rounded-xl py-3 px-4 text-sm text-slate-200 font-bold"
                     />
                   </div>
@@ -404,49 +509,85 @@ export const UberPassPage: React.FC = () => {
               </div>
 
               <div className="space-y-4">
-                <div className="grid grid-cols-2 gap-4">
-                  <CurrencyInput 
-                    label="Seguro (Mensal)"
-                    value={vehicleConfig.insuranceCost}
-                    onChange={(v) => updateConfigField('insuranceCost', v)}
-                  />
-                  <CurrencyInput 
-                    label="IPVA (Anual)"
-                    value={vehicleConfig.ipvaCost}
-                    onChange={(v) => updateConfigField('ipvaCost', v)}
-                  />
+                <div className="space-y-1.5">
+                  <label className="block text-slate-400 text-xs mb-1 font-display font-semibold uppercase tracking-wider">Categoria de Posse</label>
+                  <select
+                    value={vehicleConfig.ownership_type || 'own'}
+                    onChange={(e) => updateConfigField('ownership_type', e.target.value as any)}
+                    className="w-full bg-[#04010a] border border-purple-950/40 rounded-xl py-3 px-4 text-sm text-slate-200 font-bold cursor-pointer"
+                  >
+                    <option value="own">Veículo Próprio</option>
+                    <option value="financed">Veículo Financiado</option>
+                    <option value="rented">Veículo Alugado</option>
+                  </select>
                 </div>
 
-                <div className="grid grid-cols-2 gap-4">
-                  <CurrencyInput 
-                    label="Licenciamento (Anual)"
-                    value={vehicleConfig.licensingCost}
-                    onChange={(v) => updateConfigField('licensingCost', v)}
-                  />
-                  <CurrencyInput 
-                    label="Aluguel / Parcela (Mensal)"
-                    value={vehicleConfig.rentCost}
-                    onChange={(v) => updateConfigField('rentCost', v)}
-                  />
-                </div>
+                {vehicleConfig.ownership_type === 'rented' ? (
+                  <>
+                    <div className="p-4 rounded-xl bg-purple-950/20 border border-purple-900/30 text-purple-300 text-xs my-2">
+                      <p className="font-semibold text-purple-400 mb-1">Custos Embutidos na Locação</p>
+                      <p>Em veículo alugado, estes custos normalmente ficam embutidos no valor da locação.</p>
+                    </div>
 
-                <div className="grid grid-cols-2 gap-4">
-                  <CurrencyInput 
-                    label="Manutenção (Anual Estim.)"
-                    value={vehicleConfig.brakeCost}
-                    onChange={(v) => updateConfigField('brakeCost', v)}
-                  />
-                  <div className="space-y-1.5">
-                    <label className="block text-slate-400 text-xs mb-1 font-display font-semibold uppercase tracking-wider">Depreciação (R$/Km)</label>
-                    <input 
-                      type="number" 
-                      step="0.01"
-                      value={vehicleConfig.depreciationCost}
-                      onChange={(e) => updateConfigField('depreciationCost', Number(e.target.value) || 0)}
-                      className="w-full bg-[#04010a] border border-purple-950/40 rounded-xl py-3 px-4 text-sm text-slate-200 font-bold"
-                    />
-                  </div>
-                </div>
+                    <div className="grid grid-cols-1 gap-4">
+                      <CurrencyInput 
+                        label="Aluguel do Veículo (Mensal)"
+                        value={vehicleConfig.rentCost}
+                        onChange={(v) => updateConfigField('rentCost', v)}
+                      />
+                    </div>
+                  </>
+                ) : (
+                  <>
+                    <div className="grid grid-cols-2 gap-4">
+                      <CurrencyInput 
+                        label="Seguro (Mensal)"
+                        value={vehicleConfig.insuranceCost}
+                        onChange={(v) => updateConfigField('insuranceCost', v)}
+                      />
+                      <CurrencyInput 
+                        label="IPVA (Anual)"
+                        value={vehicleConfig.ipvaCost}
+                        onChange={(v) => updateConfigField('ipvaCost', v)}
+                      />
+                    </div>
+
+                    <div className="grid grid-cols-2 gap-4">
+                      <CurrencyInput 
+                        label="Licenciamento (Anual)"
+                        value={vehicleConfig.licensingCost}
+                        onChange={(v) => updateConfigField('licensingCost', v)}
+                      />
+                      {vehicleConfig.ownership_type === 'financed' ? (
+                        <CurrencyInput 
+                          label="Parcela Financiamento (Mensal)"
+                          value={vehicleConfig.rentCost}
+                          onChange={(v) => updateConfigField('rentCost', v)}
+                        />
+                      ) : (
+                        <div />
+                      )}
+                    </div>
+
+                    <div className="grid grid-cols-2 gap-4">
+                      <CurrencyInput 
+                        label="Manutenção (Anual Estim.)"
+                        value={vehicleConfig.brakeCost}
+                        onChange={(v) => updateConfigField('brakeCost', v)}
+                      />
+                      <div className="space-y-1.5">
+                        <label className="block text-slate-400 text-xs mb-1 font-display font-semibold uppercase tracking-wider">Depreciação (R$/Km)</label>
+                        <input 
+                          type="number" 
+                          step="0.01"
+                          value={vehicleConfig.depreciationCost}
+                          onChange={(e) => updateConfigField('depreciationCost', Number(e.target.value) || 0)}
+                          className="w-full bg-[#04010a] border border-purple-950/40 rounded-xl py-3 px-4 text-sm text-slate-200 font-bold"
+                        />
+                      </div>
+                    </div>
+                  </>
+                )}
 
                 <div className="p-3 bg-purple-950/10 border border-purple-500/10 rounded-xl text-[11px] text-slate-400 italic">
                   Para uma configuração mais dinâmica e intuitiva incluindo consumo elétrico/híbrido e marcas, utilize a aba <strong>Assistente do Veículo</strong>.
