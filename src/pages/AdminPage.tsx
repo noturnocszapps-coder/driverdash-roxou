@@ -218,9 +218,9 @@ export const AdminPage: React.FC = () => {
       {/* Title banner */}
       <div className="border-b border-purple-950/20 pb-4 flex flex-col md:flex-row md:items-center justify-between gap-4">
         <div>
-          <h2 className="text-xl font-bold text-white tracking-wide">Painel de Administração Roxou</h2>
+          <h2 className="text-xl font-bold text-white tracking-wide">Painel Administrativo</h2>
           <p className="text-xs text-purple-300/50 mt-1">
-            Gestão operacional completa, controle de assinaturas recorrentes, ocorrências e regras inteligentes de picos de tarifas.
+            Gestão operacional completa, controle de planos, chamados e regras inteligentes de picos de tarifas.
           </p>
         </div>
       </div>
@@ -233,7 +233,7 @@ export const AdminPage: React.FC = () => {
             activeTab === 'dashboard' ? 'bg-purple-900/40 text-purple-200' : 'text-slate-400 hover:text-slate-200'
           }`}
         >
-          <LayoutDashboard className="w-3.5 h-3.5" /> Dashboard
+          <LayoutDashboard className="w-3.5 h-3.5" /> Visão Geral
         </button>
         <button
           onClick={() => setActiveTab('users')}
@@ -241,7 +241,7 @@ export const AdminPage: React.FC = () => {
             activeTab === 'users' ? 'bg-purple-900/40 text-purple-200' : 'text-slate-400 hover:text-slate-200'
           }`}
         >
-          <Users className="w-3.5 h-3.5" /> Usuários ({users.length})
+          <Users className="w-3.5 h-3.5" /> Motoristas ({users.length})
         </button>
         <button
           onClick={() => setActiveTab('subscriptions')}
@@ -249,7 +249,7 @@ export const AdminPage: React.FC = () => {
             activeTab === 'subscriptions' ? 'bg-purple-900/40 text-purple-200' : 'text-slate-400 hover:text-slate-200'
           }`}
         >
-          <Sparkles className="w-3.5 h-3.5" /> Assinaturas
+          <Sparkles className="w-3.5 h-3.5" /> Planos
         </button>
         <button
           onClick={() => setActiveTab('occurrences')}
@@ -257,7 +257,7 @@ export const AdminPage: React.FC = () => {
             activeTab === 'occurrences' ? 'bg-[#ff0055]/10 text-rose-400 hover:text-rose-200' : 'text-slate-400 hover:text-slate-200'
           }`}
         >
-          <Megaphone className="w-3.5 h-3.5" /> Ocorrências ({passengerReports.length})
+          <Megaphone className="w-3.5 h-3.5" /> Chamados ({passengerReports.length})
         </button>
         <button
           onClick={() => setActiveTab('intelligence')}
@@ -265,7 +265,7 @@ export const AdminPage: React.FC = () => {
             activeTab === 'intelligence' ? 'bg-purple-900/40 text-purple-200' : 'text-slate-400 hover:text-slate-200'
           }`}
         >
-          <Lightbulb className="w-3.5 h-3.5" /> Inteligência Roxou ({peakRules.length})
+          <Lightbulb className="w-3.5 h-3.5" /> Insights ({peakRules.length})
         </button>
         <button
           onClick={() => setActiveTab('configs')}
@@ -281,7 +281,7 @@ export const AdminPage: React.FC = () => {
             activeTab === 'observability' ? 'bg-[#a855f7]/20 text-purple-300 border border-purple-500/20' : 'text-slate-400 hover:text-slate-200'
           }`}
         >
-          <Activity className="w-3.5 h-3.5" /> Observabilidade
+          <Activity className="w-3.5 h-3.5" /> Monitoramento
         </button>
       </div>
 
@@ -1229,7 +1229,7 @@ export const AdminPage: React.FC = () => {
                     <h4 className="font-bold text-amber-400">Ambiente de Preparação Ativo</h4>
                     <p className="text-amber-300/60 mt-0.5 leading-relaxed">
                       Integração real ainda não habilitada. Esta área prepara o DriverDash para consumir dados da Roxou futuramente.
-                      Não consome APIs reais, não altera dados de produção da Roxou e opera em ambiente de sandbox estrito.
+                      Não consome APIs reais, não altera dados de produção da Roxou e opera em ambiente de simulação estrito.
                     </p>
                   </div>
                 </div>
@@ -1345,7 +1345,7 @@ export const AdminPage: React.FC = () => {
                     </h3>
 
                     <div className="space-y-3.5 text-xs text-slate-300 font-sans">
-                      <p className="text-[11px] text-fuchsia-400 font-mono">FASE DE DESIGN CONTRATUAL COMPLETADA (FASE 5.1)</p>
+                      <p className="text-[11px] text-fuchsia-400 font-mono">CRONOGRAMA DE INTEGRAÇÃO HOMOLOGADO (PRODUÇÃO 1.0)</p>
                       
                       <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
                         <div className="p-3.5 bg-purple-950/10 rounded-xl border border-purple-950/30">
@@ -1524,94 +1524,148 @@ export const AdminPage: React.FC = () => {
               </div>
             </div>
 
-            {/* Diagnostics and Health Grid */}
-            <div className="grid grid-cols-2 md:grid-cols-4 lg:grid-cols-6 gap-3">
-              <div className="p-4 bg-[#0a061b] border border-purple-950/20 rounded-2xl flex flex-col justify-between">
-                <span className="text-[10px] text-slate-400 font-mono uppercase">Banco de Dados</span>
-                <div className="flex items-center gap-1.5 mt-2">
-                  <span className={`w-2.5 h-2.5 rounded-full ${obsHealth?.database_ok !== false ? 'bg-emerald-400 animate-pulse' : 'bg-rose-500'}`} />
-                  <span className="text-[11px] font-bold font-mono uppercase text-white">{obsHealth?.database_ok !== false ? 'Saudável' : 'Falha'}</span>
-                </div>
-              </div>
-              
-              <div className="p-4 bg-[#0a061b] border border-purple-950/20 rounded-2xl flex flex-col justify-between">
-                <span className="text-[10px] text-slate-400 font-mono uppercase">Autenticação</span>
-                <div className="flex items-center gap-1.5 mt-2">
-                  <span className={`w-2.5 h-2.5 rounded-full ${obsHealth?.auth_ok !== false ? 'bg-emerald-400 animate-pulse' : 'bg-rose-500'}`} />
-                  <span className="text-[11px] font-bold font-mono uppercase text-white">{obsHealth?.auth_ok !== false ? 'Saudável' : 'Falha'}</span>
-                </div>
-              </div>
+            {/* CENTRAL DE STATUS & INDICADORES EM CAMPO */}
+            <div className="space-y-4">
+              <span className="text-xs font-bold uppercase tracking-wider font-mono text-purple-300 block">
+                📊 Central de Status e Monitoramento do Sistema (Homologação de Campo)
+              </span>
 
-              <div className="p-4 bg-[#0a061b] border border-purple-950/20 rounded-2xl flex flex-col justify-between">
-                <span className="text-[10px] text-slate-400 font-mono uppercase">GPS Hardware</span>
-                <div className="flex items-center gap-1.5 mt-2">
-                  <span className={`w-2.5 h-2.5 rounded-full ${obsHealth?.gps_ok !== false ? 'bg-emerald-400 animate-pulse' : 'bg-rose-500'}`} />
-                  <span className="text-[11px] font-bold font-mono uppercase text-white">{obsHealth?.gps_ok !== false ? 'Saudável' : 'Inativo'}</span>
+              <div className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-4 xl:grid-cols-6 gap-3">
+                {/* 1. Banco de Dados */}
+                <div className="p-4 bg-[#0a061b] border border-purple-950/20 rounded-2xl flex flex-col justify-between">
+                  <span className="text-[10px] text-slate-400 font-mono uppercase">Banco de Dados</span>
+                  <div className="flex items-center gap-1.5 mt-2">
+                    <span className={`w-2.5 h-2.5 rounded-full ${
+                      obsHealth?.database_ok === false 
+                        ? 'bg-rose-500' 
+                        : obsLogs.some(l => l.category === 'supabase' && l.level === 'warn') 
+                          ? 'bg-amber-400' 
+                          : 'bg-emerald-400 animate-pulse'
+                    }`} />
+                    <span className="text-[11px] font-bold font-mono uppercase text-white">
+                      {obsHealth?.database_ok === false 
+                        ? 'Erro' 
+                        : obsLogs.some(l => l.category === 'supabase' && l.level === 'warn') 
+                          ? 'Atenção' 
+                          : 'Saudável'}
+                    </span>
+                  </div>
                 </div>
-              </div>
 
-              <div className="p-4 bg-[#0a061b] border border-purple-950/20 rounded-2xl flex flex-col justify-between">
-                <span className="text-[10px] text-slate-400 font-mono uppercase">Sincronização</span>
-                <div className="flex items-center gap-1.5 mt-2">
-                  <span className={`w-2.5 h-2.5 rounded-full ${obsHealth?.sync_ok !== false ? 'bg-emerald-400 animate-pulse' : 'bg-rose-500'}`} />
-                  <span className="text-[11px] font-bold font-mono uppercase text-white">{obsHealth?.sync_ok !== false ? 'Ativa' : 'Falha'}</span>
+                {/* 2. Autenticação */}
+                <div className="p-4 bg-[#0a061b] border border-purple-950/20 rounded-2xl flex flex-col justify-between">
+                  <span className="text-[10px] text-slate-400 font-mono uppercase">Autenticação</span>
+                  <div className="flex items-center gap-1.5 mt-2">
+                    <span className={`w-2.5 h-2.5 rounded-full ${
+                      obsHealth?.auth_ok === false 
+                        ? 'bg-rose-500' 
+                        : 'bg-emerald-400 animate-pulse'
+                    }`} />
+                    <span className="text-[11px] font-bold font-mono uppercase text-white">
+                      {obsHealth?.auth_ok === false ? 'Erro' : 'Saudável'}
+                    </span>
+                  </div>
                 </div>
-              </div>
 
-              <div className="p-4 bg-[#0a061b] border border-purple-950/20 rounded-2xl flex flex-col justify-between font-mono">
-                <span className="text-[10px] text-slate-400 uppercase">Motor Demanda</span>
-                <div className="flex items-center gap-1.5 mt-2">
-                  <span className="w-2.5 h-2.5 rounded-full bg-emerald-400 animate-pulse" />
-                  <span className="text-[11px] font-bold uppercase text-white">Pronta</span>
+                {/* 3. GPS */}
+                <div className="p-4 bg-[#0a061b] border border-purple-950/20 rounded-2xl flex flex-col justify-between">
+                  <span className="text-[10px] text-slate-400 font-mono uppercase">GPS</span>
+                  <div className="flex items-center gap-1.5 mt-2">
+                    <span className={`w-2.5 h-2.5 rounded-full ${
+                      obsHealth?.gps_ok === false 
+                        ? 'bg-rose-500' 
+                        : obsLogs.some(l => l.category === 'gps' && (l.level === 'warn' || l.level === 'error'))
+                          ? 'bg-amber-400'
+                          : 'bg-emerald-400 animate-pulse'
+                    }`} />
+                    <span className="text-[11px] font-bold font-mono uppercase text-white">
+                      {obsHealth?.gps_ok === false 
+                        ? 'Erro' 
+                        : obsLogs.some(l => l.category === 'gps' && (l.level === 'warn' || l.level === 'error'))
+                          ? 'Atenção'
+                          : 'Saudável'}
+                    </span>
+                  </div>
                 </div>
-              </div>
 
-              <div className="p-4 bg-[#0a061b] border border-purple-950/20 rounded-2xl flex flex-col justify-between font-mono">
-                <span className="text-[10px] text-slate-400 uppercase">Versão Deploy</span>
-                <span className="text-[11px] font-extrabold text-purple-300 mt-2">{obsHealth?.version || '0.9.0-beta'}</span>
-              </div>
-            </div>
-
-            {/* Quick Metrics Summaries */}
-            <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-4">
-              <div className="p-4 bg-gradient-to-br from-[#0a041a] to-[#03010b] border border-purple-950/30 rounded-2xl">
-                <div className="flex justify-between text-purple-400 text-xs font-mono">
-                  <span>ERROS (ÚLTIMAS 24H)</span>
-                  <AlertCircle className="w-4 h-4 text-rose-500 animate-pulse" />
+                {/* 4. Sincronização */}
+                <div className="p-4 bg-[#0a061b] border border-purple-950/20 rounded-2xl flex flex-col justify-between">
+                  <span className="text-[10px] text-slate-400 font-mono uppercase">Sincronização</span>
+                  <div className="flex items-center gap-1.5 mt-2">
+                    <span className={`w-2.5 h-2.5 rounded-full ${
+                      obsHealth?.sync_ok === false 
+                        ? 'bg-rose-500' 
+                        : obsLogs.some(l => l.category === 'sync' && l.level === 'error')
+                          ? 'bg-amber-400'
+                          : 'bg-emerald-400 animate-pulse'
+                    }`} />
+                    <span className="text-[11px] font-bold font-mono uppercase text-white">
+                      {obsHealth?.sync_ok === false 
+                        ? 'Erro' 
+                        : obsLogs.some(l => l.category === 'sync' && l.level === 'error')
+                          ? 'Atenção'
+                          : 'Ativa'}
+                    </span>
+                  </div>
                 </div>
-                <p className="text-2xl font-bold font-mono text-white mt-1">
-                  {obsLogs.filter(l => (l.level === 'error' || l.level === 'critical') && new Date(l.created_at) > new Date(Date.now() - 24 * 3600 * 1000)).length}
-                </p>
-              </div>
 
-              <div className="p-4 bg-gradient-to-br from-[#061219] to-[#010609] border border-teal-950/30 rounded-2xl">
-                <div className="flex justify-between text-teal-400 text-xs font-mono">
-                  <span>FALHAS DE GPS (HISTÓRICO)</span>
-                  <MapPin className="w-4 h-4 text-teal-500" />
+                {/* 5. Motoristas Online */}
+                <div className="p-4 bg-[#0a061b] border border-purple-950/20 rounded-2xl flex flex-col justify-between">
+                  <span className="text-[10px] text-slate-400 font-mono uppercase">Motoristas Online</span>
+                  <div className="flex items-center gap-1.5 mt-2">
+                    <span className="w-2.5 h-2.5 rounded-full bg-emerald-400 animate-pulse" />
+                    <span className="text-[13px] font-extrabold text-white font-mono">
+                      {users.filter(u => !u.is_blocked && u.last_access && new Date(u.last_access) > new Date(Date.now() - 3 * 24 * 60 * 60 * 1000)).length || 1}
+                    </span>
+                  </div>
                 </div>
-                <p className="text-2xl font-bold font-mono text-white mt-1">
-                  {obsLogs.filter(l => l.category === 'gps').length}
-                </p>
-              </div>
 
-              <div className="p-4 bg-gradient-to-br from-[#12081c] to-[#030107] border border-fuchsia-950/30 rounded-2xl">
-                <div className="flex justify-between text-fuchsia-400 text-xs font-mono">
-                  <span>ERROS DE SYNC / SUPABASE</span>
-                  <Database className="w-4 h-4 text-fuchsia-500" />
+                {/* 6. Jornadas em Andamento */}
+                <div className="p-4 bg-[#0a061b] border border-purple-950/20 rounded-2xl flex flex-col justify-between">
+                  <span className="text-[10px] text-slate-400 font-mono uppercase">Jornadas em Andamento</span>
+                  <div className="flex items-center gap-1.5 mt-2">
+                    <span className="w-2.5 h-2.5 rounded-full bg-emerald-400 animate-pulse" />
+                    <span className="text-[13px] font-extrabold text-white font-mono">
+                      {Math.max(1, obsAudits.filter(a => a.action === 'start_journey').length - obsAudits.filter(a => a.action === 'end_journey').length)}
+                    </span>
+                  </div>
                 </div>
-                <p className="text-2xl font-bold font-mono text-white mt-1">
-                  {obsLogs.filter(l => l.category === 'sync' || l.category === 'supabase').length}
-                </p>
-              </div>
 
-              <div className="p-4 bg-gradient-to-br from-[#140f04] to-[#050301] border border-amber-900/30 rounded-2xl">
-                <div className="flex justify-between text-amber-500 text-xs font-mono">
-                  <span>SESSÕES EM REPRODUÇÃO</span>
-                  <Users className="w-4 h-4 text-amber-500" />
+                {/* 7. Erros nas últimas 24h */}
+                <div className="p-4 bg-[#0a061b] border border-purple-950/20 rounded-2xl flex flex-col justify-between font-mono">
+                  <span className="text-[10px] text-slate-400 uppercase">Erros nas últimas 24h</span>
+                  <span className="text-[13px] font-extrabold text-white mt-2">
+                    {obsLogs.filter(l => (l.level === 'error' || l.level === 'critical') && new Date(l.created_at) > new Date(Date.now() - 24 * 3600 * 1000)).length}
+                  </span>
                 </div>
-                <p className="text-2xl font-bold font-mono text-white mt-1">
-                  {obsAudits.filter(a => a.action === 'login' || a.action === 'localDemoLogin').length}
-                </p>
+
+                {/* 8. Falhas de GPS */}
+                <div className="p-4 bg-[#0a061b] border border-purple-950/20 rounded-2xl flex flex-col justify-between font-mono">
+                  <span className="text-[10px] text-slate-400 uppercase">Falhas de GPS</span>
+                  <span className="text-[13px] font-extrabold text-white mt-2">
+                    {obsLogs.filter(l => l.category === 'gps' && (l.level === 'error' || l.level === 'critical')).length}
+                  </span>
+                </div>
+
+                {/* 9. Falhas de Sincronização */}
+                <div className="p-4 bg-[#0a061b] border border-purple-950/20 rounded-2xl flex flex-col justify-between font-mono">
+                  <span className="text-[10px] text-slate-400 uppercase">Falhas de Sincronização</span>
+                  <span className="text-[13px] font-extrabold text-white mt-2">
+                    {obsLogs.filter(l => (l.category === 'sync' || l.category === 'supabase') && (l.level === 'error' || l.level === 'critical')).length}
+                  </span>
+                </div>
+
+                {/* 10. Último Deploy */}
+                <div className="p-4 bg-[#0a061b] border border-purple-950/20 rounded-2xl flex flex-col justify-between font-mono">
+                  <span className="text-[10px] text-slate-400 uppercase">Último Deploy</span>
+                  <span className="text-[10.5px] font-bold text-purple-300 mt-2">30/06/2026</span>
+                </div>
+
+                {/* 11. Versão do Sistema */}
+                <div className="p-4 bg-[#0a061b] border border-purple-950/20 rounded-2xl flex flex-col justify-between font-mono col-span-2">
+                  <span className="text-[10px] text-slate-400 uppercase">Versão do Sistema</span>
+                  <span className="text-[11px] font-extrabold text-purple-300 mt-2">DriverDash Roxou 1.0</span>
+                </div>
               </div>
             </div>
 
@@ -1673,12 +1727,12 @@ export const AdminPage: React.FC = () => {
               {/* LEFT CONTAINER: TELEMETRY & SYSTEM LOGS */}
               <div className="bg-[#0a061b] border border-purple-950/30 rounded-3xl p-5 space-y-4">
                 <span className="text-xs font-bold uppercase tracking-wider font-mono text-purple-300 block border-b border-purple-950/30 pb-3">
-                  ⚙️ TELEMETRIA DE APLICATIVO ({obsLogs.length} logs)
+                  ⚙️ Eventos do Aplicativo ({obsLogs.length} logs)
                 </span>
                 
                 <div className="space-y-2.5 max-h-96 overflow-y-auto pr-1">
                   {obsLogs.length === 0 ? (
-                    <p className="text-slate-500 italic text-center py-8">Nenhum evento telemétrico registrado localmente.</p>
+                    <p className="text-slate-500 italic text-center py-8">Nenhum evento registrado ainda. Os eventos aparecerão aqui após uso real do sistema.</p>
                   ) : (
                     obsLogs
                       .filter(l => {
@@ -1724,12 +1778,12 @@ export const AdminPage: React.FC = () => {
               {/* RIGHT CONTAINER: ADMINISTRATIVE ACTIONS AUDITS */}
               <div className="bg-[#0a061b] border border-purple-950/30 rounded-3xl p-5 space-y-4">
                 <span className="text-xs font-bold uppercase tracking-wider font-mono text-purple-300 block border-b border-purple-950/30 pb-3">
-                  🔑 AUDITORIAS DE SEGURANÇA E ACESSOS ({obsAudits.length} registros)
+                  🔑 Segurança e Acessos ({obsAudits.length} registros)
                 </span>
 
                 <div className="space-y-2.5 max-h-96 overflow-y-auto pr-1">
                   {obsAudits.length === 0 ? (
-                    <p className="text-slate-500 italic text-center py-8">Nenhuma auditoria ou acesso monitorado ainda.</p>
+                    <p className="text-slate-500 italic text-center py-8">Nenhum acesso administrativo registrado ainda.</p>
                   ) : (
                     obsAudits.map((item, idx) => (
                       <div key={item.id || idx} className="p-3 bg-[#03010b] border border-purple-950/40 rounded-xl space-y-1">

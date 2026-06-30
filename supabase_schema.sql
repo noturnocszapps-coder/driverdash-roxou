@@ -453,7 +453,7 @@ ALTER TABLE public.demand_signals ENABLE ROW LEVEL SECURITY;
 
 CREATE POLICY "Anyone can read active demand signals"
     ON public.demand_signals FOR SELECT
-    USING (is_active = true OR public.is_admin());
+    USING ((is_active = true AND auth.uid() IS NOT NULL) OR public.is_admin());
 
 CREATE POLICY "Admins manage demand signals"
     ON public.demand_signals FOR ALL
@@ -524,7 +524,7 @@ CREATE POLICY "Admin can view all app logs"
 -- 9.7 RLS Policies for Audit Logs
 CREATE POLICY "Anyone can insert audit logs"
     ON public.audit_logs FOR INSERT
-    WITH CHECK (true);
+    WITH CHECK (auth.uid() IS NOT NULL);
 
 CREATE POLICY "Admin can view all audit logs"
     ON public.audit_logs FOR SELECT
@@ -533,7 +533,7 @@ CREATE POLICY "Admin can view all audit logs"
 -- 9.8 RLS Policies for Health Snapshots
 CREATE POLICY "Anyone can insert health snapshots"
     ON public.system_health_snapshots FOR INSERT
-    WITH CHECK (true);
+    WITH CHECK (auth.uid() IS NOT NULL);
 
 CREATE POLICY "Admin can view health snapshots"
     ON public.system_health_snapshots FOR SELECT
