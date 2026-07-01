@@ -140,7 +140,7 @@ export function useUberPassSettings(userId: string | undefined, activeVehicleCon
           }
         }
       } catch (err) {
-        console.error('[UberPass] Erro ao carregar configurações do banco:', err);
+        console.warn('[UberPass] Falha ao carregar configurações do banco (usando local storage/padrão):', err);
       } finally {
         setLoading(false);
       }
