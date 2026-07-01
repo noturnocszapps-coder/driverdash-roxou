@@ -33,6 +33,9 @@ import {
   validateRideData 
 } from '../modules/journey/rideCalibration.service';
 import { CalibrationRouteMap } from '../components/CalibrationRouteMap';
+import { filterGpsNoise, snapTrackToRoads } from '../modules/journey/roadMatching.service';
+import { RealTimeTrackerMap } from '../components/RealTimeTrackerMap';
+import { TelemetryDebugModal } from '../components/TelemetryDebugModal';
 
 // Haversine Formula helper
 export function calculateHaversineDistance(lat1: number, lon1: number, lat2: number, lon2: number): number {
@@ -179,6 +182,7 @@ export const JornadaPage: React.FC = () => {
   const [editingRide, setEditingRide] = useState<any | null>(null);
   const [editModalOpen, setEditModalOpen] = useState<boolean>(false);
   const [selectedRouteRide, setSelectedRouteRide] = useState<any | null>(null);
+  const [selectedTelemetryRide, setSelectedTelemetryRide] = useState<any | null>(null);
   const [isSavingCalibration, setIsSavingCalibration] = useState<boolean>(false);
   const [showDebugDataModal, setShowDebugDataModal] = useState<boolean>(false);
 
@@ -588,7 +592,14 @@ export const JornadaPage: React.FC = () => {
     return { neighborhood: nearest.name, city: nearest.city };
   };
 
-  const fetchAddressForCoordinates = async (lat: number, lng: number): Promise<{ address: string, neighborhood: string, city: string }> => {
+  const fetchAddressForCoordinates = async (lat: number, lng: number): Promise<{
+    address: string,
+    neighborhood: string,
+    city: string,
+    state: string,
+    street: string,
+    postalCode: string
+  }> => {
     try {
       const response = await fetch(`/api/geocode?lat=${lat}&lng=${lng}`);
       if (response.ok) {
@@ -597,7 +608,10 @@ export const JornadaPage: React.FC = () => {
         return {
           address: data.address || `${localFallback.neighborhood}, ${localFallback.city}`,
           neighborhood: data.neighborhood || localFallback.neighborhood,
-          city: data.city || localFallback.city
+          city: data.city || localFallback.city,
+          state: data.state || 'SP',
+          street: data.street || '',
+          postalCode: data.postalCode || ''
         };
       }
     } catch (err) {
@@ -605,9 +619,12 @@ export const JornadaPage: React.FC = () => {
     }
     const local = getNearestNeighborhoodLocal(lat, lng);
     return {
-      address: `${local.neighborhood}, ${local.city}`,
+      address: `${local.neighborhood}, ${local.city}, SP`,
       neighborhood: local.neighborhood,
-      city: local.city
+      city: local.city,
+      state: 'SP',
+      street: '',
+      postalCode: ''
     };
   };
 
@@ -633,7 +650,7 @@ export const JornadaPage: React.FC = () => {
     }
   };
 
-  // Effect to record ride track points in real time (every 3-5s as GPS coordinates stream)
+  // Effect to record ride track points in real time (every 3 seconds or 10 meters) (Requirement 6)
   useEffect(() => {
     if (!isRideActive || !activeRide || !lastCoord) return;
 
@@ -645,15 +662,17 @@ export const JornadaPage: React.FC = () => {
       const lastPoint = trackPoints[trackPoints.length - 1];
       
       const elapsed = lastPoint ? (now - new Date(lastPoint.timestamp).getTime()) : 999999;
-      if (elapsed < 3000) {
-        return prevRide; // Avoid too frequent updates
-      }
-
+      
       // Calculate distance between previous position and current position
       const lastPos = prevRide.lastPosition || (lastPoint ? { lat: lastPoint.lat, lng: lastPoint.lng } : null);
       let distance = 0;
       if (lastPos) {
         distance = calculateHaversineDistance(lastPos.lat, lastPos.lng, lastCoord.lat, lastCoord.lng) * 1000; // in meters
+      }
+
+      // Conforms to Requirement 6: "a cada 3 segundos OU 10 metros de deslocamento"
+      if (elapsed < 3000 && distance < 10) {
+        return prevRide; // Avoid too frequent updates unless shifted by 10 meters
       }
 
       // Idle Tracking Logic
@@ -667,7 +686,6 @@ export const JornadaPage: React.FC = () => {
         }
       } else {
         if (idleStartTimestamp) {
-          // If we were stopped and now moved, add the duration of the stop
           const stopDurationMs = now - idleStartTimestamp;
           totalIdleTime += stopDurationMs / 1000; // keep totalIdleTime in seconds
           idleStartTimestamp = null;
@@ -691,16 +709,27 @@ export const JornadaPage: React.FC = () => {
         movementState = distance < 8 ? 'IDLE' : 'SLOW_MOVING';
       }
 
+      // Requirement 2: GPS PROFISSIONAL (lat, lng, accuracy, altitude, heading, speed, timestamp)
       const newPoint = {
         lat: lastCoord.lat,
         lng: lastCoord.lng,
-        timestamp: new Date().toISOString(),
-        speed: typeof lastCoord.speed === 'number' ? lastCoord.speed : undefined
+        accuracy: lastCoord.accuracy,
+        altitude: typeof lastCoord.altitude === 'number' ? lastCoord.altitude : null,
+        heading: typeof lastCoord.heading === 'number' ? lastCoord.heading : null,
+        speed: typeof lastCoord.speed === 'number' ? lastCoord.speed : 0,
+        timestamp: new Date().toISOString()
       };
       
+      const updatedTrackPoints = [...trackPoints, newPoint];
+
+      // Requirement 3: FILTRO DE RUÍDO
+      const noiseResult = filterGpsNoise(updatedTrackPoints);
+
       const updatedRide = {
         ...prevRide,
-        rideTrackPoints: [...trackPoints, newPoint],
+        rideTrackPoints: updatedTrackPoints,
+        filteredTrackPoints: noiseResult.filteredPoints,
+        discardedCount: noiseResult.discardedCount,
         lastPosition: { lat: lastCoord.lat, lng: lastCoord.lng },
         lastMovingTimestamp,
         idleStartTimestamp,
@@ -709,7 +738,20 @@ export const JornadaPage: React.FC = () => {
       };
       
       localStorage.setItem('driverdash_active_ride_calib', JSON.stringify(updatedRide));
-      console.log('[GPS_TRACK] Novo ponto gravado na corrida:', newPoint, 'Distance:', distance, 'IdleState:', movementState, 'TotalIdleTime:', totalIdleTime);
+
+      // Requirement 4: LOGS ESTRUTURADOS
+      console.log('=== [PROFESSIONAL_TRACKER] TELEMETRIA GPS CAPTURADA ===');
+      console.log(`- GPS capturado: Lat: ${newPoint.lat}, Lng: ${newPoint.lng}`);
+      console.log(`- Precisão do GPS: ${newPoint.accuracy}m | Altitude: ${newPoint.altitude}m | Direção: ${newPoint.heading}°`);
+      console.log(`- Velocidade instantânea: ${newPoint.speed} km/h`);
+      console.log(`- Bairro atual do motorista: ${prevRide.pickup_neighborhood || 'N/A'}`);
+      console.log(`- Cidade atual do motorista: ${prevRide.pickup_city || 'N/A'}`);
+      console.log(`- Distância calculada desde último ponto: ${distance.toFixed(1)} metros`);
+      console.log(`- Pontos totais: ${updatedTrackPoints.length} | Filtrados/Smoothed: ${noiseResult.filteredPoints.length} | Descartados: ${noiseResult.discardedCount}`);
+      console.log(`- Tempo parado nesta corrida: ${totalIdleTime.toFixed(1)} segundos`);
+      console.log(`- Tempo em movimento nesta corrida: ${((now - new Date(prevRide.startTime).getTime()) / 1000 - totalIdleTime).toFixed(1)} segundos`);
+      console.log('========================================================');
+
       return updatedRide;
     });
   }, [lastCoord, isRideActive]);
@@ -760,14 +802,32 @@ export const JornadaPage: React.FC = () => {
         pickup_address: `${localGeocode.neighborhood}, ${localGeocode.city}`,
         pickup_neighborhood: localGeocode.neighborhood,
         pickup_city: localGeocode.city,
+        pickup_state: 'SP',
+        pickup_street: '',
+        pickup_cep: '',
         rideTrackPoints: [
           {
             lat,
             lng,
-            timestamp: new Date().toISOString(),
-            speed: typeof lastCoord?.speed === 'number' ? lastCoord.speed : undefined
+            accuracy,
+            altitude: lastCoord?.altitude || null,
+            heading: lastCoord?.heading || null,
+            speed: initialSpeed,
+            timestamp: new Date().toISOString()
           }
         ],
+        filteredTrackPoints: [
+          {
+            lat,
+            lng,
+            accuracy,
+            altitude: lastCoord?.altitude || null,
+            heading: lastCoord?.heading || null,
+            speed: initialSpeed,
+            timestamp: new Date().toISOString()
+          }
+        ],
+        discardedCount: 0,
         // Idle Tracking States
         lastPosition: { lat, lng },
         lastMovingTimestamp: timestamp,
@@ -792,7 +852,10 @@ export const JornadaPage: React.FC = () => {
             ...prev,
             pickup_address: resolved.address,
             pickup_neighborhood: resolved.neighborhood,
-            pickup_city: resolved.city
+            pickup_city: resolved.city,
+            pickup_state: resolved.state,
+            pickup_street: resolved.street,
+            pickup_cep: resolved.postalCode
           };
           localStorage.setItem('driverdash_active_ride_calib', JSON.stringify(updated));
           return updated;
@@ -899,7 +962,10 @@ export const JornadaPage: React.FC = () => {
       },
       destination_address: `${localGeocode.neighborhood}, ${localGeocode.city}`,
       destination_neighborhood: localGeocode.neighborhood,
-      destination_city: localGeocode.city
+      destination_city: localGeocode.city,
+      destination_state: 'SP',
+      destination_street: '',
+      destination_cep: ''
     };
 
     setActiveRide(updatedRide);
@@ -928,7 +994,10 @@ export const JornadaPage: React.FC = () => {
           ...prev,
           destination_address: resolved.address,
           destination_neighborhood: resolved.neighborhood,
-          destination_city: resolved.city
+          destination_city: resolved.city,
+          destination_state: resolved.state,
+          destination_street: resolved.street,
+          destination_cep: resolved.postalCode
         };
         localStorage.setItem('driverdash_active_ride_calib', JSON.stringify(updated));
         return updated;
@@ -1019,6 +1088,9 @@ export const JornadaPage: React.FC = () => {
 
       // speed metrics
       const pts = activeRide?.rideTrackPoints || [];
+      const filteredTrackPoints = activeRide?.filteredTrackPoints || pts;
+      const discardedCount = activeRide?.discardedCount || 0;
+
       let maxSpeed = 0;
       let sumSpeed = 0;
       let countSpeed = 0;
@@ -1032,6 +1104,74 @@ export const JornadaPage: React.FC = () => {
       const finalMaxSpeedKmh = Number((maxSpeed * 3.6).toFixed(1));
       const finalAvgSpeedKmh = countSpeed > 0 ? Number(((sumSpeed / countSpeed) * 3.6).toFixed(1)) : 35.0;
 
+      // Call snapTrackToRoads for Google Roads API Snap-to-Road correction (Requirement 4 & 7)
+      let matchedTrackPoints: any[] = [];
+      let distanceSnappedKm = distance;
+      let isSnapped = false;
+
+      if (filteredTrackPoints.length >= 2) {
+        addAiLog('[SNAP-TO-ROAD] Chamando Google Roads API para alinhamento profissional de rota...');
+        try {
+          const snapRes = await snapTrackToRoads(filteredTrackPoints);
+          if (snapRes.success && snapRes.matchedPoints.length > 0) {
+            matchedTrackPoints = snapRes.matchedPoints;
+            isSnapped = true;
+            // Calculate snapping-derived distance in km
+            let snappedDistMeters = 0;
+            for (let i = 1; i < matchedTrackPoints.length; i++) {
+              snappedDistMeters += calculateHaversineDistance(
+                matchedTrackPoints[i - 1].lat,
+                matchedTrackPoints[i - 1].lng,
+                matchedTrackPoints[i].lat,
+                matchedTrackPoints[i].lng
+              ) * 1000;
+            }
+            distanceSnappedKm = Number((snappedDistMeters / 1000).toFixed(2));
+            addAiLog(`[SNAP-TO-ROAD] Rota corrigida com sucesso! Distância snapped: ${distanceSnappedKm.toFixed(2)} km vs real: ${distance.toFixed(2)} km`);
+          } else {
+            addAiLog('[SNAP-TO-ROAD] Nenhuma correspondência de via retornada. Utilizando GPS filtrado como fallback.');
+          }
+        } catch (snapErr: any) {
+          console.error('[SNAP-TO-ROAD] Falha na chamada de alinhamento:', snapErr);
+          addAiLog('[SNAP-TO-ROAD] Falha de comunicação. Utilizando GPS filtrado como fallback.');
+        }
+      }
+
+      // Detailed telemetry analytics payload (Requirement 7 & 8)
+      const telemetryAnalytics = {
+        distancia_gps_bruto: Number(distance.toFixed(2)),
+        distancia_corrigida_snapped: Number(distanceSnappedKm.toFixed(2)),
+        distancia_divergencia_km: Number(Math.abs(distance - distanceSnappedKm).toFixed(2)),
+        tempo_total_segundos: duration,
+        tempo_parado_segundos: Math.round(totalIdleSec),
+        tempo_movimento_segundos: Math.round(movingTimeSec),
+        tempo_ate_embarque_segundos: tempo_ate_embarque,
+        velocidade_media_kmh: finalAvgSpeedKmh,
+        velocidade_maxima_kmh: finalMaxSpeedKmh,
+        pontos_brutos: pts.length,
+        pontos_filtrados: filteredTrackPoints.length,
+        pontos_descartados: discardedCount,
+        nivel_precisao_medio_metros: pts.length > 0 ? Number((pts.reduce((acc: number, p: any) => acc + (p.accuracy || 10), 0) / pts.length).toFixed(1)) : 10,
+        origem_detalhes: {
+          lat: startLat,
+          lng: startLng,
+          bairro: pickupNeighborhood || activeRide?.pickup_neighborhood || 'Centro',
+          cidade: pickupCity || 'Presidente Prudente',
+          estado: activeRide?.pickup_state || 'SP',
+          logradouro: activeRide?.pickup_street || '',
+          cep: activeRide?.pickup_cep || ''
+        },
+        destino_detalhes: {
+          lat: endLat,
+          lng: endLng,
+          bairro: destNeighborhood || activeRide?.destination_neighborhood || 'Centro',
+          cidade: destCity || 'Presidente Prudente',
+          estado: activeRide?.destination_state || 'SP',
+          logradouro: activeRide?.destination_street || '',
+          cep: activeRide?.destination_cep || ''
+        }
+      };
+
       const ride_log = {
         ride_id: activeRide?.id || 'ride_' + Date.now(),
         start_gps,
@@ -1039,7 +1179,7 @@ export const JornadaPage: React.FC = () => {
         pickup_neighborhood: pickupNeighborhood || activeRide?.pickup_neighborhood || 'Centro',
         destination_neighborhood: destNeighborhood || 'Centro',
         fare_value: valRecebido,
-        distance: Number(distance.toFixed(2)),
+        distance: Number(distanceSnappedKm.toFixed(2)), // Use corrected distance as primary
         duration,
         idle_time,
         vehicle_cost,
@@ -1058,7 +1198,11 @@ export const JornadaPage: React.FC = () => {
           lng: endLng
         },
         rota_completa: pts,
+        matchedTrackPoints: matchedTrackPoints,
+        filteredTrackPoints: filteredTrackPoints,
+        telemetryAnalytics: telemetryAnalytics,
         distancia_real: Number(distance.toFixed(2)),
+        distancia_corrigida: Number(distanceSnappedKm.toFixed(2)),
         velocidade_media: finalAvgSpeedKmh,
         velocidade_maxima: finalMaxSpeedKmh,
         tempo_parado: totalIdleSec,
@@ -1102,6 +1246,8 @@ export const JornadaPage: React.FC = () => {
 
         // Coordinates & Odometer
         rideTrackPoints: pts,
+        matchedTrackPoints: matchedTrackPoints,
+        filteredTrackPoints: filteredTrackPoints,
         start_odometer: startOdo,
         end_odometer: endOdo,
 
@@ -1872,7 +2018,7 @@ export const JornadaPage: React.FC = () => {
                   </div>
 
                   {/* Geolocation status and GPS Signal Quality */}
-                  <div className="p-4 rounded-2xl bg-[#09051d] border border-purple-950/30 flex flex-col sm:flex-row sm:items-center justify-between text-left gap-3">
+                  <div className="p-4 rounded-2xl bg-[#09051d] border border-purple-930/35 flex flex-col sm:flex-row sm:items-center justify-between text-left gap-3">
                     <div className="flex items-center gap-3">
                       <div className={`p-2 rounded-xl ${gpsUi.isError ? 'bg-rose-950/40 text-rose-400' : 'bg-purple-950/60 text-purple-400'} flex items-center justify-center`}>
                         <Compass className={`w-5 h-5 ${gpsStatus === 'GPS ativo' ? 'animate-spin' : ''}`} style={{ animationDuration: '4s' }} />
@@ -1892,6 +2038,13 @@ export const JornadaPage: React.FC = () => {
                       </span>
                     </div>
                   </div>
+
+                  {/* Real-time professional tracker Leaflet map card */}
+                  <RealTimeTrackerMap 
+                    lastCoord={lastCoord} 
+                    activeRide={activeRide} 
+                    gpsStatus={gpsStatus} 
+                  />
 
                   {/* Pending AI Feedback Card */}
                   {pendingFeedbackEventId && (
@@ -2482,12 +2635,20 @@ export const JornadaPage: React.FC = () => {
                         </div>
                         <div className="flex items-center gap-1.5 shrink-0">
                           {ride.rideTrackPoints && ride.rideTrackPoints.length > 0 && (
-                            <button
-                              onClick={() => setSelectedRouteRide(ride)}
-                              className="px-2 py-0.5 rounded bg-purple-950/40 hover:bg-purple-950/70 border border-purple-900/35 text-purple-300 font-bold select-none cursor-pointer transition-all hover:text-purple-100 flex items-center gap-1 text-[9px]"
-                            >
-                              <Navigation className="w-2.5 h-2.5" /> Ver rota
-                            </button>
+                            <>
+                              <button
+                                onClick={() => setSelectedRouteRide(ride)}
+                                className="px-2 py-0.5 rounded bg-purple-950/40 hover:bg-purple-950/70 border border-purple-900/35 text-purple-300 font-bold select-none cursor-pointer transition-all hover:text-purple-100 flex items-center gap-1 text-[9px]"
+                              >
+                                <Navigation className="w-2.5 h-2.5" /> Ver rota
+                              </button>
+                              <button
+                                onClick={() => setSelectedTelemetryRide(ride)}
+                                className="px-2 py-0.5 rounded bg-purple-950/40 hover:bg-purple-950/70 border border-purple-900/35 text-indigo-300 font-bold select-none cursor-pointer transition-all hover:text-indigo-100 flex items-center gap-1 text-[9px]"
+                              >
+                                📊 Telemetria
+                              </button>
+                            </>
                           )}
                           <button
                             onClick={() => handleEditRide(ride)}
@@ -3196,6 +3357,16 @@ export const JornadaPage: React.FC = () => {
             bairroOrigem={selectedRouteRide.bairroOrigem}
             bairroDestino={selectedRouteRide.bairroDestino}
             onClose={() => setSelectedRouteRide(null)} 
+          />
+        )}
+      </AnimatePresence>
+
+      {/* MODAL: DIAGNÓSTICO DE TELEMETRIA */}
+      <AnimatePresence>
+        {selectedTelemetryRide && (
+          <TelemetryDebugModal 
+            ride={selectedTelemetryRide}
+            onClose={() => setSelectedTelemetryRide(null)}
           />
         )}
       </AnimatePresence>

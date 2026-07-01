@@ -22,6 +22,8 @@ import {
   calculatePeriodComparison
 } from '../modules/insights/insights.calculations';
 import { DemandOpportunitiesPanel } from '../modules/demand-intelligence/DemandOpportunitiesPanel';
+import { RideIntelligenceDashboard } from '../modules/ride-intelligence/RideIntelligenceDashboard';
+import { PredictiveDashboard } from '../modules/predictive-intelligence/PredictiveDashboard';
 
 export const InsightsPage: React.FC = () => {
   const { 
@@ -40,7 +42,7 @@ export const InsightsPage: React.FC = () => {
   } = useApp();
 
   // Active filters and tab states
-  const [insightsTab, setInsightsTab] = useState<'copilot' | 'opportunities'>('opportunities');
+  const [insightsTab, setInsightsTab] = useState<'predictive' | 'intelligence' | 'copilot' | 'opportunities'>('predictive');
   const [activeAlertFilter, setActiveAlertFilter] = useState<'all' | 'unread' | 'read'>('unread');
   const [timelinePeriod, setTimelinePeriod] = useState<'day' | 'week' | 'month' | 'year'>('week');
   const [comparisonPeriod, setComparisonPeriod] = useState<'day' | 'week' | 'month' | 'year'>('week');
@@ -326,10 +328,40 @@ export const InsightsPage: React.FC = () => {
       </div>
 
       {/* Sub-Tabs Section */}
-      <div className="flex border-b border-purple-950/20 pb-px gap-6 mb-2">
+      <div className="flex border-b border-purple-950/20 pb-px gap-6 mb-2 overflow-x-auto scrollbar-none">
+        <button
+          onClick={() => setInsightsTab('predictive')}
+          className={`pb-3 text-sm font-bold tracking-wide relative cursor-pointer transition-all flex items-center gap-1.5 shrink-0 ${
+            insightsTab === 'predictive' ? 'text-white font-extrabold' : 'text-slate-400 hover:text-slate-200'
+          }`}
+        >
+          {insightsTab === 'predictive' && (
+            <motion.div layoutId="insightsTabActiveLine" className="absolute bottom-0 left-0 right-0 h-0.5 bg-purple-500" />
+          )}
+          <span>🔮 IA Preditiva</span>
+          <span className="px-1.5 py-0.5 bg-[#1b0847] text-purple-300 font-mono text-[9px] uppercase rounded-md border border-purple-800/35 tracking-wider font-extrabold">
+            Fase 3 IA
+          </span>
+        </button>
+
+        <button
+          onClick={() => setInsightsTab('intelligence')}
+          className={`pb-3 text-sm font-bold tracking-wide relative cursor-pointer transition-all flex items-center gap-1.5 shrink-0 ${
+            insightsTab === 'intelligence' ? 'text-white font-extrabold' : 'text-slate-400 hover:text-slate-200'
+          }`}
+        >
+          {insightsTab === 'intelligence' && (
+            <motion.div layoutId="insightsTabActiveLine" className="absolute bottom-0 left-0 right-0 h-0.5 bg-purple-500" />
+          )}
+          <span>🧠 Inteligência de Corridas</span>
+          <span className="px-1.5 py-0.5 bg-purple-950 text-purple-400 font-mono text-[9px] uppercase rounded-md border border-purple-800/30 tracking-wider">
+            Fase 2 IA
+          </span>
+        </button>
+
         <button
           onClick={() => setInsightsTab('opportunities')}
-          className={`pb-3 text-sm font-bold tracking-wide relative cursor-pointer transition-all flex items-center gap-2 ${
+          className={`pb-3 text-sm font-bold tracking-wide relative cursor-pointer transition-all flex items-center gap-2 shrink-0 ${
             insightsTab === 'opportunities' ? 'text-white font-extrabold' : 'text-slate-400 hover:text-slate-200'
           }`}
         >
@@ -344,7 +376,7 @@ export const InsightsPage: React.FC = () => {
 
         <button
           onClick={() => setInsightsTab('copilot')}
-          className={`pb-3 text-sm font-bold tracking-wide relative cursor-pointer transition-all flex items-center gap-1.5 ${
+          className={`pb-3 text-sm font-bold tracking-wide relative cursor-pointer transition-all flex items-center gap-1.5 shrink-0 ${
             insightsTab === 'copilot' ? 'text-white font-extrabold' : 'text-slate-400 hover:text-slate-200'
           }`}
         >
@@ -355,7 +387,11 @@ export const InsightsPage: React.FC = () => {
         </button>
       </div>
 
-      {insightsTab === 'opportunities' ? (
+      {insightsTab === 'predictive' ? (
+        <PredictiveDashboard />
+      ) : insightsTab === 'intelligence' ? (
+        <RideIntelligenceDashboard />
+      ) : insightsTab === 'opportunities' ? (
         <DemandOpportunitiesPanel />
       ) : (
         <>

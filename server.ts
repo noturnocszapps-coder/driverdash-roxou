@@ -6,6 +6,53 @@ async function startServer() {
   const app = express();
   const PORT = Number(process.env.PORT) || 3000;
 
+  app.use(express.json());
+
+  // API endpoint for Google Roads snapToRoads proxy
+  app.post('/api/roads/snap', async (req, res) => {
+    const { points } = req.body;
+    if (!points || !Array.isArray(points)) {
+      return res.status(400).json({ error: 'Points array is required.' });
+    }
+
+    const googleKey = process.env.GOOGLE_MAPS_PLATFORM_KEY;
+    if (!googleKey) {
+      console.warn('[ROADS_PROXY] Google Maps Platform Key is not configured. Returning empty snappedPoints.');
+      return res.json({ snappedPoints: [] });
+    }
+
+    try {
+      console.log(`[ROADS_PROXY] Proxying ${points.length} points to snapToRoads API...`);
+      // Google Roads API allows up to 100 points
+      const batches: any[][] = [];
+      for (let i = 0; i < points.length; i += 100) {
+        batches.push(points.slice(i, i + 100));
+      }
+
+      const allSnappedPoints: any[] = [];
+      for (const batch of batches) {
+        const pathParam = batch.map(p => `${p.lat},${p.lng}`).join('|');
+        const url = `https://roads.googleapis.com/v1/snapToRoads?path=${encodeURIComponent(pathParam)}&interpolate=true&key=${googleKey}`;
+        const response = await fetch(url);
+        if (!response.ok) {
+          const errText = await response.text();
+          console.error('[ROADS_PROXY] Roads API error:', errText);
+          continue;
+        }
+        const data = await response.json();
+        if (data.snappedPoints && Array.isArray(data.snappedPoints)) {
+          allSnappedPoints.push(...data.snappedPoints);
+        }
+      }
+
+      console.log(`[ROADS_PROXY] Snap completed. Total snapped points: ${allSnappedPoints.length}`);
+      return res.json({ snappedPoints: allSnappedPoints });
+    } catch (err: any) {
+      console.error('[ROADS_PROXY] Critical error proxying to Google Roads:', err);
+      return res.status(500).json({ error: err.message || 'Internal server error proxying to Google Roads.' });
+    }
+  });
+
   // API endpoint for reverse geocoding with fallbacks and debug logs
   app.get('/api/geocode', async (req, res) => {
     const lat = parseFloat(req.query.lat as string);
@@ -29,6 +76,9 @@ async function startServer() {
           
           let neighborhood = '';
           let city = 'Presidente Prudente';
+          let state = 'São Paulo';
+          let street = '';
+          let postalCode = '';
           
           for (const comp of firstResult.address_components) {
             if (
@@ -39,21 +89,32 @@ async function startServer() {
               comp.types.includes('colloquial_area') || 
               comp.types.includes('political')
             ) {
-              // Prefer sublocality or neighborhood over generic political
               if (!neighborhood || comp.types.includes('sublocality_level_1') || comp.types.includes('neighborhood')) {
                 neighborhood = comp.long_name;
               }
             }
-            if (comp.types.includes('administrative_area_level_2')) {
+            if (comp.types.includes('administrative_area_level_2') || comp.types.includes('locality')) {
               city = comp.long_name;
+            }
+            if (comp.types.includes('administrative_area_level_1')) {
+              state = comp.short_name; // e.g. "SP"
+            }
+            if (comp.types.includes('route')) {
+              street = comp.long_name;
+            }
+            if (comp.types.includes('postal_code')) {
+              postalCode = comp.long_name;
             }
           }
 
-          console.log(`[GEOCODE] Sucesso via Google: ${neighborhood}, ${city}`);
+          console.log(`[GEOCODE] Sucesso via Google: ${street}, ${neighborhood}, ${city} - ${state}, ${postalCode}`);
           return res.json({
             address,
-            neighborhood,
+            neighborhood: neighborhood || 'Ponto Desconhecido',
             city,
+            state,
+            street,
+            postalCode,
             source: 'google'
           });
         } else {
@@ -79,15 +140,20 @@ async function startServer() {
         const address = data.display_name || '';
         const addr = data.address || {};
         
-        // Ensure we check all possible keys for "bairro": suburb, neighbourhood, district, city_district, quarter, village, hamlet, administrative_area
-        const neighborhood = addr.suburb || addr.neighbourhood || addr.neighbourhood_level_1 || addr.district || addr.city_district || addr.quarter || addr.village || addr.hamlet || '';
+        const neighborhood = addr.suburb || addr.neighbourhood || addr.neighbourhood_level_1 || addr.district || addr.city_district || addr.quarter || addr.village || addr.hamlet || 'Ponto Desconhecido';
         const city = addr.city || addr.town || addr.municipality || 'Presidente Prudente';
+        const state = addr.state || 'São Paulo';
+        const street = addr.road || addr.street || '';
+        const postalCode = addr.postcode || '';
 
-        console.log(`[GEOCODE] Sucesso via Nominatim: Bairro="${neighborhood}", Cidade="${city}"`);
+        console.log(`[GEOCODE] Sucesso via Nominatim: Bairro="${neighborhood}", Cidade="${city}", Estado="${state}", Rua="${street}", CEP="${postalCode}"`);
         return res.json({
           address,
           neighborhood,
           city,
+          state,
+          street,
+          postalCode,
           source: 'nominatim'
         });
       }
@@ -99,8 +165,11 @@ async function startServer() {
     console.log(`[GEOCODE] Usando fallback local para ${lat}, ${lng}...`);
     return res.json({
       address: 'Presidente Prudente, SP',
-      neighborhood: '',
+      neighborhood: 'Centro',
       city: 'Presidente Prudente',
+      state: 'SP',
+      street: '',
+      postalCode: '',
       source: 'fallback'
     });
   });
