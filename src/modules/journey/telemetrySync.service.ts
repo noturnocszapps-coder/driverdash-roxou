@@ -50,6 +50,14 @@ class TelemetrySyncService {
         console.log('[Sync] Browser reported back online. Triggering automatic synchronization...');
         this.sync();
       });
+      // Run automatic buffer cleanup on startup (Requirement 3)
+      setTimeout(() => {
+        try {
+          this.cleanupBuffer();
+        } catch (e) {
+          console.error('[Sync] Startup automatic buffer cleanup failed:', e);
+        }
+      }, 2000);
     }
   }
 
@@ -169,6 +177,14 @@ class TelemetrySyncService {
     // Check for duplicity inside local storage to avoid duplicates
     if (points.some(p => p.idLocal === idLocal)) {
       console.log(`[Sync] Duplicate telemetry point ignored: ${idLocal}`);
+      return;
+    }
+
+    // Limitar buffer local a no máximo 1000 pontos por sessão (Requirement 2)
+    const sessionPointsCount = points.filter(p => p.session_id === point.session_id).length;
+    console.log(`[BUFFER_SESSION_COUNT] Current session points count: ${sessionPointsCount}`);
+    if (sessionPointsCount >= 1000) {
+      console.log(`[GPS_POINT_REJECTED] Point ignored. Buffer limit reached: 1000 points for session ${point.session_id}`);
       return;
     }
 
@@ -398,17 +414,110 @@ class TelemetrySyncService {
    * Final flush of all remaining points before ending the journey.
    * If some points remain unsynced, let the user know.
    */
-  async finalFlushBeforeEnd(): Promise<{ success: boolean; pendingCount: number }> {
-    console.log('[Sync] final flush before journey end initiated.');
-    // Run sync immediately
-    await this.sync();
+  async finalFlushBeforeEnd(sessionId?: string): Promise<{ success: boolean; pendingCount: number }> {
+    console.log('[Sync] [SYNC_BEFORE_END_START] final flush before journey end initiated.');
+    try {
+      // Run sync immediately
+      await this.sync();
+      console.log('[Sync] [SYNC_BEFORE_END_SUCCESS] pre-end synchronization completed.');
+    } catch (err) {
+      console.error('[Sync] [SYNC_BEFORE_END_FAILED] pre-end synchronization failed:', err);
+    }
     
-    const remaining = this.getPoints().filter(p => p.status === 'pending' || p.status === 'failed');
-    console.log(`[Sync] cache cleaned validation. Remaining unsynced: ${remaining.length}`);
+    const allPoints = this.getPoints();
+    const remaining = sessionId
+      ? allPoints.filter(p => p.session_id === sessionId && (p.status === 'pending' || p.status === 'failed'))
+      : allPoints.filter(p => p.status === 'pending' || p.status === 'failed');
+
+    console.log(`[Sync] [BUFFER_SESSION_COUNT] Remaining unsynced: ${remaining.length}`);
     
     return {
       success: remaining.length === 0,
       pendingCount: remaining.length
+    };
+  }
+
+  /**
+   * Cleans up the telemetry buffer based on criteria (Requirement 3):
+   * - remove points without session_id
+   * - remove points older than 7 days
+   * - remove points belonging to completed/closed sessions
+   * - remove points already marked as synced
+   */
+  cleanupBuffer(): { cleanedCount: number; remainingCount: number } {
+    console.log('[Sync] [BUFFER_CLEANUP] Starting buffer cleanup...');
+    const originalPoints = this.getPoints();
+    const now = Date.now();
+    const sevenDaysMs = 7 * 24 * 60 * 60 * 1000;
+
+    // To find completed sessions, let's scan localStorage for any driver sessions across any user
+    const completedSessionIds = new Set<string>();
+
+    try {
+      for (let i = 0; i < localStorage.length; i++) {
+        const key = localStorage.key(i);
+        if (key && key.includes('driver_sessions_')) {
+          const raw = localStorage.getItem(key);
+          if (raw) {
+            const list = JSON.parse(raw);
+            if (Array.isArray(list)) {
+              list.forEach((s: any) => {
+                if (s && s.id) {
+                  if (s.status === 'completed' || s.status === 'finished') {
+                    completedSessionIds.add(s.id);
+                  }
+                }
+              });
+            }
+          }
+        }
+      }
+    } catch (e) {
+      console.warn('[Sync] [BUFFER_CLEANUP] Error parsing driver sessions from localStorage:', e);
+    }
+
+    const filteredPoints = originalPoints.filter(p => {
+      // 1. Must have session_id
+      if (!p.session_id) {
+        console.log(`[Sync] [BUFFER_CLEANUP] Removing point with missing session_id`);
+        return false;
+      }
+
+      // 2. Must not be older than 7 days
+      const recordedTime = new Date(p.recorded_at).getTime();
+      if (isNaN(recordedTime) || (now - recordedTime) > sevenDaysMs) {
+        console.log(`[Sync] [BUFFER_CLEANUP] Removing point older than 7 days: ${p.recorded_at}`);
+        return false;
+      }
+
+      // 3. Must not be already synced
+      if (p.status === 'synced') {
+        console.log(`[Sync] [BUFFER_CLEANUP] Removing synced point ${p.idLocal}`);
+        return false;
+      }
+
+      // 4. Must not belong to a closed session
+      if (completedSessionIds.has(p.session_id)) {
+        console.log(`[Sync] [BUFFER_CLEANUP] Removing point belonging to completed session: ${p.session_id}`);
+        return false;
+      }
+
+      return true;
+    });
+
+    const cleanedCount = originalPoints.length - filteredPoints.length;
+    console.log(`[Sync] [BUFFER_CLEANUP] Cleanup finished. Removed ${cleanedCount} points. Remaining: ${filteredPoints.length}`);
+
+    try {
+      localStorage.setItem(TELEMETRY_STORAGE_KEY, JSON.stringify(filteredPoints));
+      this.notify();
+    } catch (err) {
+      console.error('[Sync] [BUFFER_CLEANUP] Failed to write telemetry points to cache during cleanup:', err);
+    }
+
+    return {
+      cleanedCount,
+      remainingCount: filteredPoints.length
     };
   }
 }

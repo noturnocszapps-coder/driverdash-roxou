@@ -10,7 +10,7 @@ import { useApp } from '../context/AppContext';
 import { 
   Play, Square, MapPin, Navigation, Clock, ShieldAlert,
   AlertTriangle, Milestone, Activity, Compass, Flame, Info,
-  Bot, Sparkles, ThumbsUp, ThumbsDown, Gauge, TrendingUp, Terminal, Check, X,
+  Bot, Sparkles, ThumbsUp, ThumbsDown, Gauge, TrendingUp, Terminal, Check, X, RefreshCw,
   ChevronRight, ChevronDown, Signal, Edit, Calendar
 } from 'lucide-react';
 import { motion, AnimatePresence } from 'motion/react';
@@ -148,6 +148,12 @@ export const JornadaPage: React.FC = () => {
   // Modal control states
   const [finishModalOpen, setFinishModalOpen] = useState<boolean>(false);
   const [cancelModalOpen, setCancelModalOpen] = useState<boolean>(false);
+
+  // Safe Journey Closure States (Requirement 4)
+  const [journeyEndModalOpen, setJourneyEndModalOpen] = useState<boolean>(false);
+  const [isSyncingBeforeEnd, setIsSyncingBeforeEnd] = useState<boolean>(false);
+  const [syncStatusBeforeEnd, setSyncStatusBeforeEnd] = useState<'idle' | 'syncing' | 'success' | 'failed'>('idle');
+  const [pendingPointsCountBeforeEnd, setPendingPointsCountBeforeEnd] = useState<number>(0);
 
   // Form states for active ride completion modal
   const [receivedValue, setReceivedValue] = useState<string>("15.00");
@@ -1634,6 +1640,32 @@ export const JornadaPage: React.FC = () => {
       .sort((a, b) => new Date(a.recorded_at).getTime() - new Date(b.recorded_at).getTime());
   }, [routePoints, activeSession]);
 
+  // Fallback to the latest point from currentSessionPoints if lastCoord is null/unaligned (Requirement 5)
+  const lastValidCoord = useMemo(() => {
+    if (!activeSession) return null;
+    
+    // Check if we have lastCoord from context
+    if (lastCoord) {
+      return lastCoord;
+    }
+    
+    // Fallback to latest coordinate in this active session
+    if (currentSessionPoints.length > 0) {
+      const lastPoint = currentSessionPoints[currentSessionPoints.length - 1];
+      return {
+        lat: lastPoint.latitude,
+        lng: lastPoint.longitude,
+        accuracy: lastPoint.accuracy || 10,
+        speed: lastPoint.speed_kmh / 3.6,
+        heading: lastPoint.heading,
+        altitude: lastPoint.altitude,
+        timestamp: new Date(lastPoint.recorded_at).getTime()
+      };
+    }
+    
+    return null;
+  }, [lastCoord, currentSessionPoints, activeSession]);
+
   // Elapsed time tracking logic
   useEffect(() => {
     if (!activeSession) {
@@ -1784,24 +1816,72 @@ export const JornadaPage: React.FC = () => {
   const handleStopTracking = async () => {
     if (!activeSession) return;
     
-    // Tenta sincronizar todos os pontos pendentes
-    const result = await telemetrySyncService.finalFlushBeforeEnd();
-    if (result.pendingCount > 0) {
-      const confirmEnd = window.confirm(
-        `Ainda existem ${result.pendingCount} pontos aguardando sincronização. Deseja encerrar mesmo assim?`
-      );
-      if (!confirmEnd) {
-        return; // Mantém a jornada e não finaliza
+    setIsSyncingBeforeEnd(true);
+    setSyncStatusBeforeEnd('syncing');
+    setJourneyEndModalOpen(true);
+    
+    try {
+      // 1. Tenta sincronizar somente os pontos da sessão atual (Requirement 1 & 4)
+      const result = await telemetrySyncService.finalFlushBeforeEnd(activeSession.id);
+      setPendingPointsCountBeforeEnd(result.pendingCount);
+      if (result.success) {
+        setSyncStatusBeforeEnd('success');
+      } else {
+        setSyncStatusBeforeEnd('failed');
       }
+    } catch (err) {
+      console.error('[Sync] Pre-end sync error:', err);
+      setSyncStatusBeforeEnd('failed');
+    } finally {
+      setIsSyncingBeforeEnd(false);
     }
+  };
+
+  const handleForceSyncBeforeEnd = async () => {
+    if (!activeSession) return;
+    setIsSyncingBeforeEnd(true);
+    setSyncStatusBeforeEnd('syncing');
+    try {
+      const result = await telemetrySyncService.finalFlushBeforeEnd(activeSession.id);
+      setPendingPointsCountBeforeEnd(result.pendingCount);
+      if (result.success) {
+        setSyncStatusBeforeEnd('success');
+      } else {
+        setSyncStatusBeforeEnd('failed');
+      }
+    } catch (err) {
+      console.error('[Sync] Manual retry pre-end sync error:', err);
+      setSyncStatusBeforeEnd('failed');
+    } finally {
+      setIsSyncingBeforeEnd(false);
+    }
+  };
+
+  const handleConfirmEndJourney = async (forceClose: boolean) => {
+    if (!activeSession) return;
+    
+    // Stop active tracking immediately and clear ride state
+    localStorage.removeItem('driverdash_active_ride_calib');
+    setActiveRide(null);
 
     // Estimate total minutes
     const runningTimeMinutes = Math.max(1, Math.round(
       (new Date().getTime() - new Date(activeSession.start_time).getTime()) / 60000
     ));
 
+    console.log('[SESSION_END_SAFE]', {
+      sessionId: activeSession.id,
+      totalKm: totalKmToday,
+      durationMinutes: runningTimeMinutes,
+      forced: forceClose,
+      pendingCount: pendingPointsCountBeforeEnd
+    });
+
     await endSession(activeSession.id, totalKmToday, runningTimeMinutes);
     releaseWakeLock();
+    
+    setJourneyEndModalOpen(false);
+    setSyncStatusBeforeEnd('idle');
   };
 
   // Map sensor states to elegant ui descriptions
@@ -2041,7 +2121,7 @@ export const JornadaPage: React.FC = () => {
 
                   {/* Real-time professional tracker Leaflet map card */}
                   <RealTimeTrackerMap 
-                    lastCoord={lastCoord} 
+                    lastCoord={lastValidCoord} 
                     activeRide={activeRide} 
                     gpsStatus={gpsStatus} 
                   />
@@ -3368,6 +3448,119 @@ export const JornadaPage: React.FC = () => {
             ride={selectedTelemetryRide}
             onClose={() => setSelectedTelemetryRide(null)}
           />
+        )}
+      </AnimatePresence>
+
+      {/* MODAL: ENCERRAMENTO SEGURO DA JORNADA */}
+      <AnimatePresence>
+        {journeyEndModalOpen && (
+          <motion.div 
+            initial={{ opacity: 0 }}
+            animate={{ opacity: 1 }}
+            exit={{ opacity: 0 }}
+            className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-[#050310]/90 backdrop-blur-md"
+          >
+            <motion.div 
+              initial={{ scale: 0.95, y: 15 }}
+              animate={{ scale: 1, y: 0 }}
+              exit={{ scale: 0.95, y: 15 }}
+              className="bg-[#0d0926] border border-purple-950/40 rounded-3xl w-full max-w-md overflow-hidden shadow-[0_10px_50px_rgba(147,51,234,0.2)] text-left flex flex-col"
+            >
+              <div className="p-5 border-b border-purple-950/20 bg-purple-950/10 flex items-center justify-between">
+                <div>
+                  <h3 className="text-sm font-bold text-white uppercase font-mono tracking-wider flex items-center gap-2">
+                    🛑 Encerramento Seguro de Jornada
+                  </h3>
+                  <p className="text-[10px] text-purple-300 mt-0.5">
+                    Validando e transmitindo o buffer de telemetria desta sessão.
+                  </p>
+                </div>
+                <button 
+                  onClick={() => setJourneyEndModalOpen(false)}
+                  disabled={isSyncingBeforeEnd}
+                  className="p-1 rounded-lg bg-purple-950/20 hover:bg-purple-950/40 text-purple-400 cursor-pointer select-none disabled:opacity-40 disabled:cursor-not-allowed"
+                >
+                  <X className="w-4 h-4" />
+                </button>
+              </div>
+
+              <div className="p-5 space-y-4 text-xs">
+                {/* Sync Status Banner */}
+                <div className="p-4 rounded-2xl bg-purple-950/15 border border-purple-950/30 flex flex-col items-center justify-center text-center space-y-3">
+                  {syncStatusBeforeEnd === 'syncing' ? (
+                    <>
+                      <RefreshCw className="w-8 h-8 text-purple-400 animate-spin" />
+                      <div>
+                        <p className="font-bold text-slate-200">Transmitindo coordenadas...</p>
+                        <p className="text-[10px] text-slate-400 font-mono mt-0.5">Sincronizando pontos pendentes do GPS local</p>
+                      </div>
+                    </>
+                  ) : syncStatusBeforeEnd === 'success' ? (
+                    <>
+                      <div className="h-10 w-10 rounded-full bg-emerald-950/60 border border-emerald-500/30 flex items-center justify-center text-emerald-400">
+                        <Check className="w-6 h-6" />
+                      </div>
+                      <div>
+                        <p className="font-bold text-emerald-400">Todos os dados sincronizados!</p>
+                        <p className="text-[10px] text-slate-400 mt-0.5">Nenhum ponto pendente. Encerramento 100% íntegro e seguro.</p>
+                      </div>
+                    </>
+                  ) : (
+                    <>
+                      <AlertTriangle className="w-8 h-8 text-yellow-500 animate-pulse" />
+                      <div>
+                        <p className="font-bold text-yellow-500">Dados pendentes encontrados</p>
+                        <p className="text-[10px] text-slate-400 mt-1">
+                          Ainda existem <span className="font-mono text-white font-bold bg-purple-950 px-1.5 py-0.5 rounded">{pendingPointsCountBeforeEnd}</span> pontos de GPS aguardando sincronização na nuvem.
+                        </p>
+                      </div>
+                    </>
+                  )}
+                </div>
+
+                <div className="space-y-2">
+                  <p className="text-slate-400 leading-relaxed text-[11px]">
+                    {syncStatusBeforeEnd === 'success' 
+                      ? 'Todas as posições coletadas para inteligência e telemetria já foram devidamente transmitidas aos servidores seguros.' 
+                      : 'Isso ocorre se você estiver sem internet estável no momento. Você pode tentar re-sincronizar agora ou encerrar mesmo assim (os pontos restantes serão salvos localmente e tentarão subir em segundo plano assim que houver rede).'}
+                  </p>
+                </div>
+              </div>
+
+              <div className="p-5 border-t border-purple-950/20 bg-purple-950/10 flex flex-col sm:flex-row items-center justify-end gap-2 shrink-0">
+                <button 
+                  onClick={() => setJourneyEndModalOpen(false)}
+                  disabled={isSyncingBeforeEnd}
+                  className="w-full sm:w-auto px-4 py-2.5 rounded-xl border border-purple-950/45 hover:bg-purple-950/20 text-purple-400 font-semibold select-none cursor-pointer transition-all disabled:opacity-40 text-center"
+                >
+                  Cancelar
+                </button>
+                
+                {syncStatusBeforeEnd !== 'success' && (
+                  <button 
+                    onClick={handleForceSyncBeforeEnd}
+                    disabled={isSyncingBeforeEnd}
+                    className="w-full sm:w-auto px-4 py-2.5 rounded-xl bg-purple-950 hover:bg-purple-900 border border-purple-700 text-purple-300 font-semibold flex items-center justify-center gap-1.5 select-none cursor-pointer transition-all disabled:opacity-45"
+                  >
+                    <RefreshCw className={`w-3.5 h-3.5 ${isSyncingBeforeEnd ? 'animate-spin' : ''}`} />
+                    Tentar Novamente
+                  </button>
+                )}
+
+                <button 
+                  onClick={() => handleConfirmEndJourney(syncStatusBeforeEnd !== 'success')}
+                  disabled={isSyncingBeforeEnd}
+                  className={`w-full sm:w-auto px-5 py-2.5 rounded-xl text-white font-bold select-none cursor-pointer transition-all text-center flex items-center justify-center gap-1.5 ${
+                    syncStatusBeforeEnd === 'success'
+                      ? 'bg-gradient-to-r from-emerald-600 to-green-600 hover:from-emerald-500 hover:to-green-500 shadow-[0_2px_10px_rgba(16,185,129,0.15)]'
+                      : 'bg-gradient-to-r from-purple-700 to-indigo-600 hover:from-purple-600 hover:to-indigo-500 shadow-[0_2px_10px_rgba(109,40,217,0.15)]'
+                  }`}
+                >
+                  {syncStatusBeforeEnd === 'success' ? 'Encerrar com Sucesso' : 'Encerrar Mesmo Assim'}
+                </button>
+              </div>
+            </motion.div>
+          </motion.div>
         )}
       </AnimatePresence>
 

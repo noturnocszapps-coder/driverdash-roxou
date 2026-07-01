@@ -800,7 +800,7 @@ export const JourneyProvider: React.FC<{ children: React.ReactNode }> = ({ child
     // Try to sync pending points first
     console.log("[Sync] Attempting final flush of telemetry points");
     try {
-      await telemetrySyncService.finalFlushBeforeEnd();
+      await telemetrySyncService.finalFlushBeforeEnd(sessionId);
     } catch (e) {
       console.warn("[Sync] Failed to flush telemetry before ending:", e);
     }
@@ -888,35 +888,43 @@ export const JourneyProvider: React.FC<{ children: React.ReactNode }> = ({ child
     if (!user) return;
     const userId = user.id;
     const recordedAt = new Date().toISOString();
+    const currTime = new Date(recordedAt).getTime();
 
-    // Configurable noise threshold in meters
-    const MIN_MOVEMENT_METERS = 3.0;
-
-    // Log the incoming GPS point immediately
-    console.log("[GPS] GPS point received");
+    // Log incoming raw GPS point
+    console.log("[GPS] Raw GPS point received for session:", pointData.session_id);
 
     const accuracy = pointData.accuracy;
     if (accuracy !== undefined && accuracy !== null) {
       setCurrentAccuracy(accuracy);
     }
 
-    // 1. Validar precisão do GPS: Ignorar pontos com accuracy maior que 30 metros
-    if (accuracy !== undefined && accuracy !== null && accuracy > 30) {
+    // 1. Validar precisão do GPS: Ignorar pontos com accuracy maior que 25 metros (Requirement 2)
+    if (accuracy !== undefined && accuracy !== null && accuracy > 25) {
       setDiscardedPointsCount(prev => {
         const updated = prev + 1;
         sessionStorage.setItem(`discarded_points_${pointData.session_id}`, updated.toString());
         return updated;
       });
-      const reason = `Precisão ruim: ${accuracy.toFixed(1)}m (máx: 30m)`;
+      const reason = `Precisão ruim: ${accuracy.toFixed(1)}m (máx: 25m)`;
       setLastDiscardReason(reason);
       sessionStorage.setItem(`last_discard_reason_${pointData.session_id}`, reason);
-      console.log("[DistanceEngine] Point ignored (bad accuracy)");
+      console.log(`[GPS_POINT_REJECTED] session_id: ${pointData.session_id}, motivo: ${reason}`);
       return;
     }
 
     // Retrieve previous position
     const storedLastPos = sessionStorage.getItem(`last_position_${pointData.session_id}`);
     const lastPosition = storedLastPos ? JSON.parse(storedLastPos) : null;
+
+    // 2. Frequência: Capturar no máximo a cada 3 segundos (Requirement 2)
+    if (lastPosition) {
+      const timeDiffMs = currTime - lastPosition.timestamp;
+      if (timeDiffMs < 3000) {
+        const reason = `Frequência excessiva: ${timeDiffMs}ms (mín: 3000ms)`;
+        console.log(`[GPS_POINT_REJECTED] session_id: ${pointData.session_id}, motivo: ${reason}`);
+        return;
+      }
+    }
 
     let distMeters = 0;
 
@@ -928,11 +936,15 @@ export const JourneyProvider: React.FC<{ children: React.ReactNode }> = ({ child
         pointData.longitude
       );
 
-      // 2. Filtrar saltos impossíveis: velocidade superior a 180 km/h entre duas leituras consecutivas
-      const prevTime = lastPosition.timestamp || new Date(lastPosition.recorded_at || "").getTime();
-      const currTime = new Date(recordedAt).getTime();
-      const timeDiffSec = (currTime - prevTime) / 1000;
+      // 3. Deslocamento: Ignorar ponto se distância do último ponto < 8m (Requirement 2)
+      if (distMeters < 8) {
+        const reason = `Deslocamento insuficiente: ${distMeters.toFixed(1)}m (mín: 8m)`;
+        console.log(`[GPS_POINT_REJECTED] session_id: ${pointData.session_id}, motivo: ${reason}`);
+        return;
+      }
 
+      // 4. Filtrar saltos impossíveis: velocidade superior a 180 km/h entre duas leituras consecutivas
+      const timeDiffSec = (currTime - lastPosition.timestamp) / 1000;
       if (timeDiffSec > 0.5) {
         const calculatedSpeedKmh = (distMeters / timeDiffSec) * 3.6;
         if (calculatedSpeedKmh > 180) {
@@ -944,13 +956,13 @@ export const JourneyProvider: React.FC<{ children: React.ReactNode }> = ({ child
           const reason = `Salto impossível: ${calculatedSpeedKmh.toFixed(1)} km/h`;
           setLastDiscardReason(reason);
           sessionStorage.setItem(`last_discard_reason_${pointData.session_id}`, reason);
-          console.log("[DistanceEngine] Point ignored (impossible jump)");
+          console.log(`[GPS_POINT_REJECTED] session_id: ${pointData.session_id}, motivo: ${reason}`);
           return;
         }
       }
     }
 
-    // Também validar se a velocidade fornecida no ponto supera 180 km/h
+    // 5. Validar se a velocidade fornecida no ponto supera 180 km/h
     if (pointData.speed_kmh !== undefined && pointData.speed_kmh > 180) {
       setDiscardedPointsCount(prev => {
         const updated = prev + 1;
@@ -960,11 +972,28 @@ export const JourneyProvider: React.FC<{ children: React.ReactNode }> = ({ child
       const reason = `Velocidade excessiva: ${pointData.speed_kmh.toFixed(1)} km/h`;
       setLastDiscardReason(reason);
       sessionStorage.setItem(`last_discard_reason_${pointData.session_id}`, reason);
-      console.log("[DistanceEngine] Point ignored (impossible speed)");
+      console.log(`[GPS_POINT_REJECTED] session_id: ${pointData.session_id}, motivo: ${reason}`);
       return;
     }
 
-    // Ponto válido e aceito
+    // 6. Limite de buffer local: no máximo 1000 pontos por sessão (Requirement 2)
+    const allLocalPoints = telemetrySyncService.getPoints();
+    const sessionPointsCount = allLocalPoints.filter(p => p.session_id === pointData.session_id).length;
+    if (sessionPointsCount >= 1000) {
+      const reason = `Buffer da sessão cheio (${sessionPointsCount} pontos)`;
+      console.log(`[GPS_POINT_REJECTED] session_id: ${pointData.session_id}, motivo: ${reason}`);
+      return;
+    }
+
+    // Ponto válido e aceito (Requirement 7)
+    console.log('[GPS_POINT_ACCEPTED]', {
+      session_id: pointData.session_id,
+      latitude: pointData.latitude,
+      longitude: pointData.longitude,
+      accuracy,
+      recorded_at: recordedAt
+    });
+
     const newPoint: RoutePoint = {
       id: 'pt-' + Math.random().toString(36).substring(2, 11),
       session_id: pointData.session_id,
@@ -999,25 +1028,19 @@ export const JourneyProvider: React.FC<{ children: React.ReactNode }> = ({ child
 
     let addedMeters = 0;
     if (lastPosition) {
-      // Filtro de movimento: ignorar deslocamentos menores que a constante MIN_MOVEMENT_METERS
-      if (distMeters >= MIN_MOVEMENT_METERS) {
-        addedMeters = distMeters;
-        setLastAddedDistanceMeters(addedMeters);
-        console.log("[DistanceEngine] point accepted");
-      } else {
-        setLastAddedDistanceMeters(0);
-        console.log("[DistanceEngine] point ignored (low movement)");
-      }
+      addedMeters = distMeters;
+      setLastAddedDistanceMeters(addedMeters);
+      console.log("[DistanceEngine] point accepted");
     } else {
       setLastAddedDistanceMeters(0);
       console.log("[DistanceEngine] first point accepted");
     }
 
-    // Atualizar sempre a última posição persistida
+    // Atualizar sempre a última posição persistida com o timestamp real recebido
     const newPosition = { 
       latitude: pointData.latitude, 
       longitude: pointData.longitude, 
-      timestamp: new Date(recordedAt).getTime(),
+      timestamp: currTime,
       recorded_at: recordedAt
     };
     sessionStorage.setItem(`last_position_${pointData.session_id}`, JSON.stringify(newPosition));

@@ -7,6 +7,7 @@
 import React, { useState, useEffect, useMemo } from 'react';
 import { useApp } from '../context/AppContext';
 import { trackingSync } from '../modules/tracking/tracking.sync';
+import { telemetrySyncService } from '../modules/journey/telemetrySync.service';
 import { 
   Wifi, WifiOff, Compass, MapPin, Database, Sparkles, Activity, AlertTriangle, 
   RefreshCw, Play, Square, ShieldCheck, ShieldAlert, Cpu, Navigation
@@ -183,6 +184,16 @@ export const DebugPage: React.FC = () => {
     } finally {
       setIsSyncing(false);
     }
+  };
+
+  const handleCleanupBuffer = () => {
+    const result = telemetrySyncService.cleanupBuffer();
+    addSmartAlert({
+      type: 'profit',
+      title: 'Buffer Limpo',
+      description: `Buffer antigo de GPS limpo com sucesso! Removidos: ${result.cleanedCount} pontos antigos ou órfãos. Restantes: ${result.remainingCount} pontos ativos.`,
+      severity: 'low'
+    });
   };
 
   // Automatically log technical alerts when simulated network changes
@@ -716,6 +727,14 @@ export const DebugPage: React.FC = () => {
             >
               <RefreshCw className={`w-3.5 h-3.5 ${isSyncing ? 'animate-spin' : ''}`} />
               {isSyncing ? 'Forçando Upload...' : 'Forçar Sincronização'}
+            </button>
+
+            <button
+              onClick={handleCleanupBuffer}
+              className="w-full mt-2 py-3 rounded-2xl font-semibold text-purple-300 hover:text-white bg-purple-950/25 hover:bg-purple-900/30 border border-purple-900/30 flex items-center justify-center gap-2 text-xs transition-all cursor-pointer shadow-md"
+            >
+              <Database className="w-3.5 h-3.5" />
+              Limpar buffer antigo
             </button>
           </div>
 
