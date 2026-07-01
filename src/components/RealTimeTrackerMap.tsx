@@ -1,6 +1,7 @@
 import React, { useEffect, useRef, useState } from 'react';
 import { Navigation, Compass, Eye, EyeOff, MapPin, Signal } from 'lucide-react';
 import L from 'leaflet';
+import { leafletManager } from '../modules/maps/leafletManager';
 
 interface RealTimeTrackerMapProps {
   lastCoord: { lat: number; lng: number; accuracy: number; speed: number; heading: number | null; altitude: number | null; timestamp: number } | null;
@@ -43,8 +44,10 @@ export const RealTimeTrackerMap: React.FC<RealTimeTrackerMapProps> = ({
     const initialLat = lastCoord?.lat || activeRide?.pickup?.lat || -22.1225;
     const initialLng = lastCoord?.lng || activeRide?.pickup?.lng || -51.3883;
 
+    console.log('[MAP_OPEN]');
+    let map: L.Map | null = null;
     try {
-      const map = L.map(mapContainerId.current, {
+      map = L.map(mapContainerId.current, {
         center: [initialLat, initialLng],
         zoom: 15,
         zoomControl: true,
@@ -52,6 +55,11 @@ export const RealTimeTrackerMap: React.FC<RealTimeTrackerMapProps> = ({
       });
 
       mapRef.current = map;
+
+      // Register map to global tracker
+      leafletManager.registerMap(mapContainerId.current, map, () => {
+        console.log('[MAP_CLEANUP_EXECUTED] leafletManager cleanup callback fired');
+      });
 
       // Add elegant map styling layer (using standard road map or beautiful dark mode tiles)
       L.tileLayer('https://mt1.google.com/vt/lyrs=m&x={x}&y={y}&z={z}', {
@@ -61,7 +69,7 @@ export const RealTimeTrackerMap: React.FC<RealTimeTrackerMapProps> = ({
 
       // Force proper rendering recalculation
       setTimeout(() => {
-        map.invalidateSize();
+        if (map) map.invalidateSize();
       }, 300);
 
     } catch (err: any) {
@@ -70,14 +78,22 @@ export const RealTimeTrackerMap: React.FC<RealTimeTrackerMapProps> = ({
     }
 
     return () => {
+      console.log('[MAP_UNMOUNT]');
+      leafletManager.unregisterMap(mapContainerId.current);
       if (mapRef.current) {
-        mapRef.current.remove();
+        try {
+          mapRef.current.off();
+          mapRef.current.remove();
+          console.log('[MAP_CLEANUP_EXECUTED]');
+        } catch (err) {
+          console.error('[MAP_BLOCKING_UI_DETECTED] Error clearing real-time map:', err);
+        }
         mapRef.current = null;
-        markerCurrentRef.current = null;
-        markerStartRef.current = null;
-        markerEndRef.current = null;
-        polylineRef.current = null;
       }
+      markerCurrentRef.current = null;
+      markerStartRef.current = null;
+      markerEndRef.current = null;
+      polylineRef.current = null;
     };
   }, []);
 

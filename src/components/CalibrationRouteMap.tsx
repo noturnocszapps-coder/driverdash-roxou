@@ -2,6 +2,7 @@ import React, { useEffect, useRef, useState } from 'react';
 import { X, MapPin, Navigation, Info } from 'lucide-react';
 import L from 'leaflet';
 import { GpsTrackPoint } from '../modules/journey/rideCalibration.service';
+import { leafletManager } from '../modules/maps/leafletManager';
 
 interface CalibrationRouteMapProps {
   routePoints: GpsTrackPoint[];
@@ -39,6 +40,14 @@ export const CalibrationRouteMap: React.FC<CalibrationRouteMapProps> = ({
   }, []);
 
   useEffect(() => {
+    console.log('[MAP_OPEN]');
+    return () => {
+      console.log('[MAP_UNMOUNT]');
+      leafletManager.unregisterMap(mapContainerId.current);
+    };
+  }, []);
+
+  useEffect(() => {
     // 1. Validar as coordenadas disponíveis
     const pts = routePoints.filter(p => p && typeof p.lat === 'number' && typeof p.lng === 'number' && !isNaN(p.lat) && !isNaN(p.lng));
     
@@ -66,6 +75,16 @@ export const CalibrationRouteMap: React.FC<CalibrationRouteMapProps> = ({
       const container = document.getElementById(mapContainerId.current);
       if (!container) return;
 
+      // Clean up previous map if somehow exists
+      if (mapRef.current) {
+        leafletManager.unregisterMap(mapContainerId.current);
+        try {
+          mapRef.current.off();
+          mapRef.current.remove();
+        } catch {}
+        mapRef.current = null;
+      }
+
       try {
         const centerLat = pickupLat!;
         const centerLng = pickupLng!;
@@ -78,6 +97,11 @@ export const CalibrationRouteMap: React.FC<CalibrationRouteMapProps> = ({
         });
 
         mapRef.current = map;
+
+        // Register to global leafletManager
+        leafletManager.registerMap(mapContainerId.current, map, () => {
+          console.log('[MAP_CLEANUP_EXECUTED] CalibrationRouteMap unregister cleanup callback');
+        });
 
         // Adicionar camada escura com inversão por CSS ou camada clássica Google
         const tileUrl = 'https://mt1.google.com/vt/lyrs=m&x={x}&y={y}&z={z}'; // Google road map
@@ -131,7 +155,7 @@ export const CalibrationRouteMap: React.FC<CalibrationRouteMapProps> = ({
 
         // Forçar renderização correta
         setTimeout(() => {
-          map.invalidateSize();
+          if (map) map.invalidateSize();
         }, 150);
 
       } catch (err: any) {
@@ -143,14 +167,24 @@ export const CalibrationRouteMap: React.FC<CalibrationRouteMapProps> = ({
     return () => {
       clearTimeout(timer);
       if (mapRef.current) {
-        mapRef.current.remove();
+        console.log('[MAP_UNMOUNT]');
+        try {
+          mapRef.current.off();
+          mapRef.current.remove();
+          console.log('[MAP_CLEANUP_EXECUTED]');
+        } catch (err) {
+          console.error('[MAP_BLOCKING_UI_DETECTED] Error clearing map inside setup effect:', err);
+        }
         mapRef.current = null;
       }
     };
   }, [routePoints, startLocation, endLocation]);
 
   return (
-    <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/85 backdrop-blur-sm animate-fade-in">
+    <div 
+      className="fixed inset-0 z-40 flex items-center justify-center p-4 bg-black/85 backdrop-blur-sm animate-fade-in"
+      style={{ pointerEvents: 'auto' }}
+    >
       <div 
         ref={containerRef}
         className="w-full max-w-3xl bg-[#090514] border border-purple-950/40 rounded-3xl overflow-hidden shadow-2xl flex flex-col max-h-[90vh]"

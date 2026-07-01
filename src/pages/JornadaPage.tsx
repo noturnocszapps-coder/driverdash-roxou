@@ -188,9 +188,20 @@ export const JornadaPage: React.FC = () => {
   const [editingRide, setEditingRide] = useState<any | null>(null);
   const [editModalOpen, setEditModalOpen] = useState<boolean>(false);
   const [selectedRouteRide, setSelectedRouteRide] = useState<any | null>(null);
+  const [isMapOpen, setIsMapOpen] = useState<boolean>(false);
+  const [allowRealTimeMap, setAllowRealTimeMap] = useState<boolean>(true);
   const [selectedTelemetryRide, setSelectedTelemetryRide] = useState<any | null>(null);
   const [isSavingCalibration, setIsSavingCalibration] = useState<boolean>(false);
   const [showDebugDataModal, setShowDebugDataModal] = useState<boolean>(false);
+
+  useEffect(() => {
+    if (journeyEndModalOpen) {
+      console.log('[MAP_BLOCKING_UI_DETECTED] Journey end modal opened. Forcing map components to close and unmount.');
+      setIsMapOpen(false);
+      setSelectedRouteRide(null);
+      console.log('[MAP_CLOSE]');
+    }
+  }, [journeyEndModalOpen]);
 
   useEffect(() => {
     if (toast.show) {
@@ -1809,6 +1820,7 @@ export const JornadaPage: React.FC = () => {
   }, [totalStoppedDurationMs, activeRide]);
 
   const handleStartTracking = async () => {
+    setAllowRealTimeMap(true);
     await startSession();
     await requestWakeLock();
   };
@@ -1816,6 +1828,16 @@ export const JornadaPage: React.FC = () => {
   const handleStopTracking = async () => {
     if (!activeSession) return;
     
+    // 1. Fechar mapa e desativar qualquer visualização de mapa imediatamente
+    console.log('[MAP_CLOSE] Stopping tracking initiated. Forcing map components to unmount first.');
+    setIsMapOpen(false);
+    setSelectedRouteRide(null);
+    setAllowRealTimeMap(false);
+    
+    // 2. Aguardar o cleanup completo (ex: 350ms para desmontagem segura e remoção do DOM)
+    await new Promise(resolve => setTimeout(resolve, 350));
+    
+    // 3. Somente depois abrir o modal de encerramento seguro
     setIsSyncingBeforeEnd(true);
     setSyncStatusBeforeEnd('syncing');
     setJourneyEndModalOpen(true);
@@ -1882,6 +1904,11 @@ export const JornadaPage: React.FC = () => {
     
     setJourneyEndModalOpen(false);
     setSyncStatusBeforeEnd('idle');
+  };
+
+  const handleCancelJourneyEnd = () => {
+    setJourneyEndModalOpen(false);
+    setAllowRealTimeMap(true);
   };
 
   // Map sensor states to elegant ui descriptions
@@ -2120,11 +2147,17 @@ export const JornadaPage: React.FC = () => {
                   </div>
 
                   {/* Real-time professional tracker Leaflet map card */}
-                  <RealTimeTrackerMap 
-                    lastCoord={lastValidCoord} 
-                    activeRide={activeRide} 
-                    gpsStatus={gpsStatus} 
-                  />
+                  {allowRealTimeMap && !isMapOpen && !journeyEndModalOpen ? (
+                    <RealTimeTrackerMap 
+                      lastCoord={lastValidCoord} 
+                      activeRide={activeRide} 
+                      gpsStatus={gpsStatus} 
+                    />
+                  ) : (
+                    <div className="p-8 text-center rounded-2xl bg-purple-950/5 border border-purple-950/25 text-purple-400 text-xs font-mono">
+                      [MAPA_SUSPENDIDO_SEGURANCA]
+                    </div>
+                  )}
 
                   {/* Pending AI Feedback Card */}
                   {pendingFeedbackEventId && (
@@ -2717,7 +2750,11 @@ export const JornadaPage: React.FC = () => {
                           {ride.rideTrackPoints && ride.rideTrackPoints.length > 0 && (
                             <>
                               <button
-                                onClick={() => setSelectedRouteRide(ride)}
+                                onClick={() => {
+                                  console.log('[MAP_OPEN]');
+                                  setSelectedRouteRide(ride);
+                                  setIsMapOpen(true);
+                                }}
                                 className="px-2 py-0.5 rounded bg-purple-950/40 hover:bg-purple-950/70 border border-purple-900/35 text-purple-300 font-bold select-none cursor-pointer transition-all hover:text-purple-100 flex items-center gap-1 text-[9px]"
                               >
                                 <Navigation className="w-2.5 h-2.5" /> Ver rota
@@ -3429,14 +3466,18 @@ export const JornadaPage: React.FC = () => {
 
       {/* MODAL: MAPA DA ROTA */}
       <AnimatePresence>
-        {selectedRouteRide && (
+        {isMapOpen && selectedRouteRide && (
           <CalibrationRouteMap 
             routePoints={selectedRouteRide.rideTrackPoints || []}
             startLocation={selectedRouteRide.pickup_lat && selectedRouteRide.pickup_lng ? { lat: selectedRouteRide.pickup_lat, lng: selectedRouteRide.pickup_lng } : null}
             endLocation={selectedRouteRide.dropoff_lat && selectedRouteRide.dropoff_lng ? { lat: selectedRouteRide.dropoff_lat, lng: selectedRouteRide.dropoff_lng } : null}
             bairroOrigem={selectedRouteRide.bairroOrigem}
             bairroDestino={selectedRouteRide.bairroDestino}
-            onClose={() => setSelectedRouteRide(null)} 
+            onClose={() => {
+              console.log('[MAP_CLOSE]');
+              setSelectedRouteRide(null);
+              setIsMapOpen(false);
+            }} 
           />
         )}
       </AnimatePresence>
@@ -3458,7 +3499,7 @@ export const JornadaPage: React.FC = () => {
             initial={{ opacity: 0 }}
             animate={{ opacity: 1 }}
             exit={{ opacity: 0 }}
-            className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-[#050310]/90 backdrop-blur-md"
+            className="fixed inset-0 z-[9999] flex items-center justify-center p-4 bg-[#050310]/90 backdrop-blur-md"
           >
             <motion.div 
               initial={{ scale: 0.95, y: 15 }}
@@ -3476,7 +3517,7 @@ export const JornadaPage: React.FC = () => {
                   </p>
                 </div>
                 <button 
-                  onClick={() => setJourneyEndModalOpen(false)}
+                  onClick={handleCancelJourneyEnd}
                   disabled={isSyncingBeforeEnd}
                   className="p-1 rounded-lg bg-purple-950/20 hover:bg-purple-950/40 text-purple-400 cursor-pointer select-none disabled:opacity-40 disabled:cursor-not-allowed"
                 >
@@ -3529,7 +3570,7 @@ export const JornadaPage: React.FC = () => {
 
               <div className="p-5 border-t border-purple-950/20 bg-purple-950/10 flex flex-col sm:flex-row items-center justify-end gap-2 shrink-0">
                 <button 
-                  onClick={() => setJourneyEndModalOpen(false)}
+                  onClick={handleCancelJourneyEnd}
                   disabled={isSyncingBeforeEnd}
                   className="w-full sm:w-auto px-4 py-2.5 rounded-xl border border-purple-950/45 hover:bg-purple-950/20 text-purple-400 font-semibold select-none cursor-pointer transition-all disabled:opacity-40 text-center"
                 >
