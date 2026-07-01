@@ -6,6 +6,7 @@
 
 import { supabase } from '../shared/supabase.helpers';
 import { calculateCostPerKmEstimate } from '../vehicle/vehicle.calculations';
+import { errorTracker } from '../observability/errorTracker';
 
 /**
  * Retrieves the current active ride or personal event segment.
@@ -13,30 +14,42 @@ import { calculateCostPerKmEstimate } from '../vehicle/vehicle.calculations';
 export async function getCurrentSegment(sessionId: string): Promise<'empty' | 'productive' | 'personal' | 'dead' | 'stopped' | 'waiting' | 'offline'> {
   try {
     const { data, error } = await supabase
-      .from('driver_ride_events')
+      .from('driver_ride_logs')
       .select('*')
-      .eq('session_id', sessionId)
-      .is('ended_at', null)
-      .order('started_at', { ascending: false })
-      .limit(1);
+      .eq('journey_id', sessionId)
+      .order('created_at', { ascending: false });
 
     if (error) {
       console.error('[JourneyClassifier] Error in getCurrentSegment:', error);
+      try {
+        errorTracker.trackSupabaseError('Obter Segmento Atual (getCurrentSegment - Database Error)', error);
+      } catch (err) {
+        console.error('Failed to log error to tracker:', err);
+      }
       return 'empty';
     }
 
     if (data && data.length > 0) {
-      const activeEvent = data[0];
-      if (activeEvent.event_type === 'ride_started') {
-        return 'productive';
-      } else if (activeEvent.event_type === 'personal_started') {
-        return 'personal';
+      // Find latest active ride log
+      const activeLog = data.find((l: any) => l.payload?.status === 'in_progress' || l.payload?.event_type === 'ride_started');
+      if (activeLog) {
+        const payload = activeLog.payload || {};
+        if (payload.event_type === 'ride_started' || payload.status === 'in_progress') {
+          return 'productive';
+        } else if (payload.event_type === 'personal_started') {
+          return 'personal';
+        }
       }
     }
     
     return 'empty';
   } catch (err) {
     console.error('[JourneyClassifier] Error in getCurrentSegment:', err);
+    try {
+      errorTracker.trackSupabaseError('Obter Segmento Atual (getCurrentSegment - Critical Exception)', err);
+    } catch (trackErr) {
+      console.error('Failed to log error to tracker:', trackErr);
+    }
     return 'empty';
   }
 }
@@ -45,29 +58,56 @@ export async function getCurrentSegment(sessionId: string): Promise<'empty' | 'p
  * Initiates a new ride (ride_started event).
  */
 export async function startRide(sessionId: string, lat?: number, lng?: number): Promise<string> {
-  const { data: { session } } = await supabase.auth.getSession();
-  const driverId = session?.user?.id;
+  try {
+    const { data: { session } } = await supabase.auth.getSession();
+    const driverId = session?.user?.id;
+    const rideId = 'ride_' + Date.now();
 
-  const { data, error } = await supabase
-    .from('driver_ride_events')
-    .insert([{
-      driver_id: driverId || null,
-      session_id: sessionId,
+    const payload = {
+      id: rideId,
+      ride_id: rideId,
+      driver_id: driverId || 'driver_unknown',
+      journey_id: sessionId,
       event_type: 'ride_started',
       started_at: new Date().toISOString(),
       start_latitude: lat || null,
-      start_longitude: lng || null
-    }])
-    .select()
-    .single();
+      start_longitude: lng || null,
+      status: 'in_progress'
+    };
 
-  if (error) {
-    console.error('[JourneyClassifier] Error in startRide:', error);
-    throw error;
+    const { data, error } = await supabase
+      .from('driver_ride_logs')
+      .insert([{
+        id: rideId,
+        driver_id: driverId || null,
+        journey_id: sessionId,
+        payload: payload,
+        created_at: new Date().toISOString()
+      }])
+      .select()
+      .single();
+
+    if (error) {
+      console.error('[JourneyClassifier] Error in startRide:', error);
+      try {
+        errorTracker.trackSupabaseError('Iniciar Corrida (startRide - Database Error)', error);
+      } catch (trackErr) {
+        console.error('Failed to log error to tracker:', trackErr);
+      }
+      throw error;
+    }
+
+    console.log('[JourneyClassifier] ride started', { sessionId });
+    return data.id;
+  } catch (err: any) {
+    console.error('[JourneyClassifier] Critical exception in startRide:', err);
+    try {
+      errorTracker.trackSupabaseError('Iniciar Corrida (startRide - Exception)', err);
+    } catch (trackErr) {
+      console.error('Failed to log error to tracker:', trackErr);
+    }
+    throw err;
   }
-
-  console.log('[JourneyClassifier] ride started', { sessionId });
-  return data.id;
 }
 
 /**
@@ -80,60 +120,107 @@ export async function finishRide(
   distanceMeters?: number, 
   durationSeconds?: number
 ): Promise<void> {
-  const { data: { session } } = await supabase.auth.getSession();
-  const driverId = session?.user?.id;
+  try {
+    const { data: { session } } = await supabase.auth.getSession();
+    const driverId = session?.user?.id;
 
-  const endTime = new Date().toISOString();
+    const endTime = new Date().toISOString();
 
-  // 1. Find and update the open ride_started event
-  const { data: activeEvents, error: fetchError } = await supabase
-    .from('driver_ride_events')
-    .select('*')
-    .eq('session_id', sessionId)
-    .eq('event_type', 'ride_started')
-    .is('ended_at', null)
-    .order('started_at', { ascending: false });
+    // 1. Find and update the open ride_started log in driver_ride_logs
+    const { data: activeLogs, error: fetchError } = await supabase
+      .from('driver_ride_logs')
+      .select('*')
+      .eq('journey_id', sessionId)
+      .order('created_at', { ascending: false });
 
-  if (!fetchError && activeEvents && activeEvents.length > 0) {
-    const activeEvent = activeEvents[0];
-    const startedAtTime = new Date(activeEvent.started_at).getTime();
-    const computedDuration = Math.round((new Date(endTime).getTime() - startedAtTime) / 1000);
+    if (fetchError) {
+      try {
+        errorTracker.trackSupabaseError('Encerrar Corrida - Buscar Ativa (finishRide)', fetchError);
+      } catch {}
+    }
 
-    await supabase
-      .from('driver_ride_events')
-      .update({
+    let activeLog = null;
+    if (!fetchError && activeLogs && activeLogs.length > 0) {
+      activeLog = activeLogs.find((l: any) => l.payload?.status === 'in_progress' || l.payload?.event_type === 'ride_started');
+    }
+
+    if (activeLog) {
+      const activePayload = activeLog.payload || {};
+      const startedAtTime = new Date(activePayload.started_at || activeLog.created_at).getTime();
+      const computedDuration = Math.round((new Date(endTime).getTime() - startedAtTime) / 1000);
+
+      const updatedPayload = {
+        ...activePayload,
         ended_at: endTime,
         end_latitude: lat || null,
         end_longitude: lng || null,
         distance_meters: distanceMeters || 0,
-        duration_seconds: durationSeconds || computedDuration
-      })
-      .eq('id', activeEvent.id);
+        duration_seconds: durationSeconds || computedDuration,
+        status: 'finished',
+        event_type: 'ride_finished'
+      };
+
+      const { error: updateError } = await supabase
+        .from('driver_ride_logs')
+        .update({
+          payload: updatedPayload
+        })
+        .eq('id', activeLog.id);
+
+      if (updateError) {
+        try {
+          errorTracker.trackSupabaseError('Encerrar Corrida - Atualizar (finishRide)', updateError);
+        } catch {}
+        throw updateError;
+      }
+    } else {
+      // If no active log found, insert a finished one directly
+      const rideId = 'ride_' + Date.now();
+      const payload = {
+        id: rideId,
+        ride_id: rideId,
+        driver_id: driverId || 'driver_unknown',
+        journey_id: sessionId,
+        event_type: 'ride_finished',
+        started_at: endTime,
+        ended_at: endTime,
+        start_latitude: lat || null,
+        start_longitude: lng || null,
+        end_latitude: lat || null,
+        end_longitude: lng || null,
+        distance_meters: distanceMeters || 0,
+        duration_seconds: durationSeconds || 0,
+        status: 'finished'
+      };
+
+      const { error: insertError } = await supabase
+        .from('driver_ride_logs')
+        .insert([{
+          id: rideId,
+          driver_id: driverId || null,
+          journey_id: sessionId,
+          payload: payload,
+          created_at: new Date().toISOString()
+        }]);
+
+      if (insertError) {
+        try {
+          errorTracker.trackSupabaseError('Encerrar Corrida - Inserir Avulsa (finishRide)', insertError);
+        } catch {}
+        throw insertError;
+      }
+    }
+
+    console.log('[JourneyClassifier] ride finished', { sessionId });
+  } catch (err: any) {
+    console.error('[JourneyClassifier] Critical exception in finishRide:', err);
+    try {
+      errorTracker.trackSupabaseError('Encerrar Corrida (finishRide - Exception)', err);
+    } catch (trackErr) {
+      console.error('Failed to log error to tracker:', trackErr);
+    }
+    throw err;
   }
-
-  // 2. Create the ride_finished event
-  const { error: insertError } = await supabase
-    .from('driver_ride_events')
-    .insert([{
-      driver_id: driverId || null,
-      session_id: sessionId,
-      event_type: 'ride_finished',
-      started_at: endTime,
-      ended_at: endTime,
-      start_latitude: lat || null,
-      start_longitude: lng || null,
-      end_latitude: lat || null,
-      end_longitude: lng || null,
-      distance_meters: distanceMeters || 0,
-      duration_seconds: durationSeconds || 0
-    }]);
-
-  if (insertError) {
-    console.error('[JourneyClassifier] Error in finishRide inserting ride_finished:', insertError);
-    throw insertError;
-  }
-
-  console.log('[JourneyClassifier] ride finished', { sessionId });
 }
 
 /**
@@ -177,13 +264,24 @@ export async function rebuildJourneySegments(sessionId: string): Promise<void> {
     if (pError) throw pError;
     if (!points || points.length === 0) return;
 
-    const { data: events, error: eError } = await supabase
-      .from('driver_ride_events')
+    const { data: logs, error: eError } = await supabase
+      .from('driver_ride_logs')
       .select('*')
-      .eq('session_id', sessionId)
-      .order('started_at', { ascending: true });
+      .eq('journey_id', sessionId)
+      .order('created_at', { ascending: true });
 
     if (eError) throw eError;
+
+    const events = (logs || []).map((l: any) => {
+      const p = l.payload || {};
+      return {
+        id: l.id,
+        event_type: p.event_type || (p.status === 'finished' ? 'ride_finished' : 'ride_started'),
+        started_at: p.started_at || l.created_at,
+        ended_at: p.ended_at || (p.status === 'finished' ? p.endTime || l.created_at : null),
+        ...p
+      };
+    });
 
     for (let i = 0; i < points.length; i++) {
       const pt = points[i];

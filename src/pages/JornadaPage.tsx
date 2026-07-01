@@ -530,13 +530,18 @@ export const JornadaPage: React.FC = () => {
     const executeAiDetection = async () => {
       try {
         // Find if there is currently an active ride_started event
-        const { data: activeEvents } = await supabase
-          .from('driver_ride_events')
+        const { data: activeLogs } = await supabase
+          .from('driver_ride_logs')
           .select('*')
-          .eq('session_id', activeSession.id)
-          .eq('event_type', 'ride_started')
-          .is('ended_at', null)
-          .limit(1);
+          .eq('journey_id', activeSession.id)
+          .order('created_at', { ascending: false });
+
+        const activeLog = activeLogs?.find((l: any) => l.payload?.status === 'in_progress' || l.payload?.event_type === 'ride_started');
+        const activeEvents = activeLog ? [{
+          id: activeLog.id,
+          session_id: activeLog.journey_id,
+          ...activeLog.payload
+        }] : [];
 
         const activeEvent = activeEvents && activeEvents.length > 0 ? activeEvents[0] : null;
 
@@ -886,13 +891,25 @@ export const JornadaPage: React.FC = () => {
 
       const eventId = await startRide(activeSession.id, lat, lng);
       
+      const { data: existing } = await supabase
+        .from('driver_ride_logs')
+        .select('payload')
+        .eq('id', eventId)
+        .maybeSingle();
+
+      const currentPayload = existing?.payload || {};
+      const updatedPayload = {
+        ...currentPayload,
+        is_automated: false,
+        confidence_score: 100,
+        classification_reason: 'Iniciada manualmente pelo motorista (Override)',
+        was_confirmed_manually: true
+      };
+
       await supabase
-         .from('driver_ride_events')
+         .from('driver_ride_logs')
          .update({
-           is_automated: false,
-           confidence_score: 100,
-           classification_reason: 'Iniciada manualmente pelo motorista (Override)',
-           was_confirmed_manually: true
+           payload: updatedPayload
          })
          .eq('id', eventId);
 
@@ -1300,10 +1317,6 @@ export const JornadaPage: React.FC = () => {
       console.log('[STRUCTURED_LOG] RESULTADO_SALVAMENTO:', res);
       addAiLog(`[RESULTADO_SALVAMENTO] Sucesso: ${res.success}. Pendente de Sincronização: ${!!(res.ride as any)?.pending_sync}`);
 
-      if (!res.success) {
-        throw new Error(res.error || 'Erro na validação da qualidade dos dados.');
-      }
-
       // STRICT PERSISTENCE VERIFICATION (Requirement 1)
       const verifiedLogsStr = localStorage.getItem('ride_logs');
       const verifiedLogs = verifiedLogsStr ? JSON.parse(verifiedLogsStr) : [];
@@ -1335,9 +1348,52 @@ export const JornadaPage: React.FC = () => {
         console.error('[FINANCE_SYNC_ERROR] Falha ao adicionar ganho nas finanças:', earnErr);
       }
 
+      if (!res.success) {
+        if (res.ride?.pending_sync) {
+          setToast({
+            show: true,
+            message: 'Aviso: Banco remoto offline. Corrida salva localmente para re-sync automático.',
+            type: 'error'
+          });
+
+          // Update local logs state immediately using verified logs
+          setRideLogs(verifiedLogs);
+
+          setActiveRide(null);
+          localStorage.removeItem('driverdash_active_ride_calib');
+
+          // Stop GPS tracking since ride has finished
+          window.dispatchEvent(new Event('driverdash_active_ride_change'));
+
+          try {
+            await finishRide(activeSession.id, res.ride.dropoff_lat || endLat, res.ride.dropoff_lng || endLng);
+          } catch (err) {
+            console.warn('[OFFLINE] Falha ao encerrar evento remoto, continuará offline.');
+          }
+
+          localStorage.setItem(`driverdash_ride_active_${activeSession.id}`, 'false');
+          setIsRideActive(false);
+          setFinishModalOpen(false);
+
+          if (addSmartAlert) {
+            addSmartAlert({
+              title: 'Corrida Salva Localmente (Offline) ⚠️',
+              description: `Conexão com Supabase falhou. R$ ${valRecebido.toFixed(2)} guardados localmente. Sincronização pendente.`,
+              type: 'profit',
+              severity: 'medium'
+            });
+          }
+
+          await fetchStats();
+          return;
+        } else {
+          throw new Error(res.error || 'Erro na validação da qualidade dos dados.');
+        }
+      }
+
       setToast({
         show: true,
-        message: 'Corrida salva para calibração da IA.',
+        message: 'Corrida salva e sincronizada com o Supabase!',
         type: 'success'
       });
 
@@ -1350,7 +1406,11 @@ export const JornadaPage: React.FC = () => {
       // Stop GPS tracking since ride has finished
       window.dispatchEvent(new Event('driverdash_active_ride_change'));
 
-      await finishRide(activeSession.id, res.ride.dropoff_lat || endLat, res.ride.dropoff_lng || endLng);
+      try {
+        await finishRide(activeSession.id, res.ride.dropoff_lat || endLat, res.ride.dropoff_lng || endLng);
+      } catch (err) {
+        console.warn('Falha ao registrar encerramento da jornada no Supabase:', err);
+      }
 
       localStorage.setItem(`driverdash_ride_active_${activeSession.id}`, 'false');
       setIsRideActive(false);
@@ -1551,18 +1611,33 @@ export const JornadaPage: React.FC = () => {
       console.log('[CALIBRATION_EDIT] Salvando edição de corrida...', updatedRide);
 
       const res = await persistCalibratedRide(updatedRide);
+      const updatedLogsStr = localStorage.getItem('ride_logs');
+      const updatedLogs = updatedLogsStr ? JSON.parse(updatedLogsStr) : [];
+
       if (!res.success) {
-        throw new Error(res.error || 'Erro na validação do salvamento.');
+        if (res.ride?.pending_sync) {
+          setToast({
+            show: true,
+            message: 'Aviso: Banco remoto offline. Edição salva localmente para re-sync automático.',
+            type: 'error'
+          });
+
+          setRideLogs(updatedLogs);
+          setEditModalOpen(false);
+          setEditingRide(null);
+          await fetchStats();
+          return;
+        } else {
+          throw new Error(res.error || 'Erro na validação do salvamento.');
+        }
       }
 
       setToast({
         show: true,
-        message: 'Corrida salva para calibração da IA.',
+        message: 'Corrida editada e sincronizada com o Supabase!',
         type: 'success'
       });
 
-      const updatedLogsStr = localStorage.getItem('ride_logs');
-      const updatedLogs = updatedLogsStr ? JSON.parse(updatedLogsStr) : [];
       setRideLogs(updatedLogs);
 
       setEditModalOpen(false);

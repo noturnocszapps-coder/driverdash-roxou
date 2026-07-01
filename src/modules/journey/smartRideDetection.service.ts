@@ -298,14 +298,26 @@ export async function analyzeTelemetryForRide(
       try {
         const eventId = await startRide(sessionId, lastPoint.latitude, lastPoint.longitude);
         
-        // Update Supabase to flag this as automated
+        // Update driver_ride_logs payload to flag this as automated
+        const { data: existing } = await supabase
+          .from('driver_ride_logs')
+          .select('payload')
+          .eq('id', eventId)
+          .maybeSingle();
+
+        const currentPayload = existing?.payload || {};
+        const updatedPayload = {
+          ...currentPayload,
+          is_automated: true,
+          confidence_score: calculatedConfidence,
+          classification_reason: detectedReason,
+          was_confirmed_manually: false
+        };
+
         await supabase
-          .from('driver_ride_events')
+          .from('driver_ride_logs')
           .update({
-            is_automated: true,
-            confidence_score: calculatedConfidence,
-            classification_reason: detectedReason,
-            was_confirmed_manually: false
+            payload: updatedPayload
           })
           .eq('id', eventId);
 
@@ -327,24 +339,30 @@ export async function analyzeTelemetryForRide(
       try {
         await finishRide(sessionId, lastPoint.latitude, lastPoint.longitude);
         
-        // Find the completed event and update it with AI stats
-        const { data: latestEvents } = await supabase
-          .from('driver_ride_events')
+        // Find the completed event and update it with AI stats in driver_ride_logs
+        const { data: latestLogs } = await supabase
+          .from('driver_ride_logs')
           .select('*')
-          .eq('session_id', sessionId)
-          .eq('event_type', 'ride_finished')
-          .order('started_at', { ascending: false })
-          .limit(1);
+          .eq('journey_id', sessionId)
+          .order('created_at', { ascending: false });
 
-        if (latestEvents && latestEvents.length > 0) {
-          const finishedEventId = latestEvents[0].id;
+        const latestLog = latestLogs?.find((l: any) => l.payload?.event_type === 'ride_finished' || l.payload?.status === 'finished');
+
+        if (latestLog) {
+          const finishedEventId = latestLog.id;
+          const currentPayload = latestLog.payload || {};
+          const updatedPayload = {
+            ...currentPayload,
+            is_automated: true,
+            confidence_score: calculatedConfidence,
+            classification_reason: detectedReason,
+            was_confirmed_manually: false
+          };
+
           await supabase
-            .from('driver_ride_events')
+            .from('driver_ride_logs')
             .update({
-              is_automated: true,
-              confidence_score: calculatedConfidence,
-              classification_reason: detectedReason,
-              was_confirmed_manually: false
+              payload: updatedPayload
             })
             .eq('id', finishedEventId);
         }
@@ -399,14 +417,26 @@ export async function submitAIConfirmationFeedback(
   isConfirmed: boolean
 ): Promise<void> {
   try {
-    // 1. Update event state in database
+    // 1. Update event state in driver_ride_logs payload
+    const { data: existing } = await supabase
+      .from('driver_ride_logs')
+      .select('payload')
+      .eq('id', eventId)
+      .maybeSingle();
+
+    const currentPayload = existing?.payload || {};
+    const updatedPayload = {
+      ...currentPayload,
+      was_confirmed_manually: isConfirmed,
+      classification_reason: isConfirmed 
+        ? 'Confirmado manualmente pelo motorista' 
+        : 'Rejeitado pelo motorista / Classificação incorreta'
+    };
+
     await supabase
-      .from('driver_ride_events')
+      .from('driver_ride_logs')
       .update({
-        was_confirmed_manually: isConfirmed,
-        classification_reason: isConfirmed 
-          ? 'Confirmado manualmente pelo motorista' 
-          : 'Rejeitado pelo motorista / Classificação incorreta'
+        payload: updatedPayload
       })
       .eq('id', eventId);
 
@@ -439,14 +469,23 @@ export async function submitAIConfirmationFeedback(
  */
 export async function getSmartRideStats(sessionId?: string): Promise<AIRideStats> {
   try {
-    const { data: events, error } = await supabase
-      .from('driver_ride_events')
+    const { data: logs, error } = await supabase
+      .from('driver_ride_logs')
       .select('*')
       .order('created_at', { ascending: false });
 
-    if (error || !events || events.length === 0) {
+    if (error || !logs || logs.length === 0) {
       return { accuracyRate: 0, autoDetectedCount: 0, manuallyConfirmedCount: 0, totalRideCount: 0 };
     }
+
+    const events = logs.map((l: any) => {
+      const p = l.payload || {};
+      return {
+        id: l.id,
+        session_id: l.journey_id,
+        ...p
+      };
+    });
 
     const filtered = sessionId ? events.filter(e => e.session_id === sessionId) : events;
 

@@ -8,6 +8,7 @@
 
 import { supabase } from '../shared/supabase.helpers';
 import { calculateDistanceBetweenPoints } from './journey.calculations';
+import { errorTracker } from '../observability/errorTracker';
 
 export interface GpsTrackPoint {
   lat: number;
@@ -70,6 +71,7 @@ export interface CalibratedRide {
   end_odometer?: number;
   is_pending_calibration_details?: boolean; // If data was missing during saving
   calibratedAt?: string;
+  pending_sync?: boolean;
 }
 
 /**
@@ -316,7 +318,8 @@ export async function persistCalibratedRide(rideData: Partial<CalibratedRide>): 
       idle_time,
       vehicle_cost,
       profit,
-      timestamp: finalRide.startTime
+      timestamp: finalRide.startTime,
+      rideTrackPoints: finalRide.rideTrackPoints || []
     };
 
     // Embed ride_log nested
@@ -326,7 +329,36 @@ export async function persistCalibratedRide(rideData: Partial<CalibratedRide>): 
       ride_log
     };
 
-    // 1. Save locally to ride_logs localStorage array
+    // 1. Sync to Supabase (attempt first to detect failure)
+    let syncError: any = null;
+    try {
+      const { error } = await supabase
+        .from('driver_ride_logs')
+        .upsert({
+          id: fullSavedRide.id,
+          journey_id: fullSavedRide.journey_id || 'session_unknown',
+          driver_id: fullSavedRide.driver_id || 'driver_unknown',
+          payload: { ...fullSavedRide, pending_sync: false },
+          created_at: new Date().toISOString()
+        });
+      syncError = error;
+    } catch (err: any) {
+      syncError = err;
+    }
+
+    if (syncError) {
+      console.warn('[CALIBRATION_SAVE_ERROR] Supabase sync failed. Marking as pending_sync = true:', syncError.message || syncError);
+      fullSavedRide.pending_sync = true;
+      try {
+        errorTracker.trackSupabaseError('Persistir Corrida Calibrada (Upsert)', syncError);
+      } catch (err) {
+        console.error('Failed to log sync error to tracker:', err);
+      }
+    } else {
+      fullSavedRide.pending_sync = false;
+    }
+
+    // 2. Save locally to ride_logs localStorage array
     const existingLogsStr = localStorage.getItem('ride_logs');
     let existingLogs: any[] = existingLogsStr ? JSON.parse(existingLogsStr) : [];
     
@@ -339,21 +371,13 @@ export async function persistCalibratedRide(rideData: Partial<CalibratedRide>): 
     }
     localStorage.setItem('ride_logs', JSON.stringify(existingLogs));
 
-    // 2. Sync to Supabase
-    const { error: syncError } = await supabase
-      .from('driver_ride_logs')
-      .upsert({
-        id: fullSavedRide.id,
-        journey_id: fullSavedRide.journey_id || 'session_unknown',
-        driver_id: fullSavedRide.driver_id || 'driver_unknown',
-        payload: fullSavedRide,
-        created_at: new Date().toISOString()
-      });
-
     if (syncError) {
-      console.warn('[CALIBRATION_SAVE_ERROR] Supabase sync returned notice (falling back gracefully to offline):', syncError.message);
-    } else {
-      console.log('[CALIBRATION_SAVE_SUCCESS] Sincronizado remotamente com sucesso.');
+      console.log('[CALIBRATION_SAVE_OFFLINE] Sincronizado localmente (offline) com sucesso.', ride_log);
+      return {
+        success: false,
+        ride: fullSavedRide,
+        error: `Falha ao salvar no banco remoto (Supabase): ${syncError.message || 'Sem resposta de rede'}. A corrida foi guardada localmente e será sincronizada automaticamente em segundo plano.`
+      };
     }
 
     console.log('[CALIBRATION_SAVE_SUCCESS] Corrida persistida localmente e remotamente.', ride_log);

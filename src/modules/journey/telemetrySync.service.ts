@@ -7,6 +7,7 @@
 
 import { STORAGE_PREFIX } from '../shared/constants';
 import { supabase } from '../shared/supabase.helpers';
+import { errorTracker } from '../observability/errorTracker';
 
 const TELEMETRY_STORAGE_KEY = `${STORAGE_PREFIX}unsynced_route_points`;
 const SYNC_STATS_STORAGE_KEY = `${STORAGE_PREFIX}telemetry_sync_stats`;
@@ -380,6 +381,12 @@ class TelemetrySyncService {
     } catch (err: any) {
       const errorMessage = err?.message || 'Erro desconhecido na rede';
       console.error('[SYNC_BATCH_FAILED]', { error: errorMessage, ids: batch.map(b => b.idLocal) });
+
+      try {
+        errorTracker.trackSupabaseError('Sincronização de Telemetria (Lote)', err);
+      } catch (trackErr) {
+        console.error('Failed to log sync error to tracker:', trackErr);
+      }
 
       // Rollback to failed status with retry increment
       const finalPoints = this.getPoints();
