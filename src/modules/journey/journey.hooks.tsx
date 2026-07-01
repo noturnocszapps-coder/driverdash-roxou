@@ -432,9 +432,40 @@ export const JourneyProvider: React.FC<{ children: React.ReactNode }> = ({ child
     setGpsStatus('Sensor inativo');
   };
 
-  // Start or stop tracking based on active session existence
+  const [isRideActive, setIsRideActive] = useState<boolean>(() => {
+    try {
+      const saved = localStorage.getItem('driverdash_active_ride_calib');
+      return saved ? JSON.parse(saved) !== null : false;
+    } catch {
+      return false;
+    }
+  });
+
+  // Keep isRideActive in sync with localStorage
   useEffect(() => {
-    if (activeSessionId) {
+    const handleStorageChange = () => {
+      try {
+        const saved = localStorage.getItem('driverdash_active_ride_calib');
+        setIsRideActive(saved ? JSON.parse(saved) !== null : false);
+      } catch {
+        setIsRideActive(false);
+      }
+    };
+
+    const interval = setInterval(handleStorageChange, 500);
+    window.addEventListener('storage', handleStorageChange);
+    window.addEventListener('driverdash_active_ride_change', handleStorageChange);
+
+    return () => {
+      clearInterval(interval);
+      window.removeEventListener('storage', handleStorageChange);
+      window.removeEventListener('driverdash_active_ride_change', handleStorageChange);
+    };
+  }, []);
+
+  // Start or stop tracking based on active session existence AND active ride existence
+  useEffect(() => {
+    if (activeSessionId && isRideActive) {
       startGpsTracking();
     } else {
       stopGpsTracking();
@@ -443,7 +474,7 @@ export const JourneyProvider: React.FC<{ children: React.ReactNode }> = ({ child
     return () => {
       stopGpsTracking();
     };
-  }, [activeSessionId]);
+  }, [activeSessionId, isRideActive]);
 
   const testGps = async (): Promise<GpsTestResult> => {
     setGpsTestLoading(true);

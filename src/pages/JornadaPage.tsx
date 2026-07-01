@@ -11,7 +11,7 @@ import {
   Play, Square, MapPin, Navigation, Clock, ShieldAlert,
   AlertTriangle, Milestone, Activity, Compass, Flame, Info,
   Bot, Sparkles, ThumbsUp, ThumbsDown, Gauge, TrendingUp, Terminal, Check, X,
-  ChevronRight, ChevronDown, Signal
+  ChevronRight, ChevronDown, Signal, Edit, Calendar
 } from 'lucide-react';
 import { motion, AnimatePresence } from 'motion/react';
 import { telemetrySyncService } from '../modules/journey/telemetrySync.service';
@@ -25,6 +25,14 @@ import {
   AIRideStats 
 } from '../modules/journey/smartRideDetection.service';
 import { calculateCostPerKmEstimate } from '../modules/vehicle/vehicle.calculations';
+import { 
+  persistCalibratedRide, 
+  calculateCalibrationAnalytics, 
+  CalibratedRide, 
+  GpsTrackPoint, 
+  validateRideData 
+} from '../modules/journey/rideCalibration.service';
+import { CalibrationRouteMap } from '../components/CalibrationRouteMap';
 
 // Haversine Formula helper
 export function calculateHaversineDistance(lat1: number, lon1: number, lat2: number, lon2: number): number {
@@ -37,6 +45,22 @@ export function calculateHaversineDistance(lat1: number, lon1: number, lat2: num
     Math.sin(dLon / 2) * Math.sin(dLon / 2);
   const c = 2 * Math.atan2(Math.sqrt(a), Math.sqrt(1 - a));
   return R * c; // Kilometers
+}
+
+// Helper to calculate exact vehicle consumption
+export function calculateVehicleConsumption(distance: number, vehicle: any): { amount: number; unit: string } {
+  if (!vehicle) return { amount: 0, unit: 'L' };
+  const fuelType = vehicle.fuel_type?.toLowerCase() || '';
+  const isElectric = fuelType === 'electric' || fuelType === 'elétrico' || fuelType === 'eletrico';
+  if (isElectric) {
+    const consumptionKwh100 = vehicle.electric_consumption_kwh_100km || 15;
+    const amount = Number(((distance * consumptionKwh100) / 100).toFixed(2));
+    return { amount, unit: 'kWh' };
+  } else {
+    const kmPerLiter = vehicle.km_per_liter || 10;
+    const amount = Number((distance / kmPerLiter).toFixed(2));
+    return { amount, unit: 'L' };
+  }
 }
 
 export const JornadaPage: React.FC = () => {
@@ -56,7 +80,8 @@ export const JornadaPage: React.FC = () => {
     vehicle,
     vehicleCostSettings,
     earnings,
-    profile
+    profile,
+    addEarning
   } = useApp();
 
   const [elapsedTime, setElapsedTime] = useState<string>('00:00:00');
@@ -128,13 +153,176 @@ export const JornadaPage: React.FC = () => {
   const [tollValue, setTollValue] = useState<string>("0.00");
   const [observations, setObservations] = useState<string>("");
   
-  // IA learning details
-  const [originNeighborhood, setOriginNeighborhood] = useState<string>("");
+  // Auto-Geocoded GPS fields and fallbacks (no more manual inputs as primary)
+  const [pickupAddress, setPickupAddress] = useState<string>("");
+  const [pickupNeighborhood, setPickupNeighborhood] = useState<string>("");
+  const [pickupCity, setPickupCity] = useState<string>("Presidente Prudente");
+  
+  const [destAddress, setDestAddress] = useState<string>("");
   const [destNeighborhood, setDestNeighborhood] = useState<string>("");
-  const [originCity, setOriginCity] = useState<string>("São Paulo");
-  const [destCity, setDestCity] = useState<string>("São Paulo");
+  const [destCity, setDestCity] = useState<string>("Presidente Prudente");
+
+  const [isResolvingGeocode, setIsResolvingGeocode] = useState<boolean>(false);
+  const [geocodeError, setGeocodeError] = useState<string | null>(null);
+  const [showManualCorrection, setShowManualCorrection] = useState<boolean>(false);
+  const [saveError, setSaveError] = useState<string | null>(null);
+
   const [selectedClimate, setSelectedClimate] = useState<string>("Limpo");
   const [selectedSpecialEvent, setSelectedSpecialEvent] = useState<string>("Nenhum");
+
+  // New Calibration States (Item 1, 6, 9)
+  const [toast, setToast] = useState<{ show: boolean; message: string; type: 'success' | 'error' }>({
+    show: false,
+    message: '',
+    type: 'success'
+  });
+  const [editingRide, setEditingRide] = useState<any | null>(null);
+  const [editModalOpen, setEditModalOpen] = useState<boolean>(false);
+  const [selectedRouteRide, setSelectedRouteRide] = useState<any | null>(null);
+  const [isSavingCalibration, setIsSavingCalibration] = useState<boolean>(false);
+  const [showDebugDataModal, setShowDebugDataModal] = useState<boolean>(false);
+
+  useEffect(() => {
+    if (toast.show) {
+      const timer = setTimeout(() => {
+        setToast(prev => ({ ...prev, show: false }));
+      }, 4000);
+      return () => clearTimeout(timer);
+    }
+  }, [toast.show]);
+
+  // Automatic background synchronization of pending rides (Requirement 3)
+  const syncPendingRides = async () => {
+    try {
+      const logsStr = localStorage.getItem('ride_logs');
+      if (!logsStr) return;
+      const logs = JSON.parse(logsStr);
+      const pendingRides = logs.filter((r: any) => r.pending_sync === true);
+      if (pendingRides.length === 0) return;
+
+      console.log(`[SYNC_QUEUE] Encontradas ${pendingRides.length} corridas pendentes de sincronização.`);
+      let updatedAny = false;
+
+      for (const ride of pendingRides) {
+        try {
+          const { error: syncError } = await supabase
+            .from('driver_ride_logs')
+            .upsert({
+              id: ride.id,
+              journey_id: ride.journey_id || 'session_unknown',
+              driver_id: ride.driver_id || 'driver_unknown',
+              payload: { ...ride, pending_sync: false },
+              created_at: new Date().toISOString()
+            });
+
+          if (!syncError) {
+            console.log(`[SYNC_QUEUE] Corrida ${ride.id} sincronizada com sucesso.`);
+            ride.pending_sync = false;
+            updatedAny = true;
+          }
+        } catch (err) {
+          console.error(`[SYNC_QUEUE] Erro ao sincronizar corrida ${ride.id}:`, err);
+        }
+      }
+
+      if (updatedAny) {
+        localStorage.setItem('ride_logs', JSON.stringify(logs));
+        setRideLogs(logs);
+      }
+    } catch (err) {
+      console.error('[SYNC_QUEUE] Erro no fluxo de sincronização automática:', err);
+    }
+  };
+
+  useEffect(() => {
+    // Attempt automatic sync on component mount
+    syncPendingRides();
+
+    // Re-attempt automatic sync when connectivity changes to online
+    window.addEventListener('online', syncPendingRides);
+    return () => {
+      window.removeEventListener('online', syncPendingRides);
+    };
+  }, []);
+
+  const getPreviewData = () => {
+    if (!activeSession) return null;
+    const valRecebido = parseFloat(receivedValue) || 15.00;
+    const startLat = activeRide?.pickup_lat || activeRide?.startLocation?.lat || -22.1225;
+    const startLng = activeRide?.pickup_lng || activeRide?.startLocation?.lng || -51.3883;
+    const endLat = lastCoord?.lat || activeRide?.endLocation?.lat || -22.1225;
+    const endLng = lastCoord?.lng || activeRide?.endLocation?.lng || -51.3883;
+
+    const start_gps = { lat: startLat, lng: startLng };
+    const end_gps = { lat: endLat, lng: endLng };
+
+    const startOdo = activeRide ? activeRide.start_odometer : totalDistanceKm;
+    const endOdo = totalDistanceKm;
+    const odoDistance = Math.max(0, endOdo - startOdo);
+    const haversineDist = calculateHaversineDistance(startLat, startLng, endLat, endLng);
+    const distance = odoDistance > 0 ? odoDistance : haversineDist;
+
+    const endTime = new Date().toISOString();
+    const startTime = activeRide?.startTime || new Date().toISOString();
+    const startMs = activeRide?.startLocation?.timestamp || new Date(startTime).getTime();
+    const endMs = Date.now();
+    const duration = Math.max(1, Math.round((endMs - startMs) / 1000));
+
+    const costPerKm = calculateCostPerKmEstimate(vehicle, vehicleCostSettings) || 0.45;
+    const vehicle_cost = Number((distance * costPerKm).toFixed(2));
+    const profit = Number((valRecebido - vehicle_cost).toFixed(2));
+
+    let totalIdleSec = activeRide?.totalIdleTime || 0;
+    if (activeRide?.idleStartTimestamp) {
+      totalIdleSec += (Date.now() - activeRide.idleStartTimestamp) / 1000;
+    }
+    const idle_time = Number((totalIdleSec / 60).toFixed(2));
+
+    const consumptionObj = calculateVehicleConsumption(distance, vehicle);
+
+    const trackPoints = activeRide?.rideTrackPoints || [];
+    let maxSpeed = 0;
+    let sumSpeed = 0;
+    let countSpeed = 0;
+    trackPoints.forEach((p: any) => {
+      if (typeof p.speed === 'number' && p.speed >= 0) {
+        if (p.speed > maxSpeed) maxSpeed = p.speed;
+        sumSpeed += p.speed;
+        countSpeed++;
+      }
+    });
+    const finalMaxSpeedKmh = Number((maxSpeed * 3.6).toFixed(1));
+    const finalAvgSpeedKmh = countSpeed > 0 ? Number(((sumSpeed / countSpeed) * 3.6).toFixed(1)) : 35.0;
+
+    return {
+      ride_id: activeRide?.id || 'ride_preview_' + Date.now(),
+      origem: start_gps,
+      embarque: {
+        timestamp: activeRide?.pickup_timestamp || startTime,
+        lat: startLat,
+        lng: startLng
+      },
+      desembarque: {
+        timestamp: endTime,
+        lat: endLat,
+        lng: endLng
+      },
+      rota_completa: trackPoints,
+      distancia_real: Number(distance.toFixed(2)),
+      duração: duration,
+      velocidade_media: finalAvgSpeedKmh,
+      velocidade_maxima: finalMaxSpeedKmh,
+      tempo_parado: totalIdleSec,
+      lucro: profit,
+      custo: vehicle_cost,
+      consumo: consumptionObj,
+      pickup_neighborhood: pickupNeighborhood || activeRide?.pickup_neighborhood || 'Centro',
+      destination_neighborhood: destNeighborhood || 'Centro',
+      fare_value: valRecebido,
+      platform,
+      observations
+    };
+  };
 
   // Form states for active ride cancellation modal
   const [cancelReason, setCancelReason] = useState<string>("Passageiro");
@@ -173,7 +361,14 @@ export const JornadaPage: React.FC = () => {
   };
 
   // Ride status state and handlers (Phase 6)
-  const [isRideActive, setIsRideActive] = useState<boolean>(false);
+  const [isRideActive, setIsRideActive] = useState<boolean>(() => {
+    try {
+      const saved = localStorage.getItem('driverdash_active_ride_calib');
+      return saved ? JSON.parse(saved) !== null : false;
+    } catch {
+      return false;
+    }
+  });
   const [manualOverride, setManualOverride] = useState<boolean>(false);
 
   // Compute stats for AI calibration dashboard
@@ -219,6 +414,10 @@ export const JornadaPage: React.FC = () => {
       isCalibrated
     };
   }, [rideLogs, routePoints]);
+
+  const calibrationAnalytics = useMemo(() => {
+    return calculateCalibrationAnalytics(rideLogs);
+  }, [rideLogs]);
 
   // AI-powered states (Smart Ride Detection)
   const [aiState, setAiState] = useState<AIDetectionState | null>(null);
@@ -357,34 +556,256 @@ export const JornadaPage: React.FC = () => {
     executeAiDetection();
   }, [routePoints, activeSession, addSmartAlert, activeRide]);
 
+  // Helpers for geographic fallback geocoding based on nearest distance in Presidente Prudente
+  const getNearestNeighborhoodLocal = (lat: number, lng: number): { neighborhood: string, city: string } => {
+    const regions = [
+      { name: 'Centro', lat: -22.1225, lng: -51.3883, city: 'Presidente Prudente' },
+      { name: 'Vila Industrial', lat: -22.1144, lng: -51.3811, city: 'Presidente Prudente' },
+      { name: 'Jardim Bongiovani', lat: -22.1320, lng: -51.4020, city: 'Presidente Prudente' },
+      { name: 'Jardim Paulista', lat: -22.1256, lng: -51.3992, city: 'Presidente Prudente' },
+      { name: 'Jardim Aviação', lat: -22.1206, lng: -51.4092, city: 'Presidente Prudente' },
+      { name: 'Parque do Povo', lat: -22.1264, lng: -51.4022, city: 'Presidente Prudente' },
+      { name: 'Cohab', lat: -22.1180, lng: -51.4300, city: 'Presidente Prudente' },
+      { name: 'Ana Jacinta', lat: -22.1642, lng: -51.4320, city: 'Presidente Prudente' },
+      { name: 'Brasil Novo', lat: -22.0850, lng: -51.3950, city: 'Presidente Prudente' },
+      { name: 'Montalvão', lat: -22.0650, lng: -51.4450, city: 'Presidente Prudente' },
+      { name: 'Álvares Machado', lat: -22.0789, lng: -51.4719, city: 'Álvares Machado' },
+      { name: 'Regente Feijó', lat: -22.2214, lng: -51.3031, city: 'Regente Feijó' },
+      { name: 'Prudenshopping', lat: -22.1147, lng: -51.4068, city: 'Presidente Prudente' }
+    ];
+
+    let minDistance = Infinity;
+    let nearest = regions[0];
+
+    for (const r of regions) {
+      const d = calculateHaversineDistance(lat, lng, r.lat, r.lng);
+      if (d < minDistance) {
+        minDistance = d;
+        nearest = r;
+      }
+    }
+
+    return { neighborhood: nearest.name, city: nearest.city };
+  };
+
+  const fetchAddressForCoordinates = async (lat: number, lng: number): Promise<{ address: string, neighborhood: string, city: string }> => {
+    try {
+      const response = await fetch(`/api/geocode?lat=${lat}&lng=${lng}`);
+      if (response.ok) {
+        const data = await response.json();
+        const localFallback = getNearestNeighborhoodLocal(lat, lng);
+        return {
+          address: data.address || `${localFallback.neighborhood}, ${localFallback.city}`,
+          neighborhood: data.neighborhood || localFallback.neighborhood,
+          city: data.city || localFallback.city
+        };
+      }
+    } catch (err) {
+      console.error('[GEOCODE] Geocoding API failed, using local fallback:', err);
+    }
+    const local = getNearestNeighborhoodLocal(lat, lng);
+    return {
+      address: `${local.neighborhood}, ${local.city}`,
+      neighborhood: local.neighborhood,
+      city: local.city
+    };
+  };
+
+  const saveToSupabaseRideLogs = async (rideLog: any) => {
+    console.log('[SUPABASE_RIDE_LOGS] Sincronizando com banco remoto...', rideLog);
+    try {
+      const { data, error } = await supabase
+        .from('driver_ride_logs')
+        .insert([
+          {
+            id: rideLog.id,
+            payload: rideLog,
+            created_at: new Date().toISOString()
+          }
+        ]);
+      if (error) {
+        console.warn('[SUPABASE_RIDE_LOGS] Tabela opcional não disponível ou falha:', error.message);
+      } else {
+        console.log('[SUPABASE_RIDE_LOGS] Sincronizado com sucesso:', data);
+      }
+    } catch (err) {
+      console.error('[SUPABASE_RIDE_LOGS] Sincronização remota falhou:', err);
+    }
+  };
+
+  // Effect to record ride track points in real time (every 3-5s as GPS coordinates stream)
+  useEffect(() => {
+    if (!isRideActive || !activeRide || !lastCoord) return;
+
+    const now = Date.now();
+    
+    setActiveRide((prevRide: any) => {
+      if (!prevRide || prevRide.status !== 'in_progress') return prevRide;
+      const trackPoints = prevRide.rideTrackPoints || [];
+      const lastPoint = trackPoints[trackPoints.length - 1];
+      
+      const elapsed = lastPoint ? (now - new Date(lastPoint.timestamp).getTime()) : 999999;
+      if (elapsed < 3000) {
+        return prevRide; // Avoid too frequent updates
+      }
+
+      // Calculate distance between previous position and current position
+      const lastPos = prevRide.lastPosition || (lastPoint ? { lat: lastPoint.lat, lng: lastPoint.lng } : null);
+      let distance = 0;
+      if (lastPos) {
+        distance = calculateHaversineDistance(lastPos.lat, lastPos.lng, lastCoord.lat, lastCoord.lng) * 1000; // in meters
+      }
+
+      // Idle Tracking Logic
+      let idleStartTimestamp = prevRide.idleStartTimestamp;
+      let totalIdleTime = prevRide.totalIdleTime || 0;
+      let lastMovingTimestamp = prevRide.lastMovingTimestamp || now;
+
+      if (distance < 8) {
+        if (!idleStartTimestamp) {
+          idleStartTimestamp = now;
+        }
+      } else {
+        if (idleStartTimestamp) {
+          // If we were stopped and now moved, add the duration of the stop
+          const stopDurationMs = now - idleStartTimestamp;
+          totalIdleTime += stopDurationMs / 1000; // keep totalIdleTime in seconds
+          idleStartTimestamp = null;
+        }
+        lastMovingTimestamp = now;
+      }
+
+      // Determine movementState (MOVING > 8km/h, SLOW_MOVING 1-8km/h, IDLE = parado)
+      let movementState = prevRide.movementState || 'IDLE';
+      const currentSpeed = typeof lastCoord.speed === 'number' ? lastCoord.speed : 0;
+
+      const isIdleDurationReached = idleStartTimestamp && (now - idleStartTimestamp >= 30000);
+
+      if (isIdleDurationReached || (distance < 8 && movementState === 'IDLE')) {
+        movementState = 'IDLE';
+      } else if (currentSpeed > 8) {
+        movementState = 'MOVING';
+      } else if (currentSpeed >= 1) {
+        movementState = 'SLOW_MOVING';
+      } else {
+        movementState = distance < 8 ? 'IDLE' : 'SLOW_MOVING';
+      }
+
+      const newPoint = {
+        lat: lastCoord.lat,
+        lng: lastCoord.lng,
+        timestamp: new Date().toISOString(),
+        speed: typeof lastCoord.speed === 'number' ? lastCoord.speed : undefined
+      };
+      
+      const updatedRide = {
+        ...prevRide,
+        rideTrackPoints: [...trackPoints, newPoint],
+        lastPosition: { lat: lastCoord.lat, lng: lastCoord.lng },
+        lastMovingTimestamp,
+        idleStartTimestamp,
+        totalIdleTime,
+        movementState
+      };
+      
+      localStorage.setItem('driverdash_active_ride_calib', JSON.stringify(updatedRide));
+      console.log('[GPS_TRACK] Novo ponto gravado na corrida:', newPoint, 'Distance:', distance, 'IdleState:', movementState, 'TotalIdleTime:', totalIdleTime);
+      return updatedRide;
+    });
+  }, [lastCoord, isRideActive]);
+
   const handleAcceptRide = async () => {
     if (!activeSession) return;
     try {
-      // Prioridade total para evento manual (Manual Override)
       localStorage.setItem(`driverdash_ride_manual_override_${activeSession.id}`, 'true');
       setManualOverride(true);
       addAiLog('[RideAI] manual override: Aceitando corrida manualmente');
 
-      // Create unique activeRide object with required calibration details
+      const lat = lastCoord?.lat || -22.1225;
+      const lng = lastCoord?.lng || -51.3883;
+      const timestamp = Date.now();
+      const accuracy = lastCoord?.accuracy || 10;
+
+      if (!lastCoord && addSmartAlert) {
+        addSmartAlert({
+          title: 'Atenção 📡',
+          description: 'Ative a localização para calibração precisa',
+          type: 'fuel',
+          severity: 'high'
+        });
+      }
+
+      const localGeocode = getNearestNeighborhoodLocal(lat, lng);
       const rideId = 'ride_' + Date.now() + '_' + Math.random().toString(36).substring(2, 9);
-      const newRide = {
+      
+      const initialSpeed = lastCoord?.speed || 0;
+      const initialMovementState = initialSpeed > 8 
+        ? 'MOVING' 
+        : (initialSpeed >= 1 ? 'SLOW_MOVING' : 'IDLE');
+
+      const newRide: any = {
         id: rideId,
         startTime: new Date().toISOString(),
-        pickup: lastCoord ? { lat: lastCoord.lat, lng: lastCoord.lng } : { lat: -22.122, lng: -51.389 },
-        gps_precision: lastCoord?.accuracy || 10,
-        velocity: lastCoord?.speed || 0,
+        pickup: { lat, lng },
+        gps_precision: accuracy,
+        velocity: initialSpeed,
         start_odometer: totalDistanceKm,
-        status: 'in_progress'
+        status: 'in_progress',
+        startLocation: {
+          lat,
+          lng,
+          timestamp,
+          accuracy
+        },
+        pickup_address: `${localGeocode.neighborhood}, ${localGeocode.city}`,
+        pickup_neighborhood: localGeocode.neighborhood,
+        pickup_city: localGeocode.city,
+        rideTrackPoints: [
+          {
+            lat,
+            lng,
+            timestamp: new Date().toISOString(),
+            speed: typeof lastCoord?.speed === 'number' ? lastCoord.speed : undefined
+          }
+        ],
+        // Idle Tracking States
+        lastPosition: { lat, lng },
+        lastMovingTimestamp: timestamp,
+        idleStartTimestamp: initialMovementState === 'IDLE' ? timestamp : null,
+        totalIdleTime: 0,
+        movementState: initialMovementState
       };
+
+      setPickupAddress(newRide.pickup_address);
+      setPickupNeighborhood(newRide.pickup_neighborhood);
+      setPickupCity(newRide.pickup_city);
+
       setActiveRide(newRide);
       localStorage.setItem('driverdash_active_ride_calib', JSON.stringify(newRide));
+      window.dispatchEvent(new Event('driverdash_active_ride_change'));
 
-      // Required log
-      console.log('[RIDE] Corrida aceita', newRide);
+      // Async fetch high-fidelity address
+      fetchAddressForCoordinates(lat, lng).then((resolved) => {
+        setActiveRide((prev: any) => {
+          if (!prev || prev.id !== rideId) return prev;
+          const updated = {
+            ...prev,
+            pickup_address: resolved.address,
+            pickup_neighborhood: resolved.neighborhood,
+            pickup_city: resolved.city
+          };
+          localStorage.setItem('driverdash_active_ride_calib', JSON.stringify(updated));
+          return updated;
+        });
+        setPickupAddress(resolved.address);
+        setPickupNeighborhood(resolved.neighborhood);
+        setPickupCity(resolved.city);
+      });
 
-      const eventId = await startRide(activeSession.id, lastCoord?.lat, lastCoord?.lng);
+      console.log('[RIDE] Corrida aceita com GPS real:', newRide);
+
+      const eventId = await startRide(activeSession.id, lat, lng);
       
-      // Update event with manual details
       await supabase
          .from('driver_ride_events')
          .update({
@@ -402,7 +823,7 @@ export const JornadaPage: React.FC = () => {
       if (addSmartAlert) {
         addSmartAlert({
           title: 'Corrida Iniciada ⚡',
-          description: 'A telemetria passará a gravar seus pontos como KM Produtivo (Override manual ativo).',
+          description: `Origem detectada automaticamente: ${localGeocode.neighborhood}`,
           type: 'profit',
           severity: 'low'
         });
@@ -414,149 +835,380 @@ export const JornadaPage: React.FC = () => {
     }
   };
 
-  const handleFinishRide = () => {
+  const handlePassengerBoarded = () => {
+    if (!activeRide) return;
+    const now = new Date().toISOString();
+    const lat = lastCoord?.lat || -22.1225;
+    const lng = lastCoord?.lng || -51.3883;
+
+    const updatedRide = {
+      ...activeRide,
+      pickup_timestamp: now,
+      pickup_lat: lat,
+      pickup_lng: lng
+    };
+
+    setActiveRide(updatedRide);
+    localStorage.setItem('driverdash_active_ride_calib', JSON.stringify(updatedRide));
+
+    addAiLog('[RideAI] Passageiro embarcou (Coordenadas e timestamp registrados)');
+
+    if (addSmartAlert) {
+      addSmartAlert({
+        title: 'Passageiro Embarcou! 👥',
+        description: 'Embarque registrado com sucesso. Tempo com passageiro sendo cronometrado.',
+        type: 'profit',
+        severity: 'low'
+      });
+    }
+  };
+
+  const handleFinishRide = async () => {
     if (!activeSession) return;
+
     setReceivedValue("15.00");
     setPlatform("Uber");
     setTipValue("0.00");
     setTollValue("0.00");
     setObservations("");
-    setOriginNeighborhood("");
-    setDestNeighborhood("");
-    setOriginCity("São Paulo");
-    setDestCity("São Paulo");
-    setSelectedClimate("Limpo");
-    setSelectedSpecialEvent("Nenhum");
+    setGeocodeError(null);
+    setSaveError(null);
+    setShowManualCorrection(false);
+
+    const lat = lastCoord?.lat || -22.1225;
+    const lng = lastCoord?.lng || -51.3883;
+    const timestamp = Date.now();
+
+    if (!lastCoord && addSmartAlert) {
+      addSmartAlert({
+        title: 'Atenção 📡',
+        description: 'Ative a localização para calibração precisa',
+        type: 'fuel',
+        severity: 'high'
+      });
+    }
+
+    const localGeocode = getNearestNeighborhoodLocal(lat, lng);
+
+    const updatedRide = {
+      ...activeRide,
+      endLocation: {
+        lat,
+        lng,
+        timestamp
+      },
+      destination_address: `${localGeocode.neighborhood}, ${localGeocode.city}`,
+      destination_neighborhood: localGeocode.neighborhood,
+      destination_city: localGeocode.city
+    };
+
+    setActiveRide(updatedRide);
+    localStorage.setItem('driverdash_active_ride_calib', JSON.stringify(updatedRide));
+
+    setDestAddress(updatedRide.destination_address);
+    setDestNeighborhood(updatedRide.destination_neighborhood);
+    setDestCity(updatedRide.destination_city);
+
+    setPickupAddress(activeRide?.pickup_address || `${localGeocode.neighborhood}, ${localGeocode.city}`);
+    setPickupNeighborhood(activeRide?.pickup_neighborhood || localGeocode.neighborhood);
+    setPickupCity(activeRide?.pickup_city || localGeocode.city);
+
     setFinishModalOpen(true);
+    setIsResolvingGeocode(true);
+
+    try {
+      const resolved = await fetchAddressForCoordinates(lat, lng);
+      setDestAddress(resolved.address);
+      setDestNeighborhood(resolved.neighborhood);
+      setDestCity(resolved.city);
+      
+      setActiveRide((prev: any) => {
+        if (!prev) return prev;
+        const updated = {
+          ...prev,
+          destination_address: resolved.address,
+          destination_neighborhood: resolved.neighborhood,
+          destination_city: resolved.city
+        };
+        localStorage.setItem('driverdash_active_ride_calib', JSON.stringify(updated));
+        return updated;
+      });
+    } catch (err) {
+      console.error('[GEOCODE] Error geocoding end location:', err);
+      setGeocodeError('Não foi possível obter endereço real via GPS. Usando fallback local.');
+    } finally {
+      setIsResolvingGeocode(false);
+    }
   };
 
   const handleConfirmFinishRide = async () => {
     if (!activeSession) return;
+    setSaveError(null);
+    setIsSavingCalibration(true);
+
+    // [CALIBRATION_SAVE_START] Log indicating start of calibration save flow
+    console.log('[CALIBRATION_SAVE_START] Iniciando salvamento de calibração...');
 
     try {
       localStorage.setItem(`driverdash_ride_manual_override_${activeSession.id}`, 'true');
       setManualOverride(true);
-      addAiLog('[RideAI] manual override: Finalizando e calibrando corrida');
+      addAiLog('[CALIBRATION_SAVE] Iniciando salvamento manual');
 
-      const endTime = new Date().toISOString();
-      const startTime = activeRide ? activeRide.startTime : new Date().toISOString();
-      const startMs = new Date(startTime).getTime();
-      const endMs = new Date(endTime).getTime();
-      const durationSeconds = Math.max(1, Math.round((endMs - startMs) / 1000));
-
-      const startKm = activeRide ? activeRide.start_odometer : totalDistanceKm;
-      const endKm = totalDistanceKm;
-      const distanceTravelled = Math.max(0.1, Number((endKm - startKm).toFixed(2)));
-
-      const valRecebido = parseFloat(receivedValue) || 15.00;
-      const gorjeta = parseFloat(tipValue) || 0;
-      const pedagio = parseFloat(tollValue) || 0;
-
-      const totalGross = valRecebido + gorjeta;
-      const rPerKm = distanceTravelled > 0 ? (totalGross / distanceTravelled) : 0;
-      const rPerHour = durationSeconds > 0 ? (totalGross / (durationSeconds / 3600)) : 0;
-
-      const costPerKm = calculateCostPerKmEstimate(vehicle, vehicleCostSettings) || 0.45;
-      const operationalCost = (distanceTravelled * costPerKm) + pedagio;
-      const netProfit = totalGross - operationalCost;
-
-      // Fuel spent calculation
-      let energySpentStr = "";
-      if (vehicle) {
-        const ft = vehicle.fuel_type?.toLowerCase() || '';
-        const isElectric = ft === 'electric' || ft === 'elétrico' || ft === 'eletrico';
-        if (isElectric) {
-          const cons100 = vehicle.electric_consumption_kwh_100km || 15;
-          const kwh = (cons100 / 100) * distanceTravelled;
-          energySpentStr = `${kwh.toFixed(2)} kWh`;
-        } else {
-          const kml = vehicle.km_per_liter || 10;
-          const liters = kml > 0 ? distanceTravelled / kml : 0;
-          energySpentStr = `${liters.toFixed(2)} L`;
-        }
-      } else {
-        energySpentStr = `${(distanceTravelled / 10).toFixed(2)} L`;
+      // 1. Validar dados obrigatórios:
+      // - valor recebido
+      const valRecebido = parseFloat(receivedValue);
+      if (isNaN(valRecebido) || valRecebido < 0) {
+        throw new Error('O valor recebido é obrigatório e deve ser maior ou igual a zero.');
       }
 
-      // Average speed (km/h)
-      const avgSpeedKmh = Math.min(120, Math.round(distanceTravelled / (durationSeconds / 3600))) || 35;
+      // - origem GPS
+      const startLat = activeRide?.pickup_lat || activeRide?.startLocation?.lat;
+      const startLng = activeRide?.pickup_lng || activeRide?.startLocation?.lng;
+      if (!startLat || !startLng || isNaN(startLat) || isNaN(startLng) || (startLat === 0 && startLng === 0)) {
+        throw new Error('A origem GPS é obrigatória e deve ser válida.');
+      }
+      const start_gps = { lat: startLat, lng: startLng };
 
-      const pickupLat = activeRide?.pickup?.lat || lastCoord?.lat || -22.122;
-      const pickupLng = activeRide?.pickup?.lng || lastCoord?.lng || -51.389;
-      const dropoffLat = lastCoord?.lat || pickupLat;
-      const dropoffLng = lastCoord?.lng || pickupLng;
+      // - destino GPS
+      const endLat = lastCoord?.lat || activeRide?.endLocation?.lat || -22.1225;
+      const endLng = lastCoord?.lng || activeRide?.endLocation?.lng || -51.3883;
+      if (!endLat || !endLng || isNaN(endLat) || isNaN(endLng) || (endLat === 0 && endLng === 0)) {
+        throw new Error('O destino GPS é obrigatório e deve ser válido.');
+      }
+      const end_gps = { lat: endLat, lng: endLng };
 
-      const finishedRide = {
-        id: activeRide?.id || 'ride_' + Date.now(),
-        startTime,
-        endTime,
-        duration: durationSeconds,
-        distance: distanceTravelled,
-        status: 'finished',
-        receivedValue: valRecebido,
-        platform,
-        tipValue: gorjeta,
-        tollValue: pedagio,
-        observations,
-        energySpent: energySpentStr,
-        costPerKm,
-        operationalCost,
-        netProfit,
-        rPerKm,
-        rPerHour,
-        avgSpeedKmh,
-        
-        // Calibration data
-        hora: new Date(endTime).toLocaleTimeString('pt-BR', { hour: '2-digit', minute: '2-digit' }),
-        diaSemana: getPortugueseDayName(new Date(endTime)),
-        bairroOrigem: originNeighborhood || "Centro",
-        bairroDestino: destNeighborhood || "Vila Madalena",
-        cidadeOrigem: originCity || "São Paulo",
-        cidadeDestino: destCity || "São Paulo",
-        gpsMedio: {
-          lat: Number(((pickupLat + dropoffLat) / 2).toFixed(6)),
-          lng: Number(((pickupLng + dropoffLng) / 2).toFixed(6))
+      // - distância
+      const startOdo = activeRide ? activeRide.start_odometer : totalDistanceKm;
+      const endOdo = totalDistanceKm;
+      const odoDistance = Math.max(0, endOdo - startOdo);
+      const haversineDist = calculateHaversineDistance(startLat, startLng, endLat, endLng);
+      const distance = odoDistance > 0 ? odoDistance : haversineDist;
+      if (isNaN(distance) || distance <= 0) {
+        throw new Error('A distância percorrida é obrigatória e deve ser maior que zero.');
+      }
+
+      // - tempo de corrida e cronometragem
+      const endTime = new Date().toISOString();
+      const startTime = activeRide?.startTime || new Date().toISOString();
+      const startMs = activeRide?.startLocation?.timestamp || new Date(startTime).getTime();
+      const endMs = Date.now();
+      const duration = Math.max(1, Math.round((endMs - startMs) / 1000));
+      if (isNaN(duration) || duration <= 0) {
+        throw new Error('O tempo de corrida é obrigatório e deve ser maior que zero.');
+      }
+
+      // 2. Criar objeto ride_log completo:
+      const costPerKm = calculateCostPerKmEstimate(vehicle, vehicleCostSettings) || 0.45;
+      const vehicle_cost = Number((distance * costPerKm).toFixed(2));
+      const profit = Number((valRecebido - vehicle_cost).toFixed(2));
+
+      // idle_time (Minutos parado = totalIdleTime / 60)
+      let totalIdleSec = activeRide?.totalIdleTime || 0;
+      if (activeRide?.idleStartTimestamp) {
+        totalIdleSec += (Date.now() - activeRide.idleStartTimestamp) / 1000;
+      }
+      const idle_time = Number((totalIdleSec / 60).toFixed(2));
+
+      // tempo em movimento e tempo até o embarque
+      const movingTimeSec = Math.max(0, duration - totalIdleSec);
+      const pickupTimeMs = activeRide?.pickup_timestamp ? new Date(activeRide.pickup_timestamp).getTime() : startMs;
+      const tempo_ate_embarque = Math.max(0, Math.round((pickupTimeMs - startMs) / 1000));
+
+      // vehicle consumption
+      const consumptionObj = calculateVehicleConsumption(distance, vehicle);
+
+      // speed metrics
+      const pts = activeRide?.rideTrackPoints || [];
+      let maxSpeed = 0;
+      let sumSpeed = 0;
+      let countSpeed = 0;
+      pts.forEach((p: any) => {
+        if (typeof p.speed === 'number' && p.speed >= 0) {
+          if (p.speed > maxSpeed) maxSpeed = p.speed;
+          sumSpeed += p.speed;
+          countSpeed++;
+        }
+      });
+      const finalMaxSpeedKmh = Number((maxSpeed * 3.6).toFixed(1));
+      const finalAvgSpeedKmh = countSpeed > 0 ? Number(((sumSpeed / countSpeed) * 3.6).toFixed(1)) : 35.0;
+
+      const ride_log = {
+        ride_id: activeRide?.id || 'ride_' + Date.now(),
+        start_gps,
+        end_gps,
+        pickup_neighborhood: pickupNeighborhood || activeRide?.pickup_neighborhood || 'Centro',
+        destination_neighborhood: destNeighborhood || 'Centro',
+        fare_value: valRecebido,
+        distance: Number(distance.toFixed(2)),
+        duration,
+        idle_time,
+        vehicle_cost,
+        profit,
+        timestamp: startTime,
+        // Detailed calibration metrics (Requirement 6)
+        origem: start_gps,
+        embarque: {
+          timestamp: activeRide?.pickup_timestamp || startTime,
+          lat: startLat,
+          lng: startLng
         },
-        clima: selectedClimate || "Limpo",
-        evento: selectedSpecialEvent || "Nenhum"
+        desembarque: {
+          timestamp: endTime,
+          lat: endLat,
+          lng: endLng
+        },
+        rota_completa: pts,
+        distancia_real: Number(distance.toFixed(2)),
+        velocidade_media: finalAvgSpeedKmh,
+        velocidade_maxima: finalMaxSpeedKmh,
+        tempo_parado: totalIdleSec,
+        lucro: profit,
+        custo: vehicle_cost,
+        consumo: consumptionObj
       };
 
-      // save to localStorage ride_logs
-      saveRideToAnalytics(finishedRide);
-      
-      // Update local state list
-      const updatedLogsStr = localStorage.getItem('ride_logs');
-      const updatedLogs = updatedLogsStr ? JSON.parse(updatedLogsStr) : [];
-      setRideLogs(updatedLogs);
+      const rawRide: Partial<CalibratedRide> = {
+        id: activeRide?.id || 'ride_' + Date.now(),
+        journey_id: activeSession.id,
+        driver_id: profile?.id || 'driver_unknown',
+        status: 'finished',
 
-      // console log as requested
-      console.log('[AI] Dados salvos para calibração', finishedRide);
+        // Addresses & Locations
+        bairroOrigem: ride_log.pickup_neighborhood,
+        bairroDestino: ride_log.destination_neighborhood,
+        cidadeOrigem: pickupCity || 'Presidente Prudente',
+        cidadeDestino: destCity || 'Presidente Prudente',
+        pickup_address: pickupAddress || '',
+        destination_address: destAddress || '',
 
-      // clear activeRide
+        // Time constraints
+        startTime,
+        endTime,
+        pickup_timestamp: activeRide?.pickup_timestamp || startTime,
+        pickup_lat: startLat,
+        pickup_lng: startLng,
+        dropoff_timestamp: endTime,
+        dropoff_lat: endLat,
+        dropoff_lng: endLng,
+
+        // Financials
+        platform,
+        receivedValue: valRecebido,
+        tipValue: parseFloat(tipValue) || 0,
+        tollValue: parseFloat(tollValue) || 0,
+        clima: selectedClimate || "Limpo",
+        evento: selectedSpecialEvent || "Nenhum",
+        observations,
+
+        // Coordinates & Odometer
+        rideTrackPoints: pts,
+        start_odometer: startOdo,
+        end_odometer: endOdo,
+
+        // Embed the actual ride_log object
+        ...ride_log,
+        ride_log
+      } as any;
+
+      // Structured logging (Requirement 4)
+      console.log('[STRUCTURED_LOG] GPS_CAPTURED:', { start_gps, end_gps });
+      console.log('[STRUCTURED_LOG] BAIRRO_IDENTIFICADO:', { origem: ride_log.pickup_neighborhood, destino: ride_log.destination_neighborhood });
+      console.log('[STRUCTURED_LOG] CIDADE_IDENTIFICADA:', { origem: rawRide.cidadeOrigem, destino: rawRide.cidadeDestino });
+      console.log('[STRUCTURED_LOG] DISTANCIA_CALCULADA:', { odoDistance, haversineDist, distance });
+      console.log('[STRUCTURED_LOG] TEMPO_PARADO:', totalIdleSec);
+      console.log('[STRUCTURED_LOG] TEMPO_EM_MOVIMENTO:', movingTimeSec);
+      console.log('[STRUCTURED_LOG] TEMPO_ATE_EMBARQUE:', tempo_ate_embarque);
+      console.log('[STRUCTURED_LOG] TEMPO_DA_VIAGEM:', duration);
+      console.log('[STRUCTURED_LOG] RESULTADO_REVERSE_GEOCODING:', { pickupAddress, destAddress });
+
+      addAiLog(`[GPS_CAPTURED] Lat: ${startLat.toFixed(5)}, Lng: ${startLng.toFixed(5)} -> Lat: ${endLat.toFixed(5)}, Lng: ${endLng.toFixed(5)}`);
+      addAiLog(`[BAIRRO_IDENTIFICADO] Origem: ${ride_log.pickup_neighborhood} | Destino: ${ride_log.destination_neighborhood}`);
+      addAiLog(`[CIDADE_IDENTIFICADA] Origem: ${rawRide.cidadeOrigem} | Destino: ${rawRide.cidadeDestino}`);
+      addAiLog(`[DISTANCIA_CALCULADA] Haversine: ${haversineDist.toFixed(2)} km | Odo: ${odoDistance.toFixed(2)} km | Final: ${distance.toFixed(2)} km`);
+      addAiLog(`[TEMPO_PARADO] ${idle_time} min`);
+      addAiLog(`[TEMPO_EM_MOVIMENTO] ${(movingTimeSec / 60).toFixed(2)} min`);
+      addAiLog(`[TEMPO_ATE_EMBARQUE] ${(tempo_ate_embarque / 60).toFixed(2)} min`);
+      addAiLog(`[TEMPO_DA_VIAGEM] ${(duration / 60).toFixed(2)} min`);
+      addAiLog(`[RESULTADO_REVERSE_GEOCODING] Pickup: ${pickupAddress} | Dropoff: ${destAddress}`);
+
+      console.log('[CALIBRATION_SAVE] Chamando persistCalibratedRide...', rawRide);
+      const res = await persistCalibratedRide(rawRide);
+
+      console.log('[STRUCTURED_LOG] RESULTADO_SALVAMENTO:', res);
+      addAiLog(`[RESULTADO_SALVAMENTO] Sucesso: ${res.success}. Pendente de Sincronização: ${!!(res.ride as any)?.pending_sync}`);
+
+      if (!res.success) {
+        throw new Error(res.error || 'Erro na validação da qualidade dos dados.');
+      }
+
+      // STRICT PERSISTENCE VERIFICATION (Requirement 1)
+      const verifiedLogsStr = localStorage.getItem('ride_logs');
+      const verifiedLogs = verifiedLogsStr ? JSON.parse(verifiedLogsStr) : [];
+      const isSavedLocal = verifiedLogs.some((l: any) => l.id === rawRide.id);
+      if (!isSavedLocal) {
+        throw new Error('Confirmação de salvamento falhou: O registro não foi encontrado no localStorage após a persistência.');
+      }
+      console.log('[CALIBRATION_SAVE_SUCCESS] Confirmação local bem-sucedida!');
+
+      // Add earning to standard finance flow so upper cards update immediately (Requirement 8)
+      try {
+        const activeSessionDateStr = new Date(activeSession.start_time).toISOString().substring(0, 10);
+        await addEarning({
+          date: activeSessionDateStr,
+          platform: platform as any,
+          gross_amount: valRecebido,
+          total_km: Number(distance.toFixed(2)),
+          passenger_km: Number(distance.toFixed(2)),
+          empty_km: 0,
+          online_minutes: Math.ceil(duration / 60),
+          waiting_minutes: Math.ceil(idle_time),
+          rides_count: 1,
+          notes: `Corrida calibrada salva - ID: ${rawRide.id}`,
+          entry_mode: 'single_ride' as any,
+          shift_period: 'morning' as any
+        });
+        console.log('[FINANCE_SYNC] Ganhos e custos sincronizados para os cards superiores.');
+      } catch (earnErr) {
+        console.error('[FINANCE_SYNC_ERROR] Falha ao adicionar ganho nas finanças:', earnErr);
+      }
+
+      setToast({
+        show: true,
+        message: 'Corrida salva para calibração da IA.',
+        type: 'success'
+      });
+
+      // Update local logs state immediately using verified logs
+      setRideLogs(verifiedLogs);
+
       setActiveRide(null);
       localStorage.removeItem('driverdash_active_ride_calib');
 
-      // calls backend finishRide helper if needed
-      await finishRide(activeSession.id, dropoffLat, dropoffLng);
+      // Stop GPS tracking since ride has finished
+      window.dispatchEvent(new Event('driverdash_active_ride_change'));
 
-      // Update event in local state if exists
+      await finishRide(activeSession.id, res.ride.dropoff_lat || endLat, res.ride.dropoff_lng || endLng);
+
       localStorage.setItem(`driverdash_ride_active_${activeSession.id}`, 'false');
       setIsRideActive(false);
-
       setFinishModalOpen(false);
 
       if (addSmartAlert) {
         addSmartAlert({
           title: 'Corrida Calibrada com Sucesso! 🎯',
-          description: `R$ ${valRecebido.toFixed(2)} via ${platform} salvos nos logs de aprendizado da IA. Lucro Líquido: R$ ${netProfit.toFixed(2)}.`,
+          description: `R$ ${valRecebido.toFixed(2)} salvos. Distância real: ${res.ride.distancia_hodometro || Number(distance.toFixed(2))} km (${pts.length} pontos GPS).`,
           type: 'profit',
           severity: 'low'
         });
       }
 
       await fetchStats();
-    } catch (err) {
-      console.error("Failed to finish ride and calibrate:", err);
+    } catch (err: any) {
+      // [CALIBRATION_SAVE_ERROR] Log indicating error in calibration save flow
+      console.error("[CALIBRATION_SAVE_ERROR] Erro ao salvar calibração:", err);
+      setSaveError(err?.message || 'Falha ao salvar dados de calibração. Verifique os campos.');
+    } finally {
+      setIsSavingCalibration(false);
     }
   };
 
@@ -564,80 +1216,93 @@ export const JornadaPage: React.FC = () => {
     if (!activeSession) return;
     setCancelReason("Passageiro");
     setCancelObs("");
+    setSaveError(null);
     setCancelModalOpen(true);
   };
 
   const handleConfirmCancelRide = async () => {
     if (!activeSession) return;
+    setSaveError(null);
 
     try {
       localStorage.setItem(`driverdash_ride_manual_override_${activeSession.id}`, 'true');
       setManualOverride(true);
-      addAiLog('[RideAI] manual override: Cancelando corrida ativa');
+      addAiLog('[CALIBRATION_CANCEL] Cancelando corrida ativa');
 
       const endTime = new Date().toISOString();
-      const startTime = activeRide ? activeRide.startTime : new Date().toISOString();
-      const startMs = new Date(startTime).getTime();
-      const endMs = new Date(endTime).getTime();
-      const durationSeconds = Math.max(1, Math.round((endMs - startMs) / 1000));
+      const startTime = activeRide?.startTime || new Date().toISOString();
+      const startMs = activeRide?.startLocation?.timestamp || new Date(startTime).getTime();
+      const endMs = Date.now();
 
       const startKm = activeRide ? activeRide.start_odometer : totalDistanceKm;
       const endKm = totalDistanceKm;
-      const distanceTravelled = Math.max(0.0, Number((endKm - startKm).toFixed(2)));
+      const pts = activeRide?.rideTrackPoints || [];
 
-      const cancelledRide = {
+      const rawRide: Partial<CalibratedRide> = {
         id: activeRide?.id || 'ride_' + Date.now(),
+        journey_id: activeSession.id,
+        driver_id: profile?.id || 'driver_unknown',
+        status: 'cancelled',
+
+        bairroOrigem: pickupNeighborhood || '',
+        bairroDestino: destNeighborhood || '',
+        cidadeOrigem: pickupCity || 'Presidente Prudente',
+        cidadeDestino: destCity || 'Presidente Prudente',
+        pickup_address: pickupAddress || '',
+        destination_address: destAddress || '',
+
         startTime,
         endTime,
-        duration: durationSeconds,
-        distance: distanceTravelled,
-        status: 'cancelled',
-        cancelReason,
-        cancelObs,
-        
-        // Calibration data for cancellation
-        hora: new Date(endTime).toLocaleTimeString('pt-BR', { hour: '2-digit', minute: '2-digit' }),
-        diaSemana: getPortugueseDayName(new Date(endTime)),
-        bairroOrigem: originNeighborhood || "Centro",
-        bairroDestino: destNeighborhood || "Vila Madalena",
-        cidadeOrigem: originCity || "São Paulo",
-        cidadeDestino: destCity || "São Paulo"
+        platform: activeRide?.platform || "Uber",
+        receivedValue: 0,
+        tipValue: 0,
+        tollValue: 0,
+        clima: selectedClimate || "Limpo",
+        evento: selectedSpecialEvent || "Nenhum",
+        observations: cancelObs || `Cancelamento: ${cancelReason}`,
+
+        rideTrackPoints: pts,
+        start_odometer: startKm,
+        end_odometer: endKm
       };
 
-      // save to localStorage ride_logs
-      saveRideToAnalytics(cancelledRide);
+      const res = await persistCalibratedRide(rawRide);
+      if (!res.success) {
+        throw new Error(res.error || 'Erro na validação do cancelamento.');
+      }
 
-      // Update local state list
+      setToast({
+        show: true,
+        message: 'Corrida salva para calibração da IA.',
+        type: 'success'
+      });
+
       const updatedLogsStr = localStorage.getItem('ride_logs');
       const updatedLogs = updatedLogsStr ? JSON.parse(updatedLogsStr) : [];
       setRideLogs(updatedLogs);
 
-      console.log('[AI] Dados de cancelamento salvos para calibração', cancelledRide);
-
-      // clear activeRide
       setActiveRide(null);
       localStorage.removeItem('driverdash_active_ride_calib');
 
-      // trigger cancel backend finishRide or similar
-      await finishRide(activeSession.id, lastCoord?.lat, lastCoord?.lng);
+      await finishRide(activeSession.id, lastCoord?.lat || -22.1225, lastCoord?.lng || -51.3883);
 
       localStorage.setItem(`driverdash_ride_active_${activeSession.id}`, 'false');
       setIsRideActive(false);
-
       setCancelModalOpen(false);
 
       if (addSmartAlert) {
         addSmartAlert({
           title: 'Corrida Cancelada ⚠️',
-          description: `Cancelamento registrado para calibração de IA. Motivo: ${cancelReason}.`,
+          description: `Cancelamento registrado para calibração. Motivo: ${cancelReason}.`,
           type: 'fuel',
           severity: 'low'
         });
       }
 
       await fetchStats();
-    } catch (err) {
-      console.error("Failed to cancel ride:", err);
+    } catch (err: any) {
+      console.error("[CALIBRATION_CANCEL] Erro salvando cancelamento:", err);
+      setSaveError(err?.message || 'Falha ao salvar dados de calibração.');
     }
   };
 
@@ -674,6 +1339,75 @@ export const JornadaPage: React.FC = () => {
       await fetchStats();
     } catch (err) {
       console.error('[RideAI] Error handling feedback:', err);
+    }
+  };
+
+  const handleEditRide = (ride: any) => {
+    setEditingRide(ride);
+    setReceivedValue(ride.receivedValue?.toString() || "0.00");
+    setPlatform(ride.platform || "Uber");
+    setTipValue(ride.tipValue?.toString() || "0.00");
+    setTollValue(ride.tollValue?.toString() || "0.00");
+    setObservations(ride.observations || "");
+    setPickupNeighborhood(ride.bairroOrigem || "");
+    setDestNeighborhood(ride.bairroDestino || "");
+    setPickupCity(ride.cidadeOrigem || "Presidente Prudente");
+    setDestCity(ride.cidadeDestino || "Presidente Prudente");
+    setSelectedClimate(ride.clima || "Limpo");
+    setSelectedSpecialEvent(ride.evento || "Nenhum");
+    setEditModalOpen(true);
+    setSaveError(null);
+  };
+
+  const handleConfirmEditRide = async () => {
+    if (!editingRide) return;
+    setSaveError(null);
+    try {
+      const valRecebido = parseFloat(receivedValue);
+      if (isNaN(valRecebido) || valRecebido < 0) {
+        throw new Error('O valor recebido não pode ser negativo.');
+      }
+      const gorjeta = parseFloat(tipValue) || 0;
+      const pedagio = parseFloat(tollValue) || 0;
+
+      const updatedRide: Partial<CalibratedRide> = {
+        ...editingRide,
+        receivedValue: valRecebido,
+        platform,
+        tipValue: gorjeta,
+        tollValue: pedagio,
+        observations,
+        bairroOrigem: pickupNeighborhood,
+        bairroDestino: destNeighborhood,
+        cidadeOrigem: pickupCity,
+        cidadeDestino: destCity,
+        clima: selectedClimate,
+        evento: selectedSpecialEvent
+      };
+
+      console.log('[CALIBRATION_EDIT] Salvando edição de corrida...', updatedRide);
+
+      const res = await persistCalibratedRide(updatedRide);
+      if (!res.success) {
+        throw new Error(res.error || 'Erro na validação do salvamento.');
+      }
+
+      setToast({
+        show: true,
+        message: 'Corrida salva para calibração da IA.',
+        type: 'success'
+      });
+
+      const updatedLogsStr = localStorage.getItem('ride_logs');
+      const updatedLogs = updatedLogsStr ? JSON.parse(updatedLogsStr) : [];
+      setRideLogs(updatedLogs);
+
+      setEditModalOpen(false);
+      setEditingRide(null);
+      await fetchStats();
+    } catch (err: any) {
+      console.error("[CALIBRATION_EDIT] Erro ao editar:", err);
+      setSaveError(err.message || 'Falha ao editar a corrida.');
     }
   };
 
@@ -876,6 +1610,16 @@ export const JornadaPage: React.FC = () => {
 
   // Convert stopped duration ms to readable format (Xh Ym)
   const formattedStoppedTime = useMemo(() => {
+    if (activeRide) {
+      let totalSeconds = activeRide.totalIdleTime || 0;
+      if (activeRide.idleStartTimestamp) {
+        totalSeconds += (Date.now() - activeRide.idleStartTimestamp) / 1000;
+      }
+      const mins = Math.floor(totalSeconds / 60);
+      const secs = Math.round(totalSeconds % 60);
+      return `${mins} min ${secs}s`;
+    }
+
     const mins = Math.floor(totalStoppedDurationMs / (60 * 1000));
     const hrs = Math.floor(mins / 60);
     const remMins = mins % 60;
@@ -884,7 +1628,7 @@ export const JornadaPage: React.FC = () => {
       return `${hrs}h ${remMins}min`;
     }
     return `${mins} min`;
-  }, [totalStoppedDurationMs]);
+  }, [totalStoppedDurationMs, activeRide]);
 
   const handleStartTracking = async () => {
     await startSession();
@@ -1211,20 +1955,36 @@ export const JornadaPage: React.FC = () => {
                           <Play className="w-4 h-4 fill-current" /> Aceitar Corrida
                         </button>
                       ) : (
-                        <>
-                          <button
-                            onClick={handleFinishRide}
-                            className="flex-1 py-4 rounded-2xl font-semibold bg-gradient-to-r from-amber-600 to-orange-600 hover:from-amber-500 hover:to-orange-500 text-white shadow-[0_4px_15px_rgba(245,158,11,0.25)] hover:shadow-[0_4px_25px_rgba(245,158,11,0.35)] transition-all cursor-pointer flex items-center justify-center gap-2 select-none"
-                          >
-                            <Square className="w-4 h-4 fill-current" /> Finalizar Corrida
-                          </button>
-                          <button
-                            onClick={handleCancelRide}
-                            className="flex-1 py-4 rounded-2xl font-semibold bg-gradient-to-r from-rose-700 to-red-600 hover:from-rose-600 hover:to-red-500 text-white shadow-[0_4px_15px_rgba(225,29,72,0.25)] hover:shadow-[0_4px_25px_rgba(225,29,72,0.35)] transition-all cursor-pointer flex items-center justify-center gap-2 select-none"
-                          >
-                            <X className="w-4 h-4" /> Cancelar Corrida
-                          </button>
-                        </>
+                        <div className="flex flex-col gap-3 w-full">
+                          {!activeRide.pickup_timestamp ? (
+                            <button
+                              onClick={handlePassengerBoarded}
+                              className="w-full py-4 rounded-2xl font-bold bg-gradient-to-r from-indigo-600 to-purple-600 hover:from-indigo-500 hover:to-purple-500 text-white shadow-[0_4px_15px_rgba(99,102,241,0.25)] hover:shadow-[0_4px_25px_rgba(99,102,241,0.35)] transition-all cursor-pointer flex items-center justify-center gap-2 select-none"
+                            >
+                              <Check className="w-4 h-4" /> Passageiro Embarcou
+                            </button>
+                          ) : (
+                            <div className="w-full p-3 bg-purple-950/25 border border-purple-900/35 rounded-xl flex items-center justify-center gap-2 text-purple-300 font-sans text-[11px] select-none">
+                              <Check className="w-4 h-4 text-emerald-400" />
+                              <span>Passageiro a bordo desde as <strong>{new Date(activeRide.pickup_timestamp).toLocaleTimeString('pt-BR', { hour: '2-digit', minute: '2-digit' })}</strong></span>
+                            </div>
+                          )}
+
+                          <div className="flex flex-col sm:flex-row gap-3 w-full">
+                            <button
+                              onClick={handleFinishRide}
+                              className="flex-1 py-4 rounded-2xl font-semibold bg-gradient-to-r from-amber-600 to-orange-600 hover:from-amber-500 hover:to-orange-500 text-white shadow-[0_4px_15px_rgba(245,158,11,0.25)] hover:shadow-[0_4px_25px_rgba(245,158,11,0.35)] transition-all cursor-pointer flex items-center justify-center gap-2 select-none"
+                            >
+                              <Square className="w-4 h-4 fill-current" /> Finalizar Corrida
+                            </button>
+                            <button
+                              onClick={handleCancelRide}
+                              className="flex-1 py-4 rounded-2xl font-semibold bg-gradient-to-r from-rose-700 to-red-600 hover:from-rose-600 hover:to-red-500 text-white shadow-[0_4px_15px_rgba(225,29,72,0.25)] hover:shadow-[0_4px_25px_rgba(225,29,72,0.35)] transition-all cursor-pointer flex items-center justify-center gap-2 select-none"
+                            >
+                              <X className="w-4 h-4" /> Cancelar Corrida
+                            </button>
+                          </div>
+                        </div>
                       )}
                     </div>
 
@@ -1497,6 +2257,124 @@ export const JornadaPage: React.FC = () => {
             )}
           </div>
 
+          {/* PAINEL DE ANALYTICS DA CALIBRAÇÃO DA IA */}
+          <div className="p-5 rounded-2xl bg-[#0d0926]/40 border border-purple-950/25 space-y-4 text-left">
+            <h3 className="text-xs font-bold uppercase font-mono tracking-wider text-purple-400 flex items-center justify-between select-none">
+              Métricas e Estatísticas da IA <span className="text-[10px] text-slate-500 font-normal lowercase font-sans">Padrões calibrados</span>
+            </h3>
+
+            {rideLogs.length === 0 ? (
+              <div className="text-center py-4 text-xs text-slate-500 select-none">
+                Estatísticas serão geradas assim que houver corridas calibradas.
+              </div>
+            ) : (
+              <div className="space-y-4">
+                {/* Bento Grid Principal */}
+                <div className="grid grid-cols-2 md:grid-cols-3 gap-3">
+                  <div className="bg-[#050310]/80 p-3 rounded-xl border border-purple-950/10 space-y-1">
+                    <span className="text-[8px] text-slate-500 font-mono uppercase select-none block">Tempo Médio p/ Embarque</span>
+                    <span className="text-xs font-bold text-indigo-400 font-mono">
+                      {calibrationAnalytics.tempoMedioEmbarqueSec > 0 
+                        ? `${Math.floor(calibrationAnalytics.tempoMedioEmbarqueSec / 60)}m ${Math.round(calibrationAnalytics.tempoMedioEmbarqueSec % 60)}s`
+                        : "0s"}
+                    </span>
+                  </div>
+
+                  <div className="bg-[#050310]/80 p-3 rounded-xl border border-purple-950/10 space-y-1">
+                    <span className="text-[8px] text-slate-500 font-mono uppercase select-none block">Tempo Médio de Corrida</span>
+                    <span className="text-xs font-bold text-purple-400 font-mono">
+                      {calibrationAnalytics.tempoMedioCorridaSec > 0 
+                        ? `${Math.floor(calibrationAnalytics.tempoMedioCorridaSec / 60)} min`
+                        : "0 min"}
+                    </span>
+                  </div>
+
+                  <div className="bg-[#050310]/80 p-3 rounded-xl border border-purple-950/10 space-y-1">
+                    <span className="text-[8px] text-slate-500 font-mono uppercase select-none block">Média de KM por Corrida</span>
+                    <span className="text-xs font-bold text-[#e1e1e6] font-mono">
+                      {calibrationAnalytics.kmMedios.toFixed(1)} km
+                    </span>
+                  </div>
+
+                  <div className="bg-[#050310]/80 p-3 rounded-xl border border-purple-950/10 space-y-1">
+                    <span className="text-[8px] text-slate-500 font-mono uppercase select-none block">Lucro Médio Estimado</span>
+                    <span className="text-xs font-bold text-emerald-400 font-mono">
+                      R$ {calibrationAnalytics.lucroMedio.toFixed(2)}
+                    </span>
+                  </div>
+
+                  <div className="bg-[#050310]/80 p-3 rounded-xl border border-purple-950/10 space-y-1">
+                    <span className="text-[8px] text-slate-500 font-mono uppercase select-none block">R$/KM Geral</span>
+                    <span className="text-xs font-bold text-emerald-400 font-mono">
+                      R$ {calibrationAnalytics.rPerKm.toFixed(2)}/km
+                    </span>
+                  </div>
+
+                  <div className="bg-[#050310]/80 p-3 rounded-xl border border-purple-950/10 space-y-1">
+                    <span className="text-[8px] text-slate-500 font-mono uppercase select-none block">R$/Hora Geral</span>
+                    <span className="text-xs font-bold text-emerald-400 font-mono">
+                      R$ {calibrationAnalytics.rPerHour.toFixed(2)}/h
+                    </span>
+                  </div>
+                </div>
+
+                {/* Sub-grelha para Bairros e Plataformas mais frequentes */}
+                <div className="grid grid-cols-1 sm:grid-cols-3 gap-3 pt-1">
+                  {/* Bairros de Origem */}
+                  <div className="bg-[#050310]/50 p-3 rounded-xl border border-purple-950/10 text-[10.5px] space-y-2">
+                    <span className="text-[8.5px] text-purple-400 font-mono uppercase select-none font-bold block">📍 Origens mais frequentes</span>
+                    <div className="space-y-1 max-h-[72px] overflow-y-auto custom-scrollbar">
+                      {calibrationAnalytics.bairrosOrigemFreq.length === 0 ? (
+                        <p className="text-slate-600 font-sans italic text-[10px]">Nenhum bairro registrado</p>
+                      ) : (
+                        calibrationAnalytics.bairrosOrigemFreq.slice(0, 3).map((b, i) => (
+                          <div key={i} className="flex justify-between text-slate-300 font-sans">
+                            <span className="truncate pr-1">{b.name}</span>
+                            <span className="text-slate-500 font-mono font-bold">{b.count}x</span>
+                          </div>
+                        ))
+                      )}
+                    </div>
+                  </div>
+
+                  {/* Destinos */}
+                  <div className="bg-[#050310]/50 p-3 rounded-xl border border-purple-950/10 text-[10.5px] space-y-2">
+                    <span className="text-[8.5px] text-purple-400 font-mono uppercase select-none font-bold block">🎯 Destinos mais frequentes</span>
+                    <div className="space-y-1 max-h-[72px] overflow-y-auto custom-scrollbar">
+                      {calibrationAnalytics.bairrosDestinoFreq.length === 0 ? (
+                        <p className="text-slate-600 font-sans italic text-[10px]">Nenhum destino registrado</p>
+                      ) : (
+                        calibrationAnalytics.bairrosDestinoFreq.slice(0, 3).map((b, i) => (
+                          <div key={i} className="flex justify-between text-slate-300 font-sans">
+                            <span className="truncate pr-1">{b.name}</span>
+                            <span className="text-slate-500 font-mono font-bold">{b.count}x</span>
+                          </div>
+                        ))
+                      )}
+                    </div>
+                  </div>
+
+                  {/* Plataformas */}
+                  <div className="bg-[#050310]/50 p-3 rounded-xl border border-purple-950/10 text-[10.5px] space-y-2">
+                    <span className="text-[8.5px] text-purple-400 font-mono uppercase select-none font-bold block">📱 Plataformas preferidas</span>
+                    <div className="space-y-1 max-h-[72px] overflow-y-auto custom-scrollbar">
+                      {calibrationAnalytics.plataformasFreq.length === 0 ? (
+                        <p className="text-slate-600 font-sans italic text-[10px]">Nenhuma plataforma registrada</p>
+                      ) : (
+                        calibrationAnalytics.plataformasFreq.slice(0, 3).map((p, i) => (
+                          <div key={i} className="flex justify-between text-slate-300 font-sans">
+                            <span className="truncate pr-1">{p.name}</span>
+                            <span className="text-slate-500 font-mono font-bold">{p.count}x</span>
+                          </div>
+                        ))
+                      )}
+                    </div>
+                  </div>
+                </div>
+              </div>
+            )}
+          </div>
+
           {/* Histórico de Corridas de Calibração */}
           <div className="p-5 rounded-2xl bg-[#0d0926]/40 border border-purple-950/25 space-y-4 text-left">
             <h3 className="text-xs font-bold uppercase font-mono tracking-wider text-purple-400 flex items-center justify-between select-none">
@@ -1516,15 +2394,23 @@ export const JornadaPage: React.FC = () => {
                   return (
                     <div key={ride.id || idx} className="p-3 bg-[#070417] rounded-xl border border-purple-950/20 space-y-2 text-left">
                       <div className="flex items-center justify-between">
-                        <span className={`px-1.5 py-0.5 rounded text-[10px] font-bold ${
-                          isFinished 
-                            ? 'bg-emerald-950/40 text-emerald-400 border border-emerald-900/25' 
-                            : isCancelled 
-                              ? 'bg-rose-950/40 text-rose-400 border border-rose-900/25' 
-                              : 'bg-amber-950/40 text-amber-400 border border-amber-900/25 animate-pulse'
-                        }`}>
-                          {isFinished ? '🏁 Concluída' : isCancelled ? '❌ Cancelada' : '🟡 Em andamento'}
-                        </span>
+                        <div className="flex items-center gap-1.5">
+                          <span className={`px-1.5 py-0.5 rounded text-[10px] font-bold ${
+                            isFinished 
+                              ? 'bg-emerald-950/40 text-emerald-400 border border-emerald-900/25' 
+                              : isCancelled 
+                                ? 'bg-rose-950/40 text-rose-400 border border-rose-900/25' 
+                                : 'bg-amber-950/40 text-amber-400 border border-amber-900/25 animate-pulse'
+                          }`}>
+                            {isFinished ? '🏁 Concluída' : isCancelled ? '❌ Cancelada' : '🟡 Em andamento'}
+                          </span>
+
+                          {(ride.is_pending_calibration_details || !ride.bairroOrigem || !ride.bairroDestino) && (
+                            <span className="px-1.5 py-0.5 rounded text-[10px] font-bold bg-amber-500/10 text-amber-400 border border-amber-500/20 animate-pulse flex items-center gap-1">
+                              ⚠️ Pendente
+                            </span>
+                          )}
+                        </div>
                         
                         {ride.platform && (
                           <span className="text-[10px] bg-purple-950/40 border border-purple-900/20 text-purple-300 px-1.5 py-0.5 rounded font-sans">
@@ -1536,18 +2422,18 @@ export const JornadaPage: React.FC = () => {
                       <div className="grid grid-cols-2 gap-2 text-[10.5px] border-b border-purple-950/10 pb-2 text-slate-300">
                         <div>
                           <p className="text-slate-500 select-none text-[9px] uppercase font-sans">Origem</p>
-                          <p className="truncate font-semibold font-sans">{ride.bairroOrigem || 'Centro'}</p>
+                          <p className="truncate font-semibold font-sans">{ride.bairroOrigem || 'Ponto de GPS'}</p>
                         </div>
                         <div>
                           <p className="text-slate-500 select-none text-[9px] uppercase font-sans">Destino</p>
-                          <p className="truncate font-semibold font-sans">{ride.bairroDestino || 'Vila Madalena'}</p>
+                          <p className="truncate font-semibold font-sans">{ride.bairroDestino || 'Ponto de GPS'}</p>
                         </div>
                       </div>
 
                       <div className="grid grid-cols-3 gap-2 pt-1 font-mono">
                         <div>
                           <span className="text-[8.5px] text-slate-500 block uppercase select-none font-sans">KM</span>
-                          <span className="font-bold text-[#e1e1e6]">{ride.distance ? ride.distance.toFixed(1) : '0.0'} km</span>
+                          <span className="font-bold text-[#e1e1e6]">{ride.distancia_hodometro ? ride.distancia_hodometro.toFixed(1) : (ride.distance ? ride.distance.toFixed(1) : '0.0')} km</span>
                         </div>
                         <div>
                           <span className="text-[8.5px] text-slate-500 block uppercase select-none font-sans">Tempo</span>
@@ -1565,7 +2451,7 @@ export const JornadaPage: React.FC = () => {
                         <div className="grid grid-cols-2 gap-2 pt-1.5 border-t border-purple-950/10 text-[10px] text-slate-400">
                           <div>
                             <span className="text-[8px] text-slate-500 block uppercase select-none font-sans">Lucro Líquido</span>
-                            <span className="font-bold text-emerald-400 font-mono">R$ {(ride.netProfit || 0).toFixed(2)}</span>
+                            <span className="font-bold text-emerald-400 font-mono">R$ {(ride.netProfit || ride.profit || 0).toFixed(2)}</span>
                           </div>
                           <div>
                             <span className="text-[8px] text-slate-500 block uppercase select-none font-sans">Consumo</span>
@@ -1576,8 +2462,8 @@ export const JornadaPage: React.FC = () => {
 
                       {isFinished && (
                         <div className="grid grid-cols-2 gap-2 pt-1 text-[9.5px] text-slate-500 font-mono border-t border-purple-950/5">
-                          <div>R$/KM: <span className="text-emerald-400 font-bold">R$ {ride.rPerKm ? ride.rPerKm.toFixed(2) : '0.00'}</span></div>
-                          <div>R$/Hora: <span className="text-emerald-400 font-bold">R$ {ride.rPerHour ? ride.rPerHour.toFixed(2) : '0.00'}</span></div>
+                          <div>R$/KM: <span className="text-emerald-400 font-bold">R$ {(ride.rPerKm || ride.km_rate || 0).toFixed(2)}</span></div>
+                          <div>R$/Hora: <span className="text-emerald-400 font-bold">R$ {(ride.rPerHour || ride.hour_rate || 0).toFixed(2)}</span></div>
                         </div>
                       )}
 
@@ -1588,9 +2474,28 @@ export const JornadaPage: React.FC = () => {
                         </div>
                       )}
 
-                      <div className="flex justify-between items-center pt-1 text-[9px] text-slate-500 border-t border-purple-950/5 select-none font-sans">
-                        <span>{ride.diaSemana || 'Dia de semana'}</span>
-                        <span>{ride.hora || '00:00'}</span>
+                      <div className="flex justify-between items-center pt-2 text-[9px] text-slate-500 border-t border-purple-950/5 select-none font-sans gap-2">
+                        <div className="flex items-center gap-1">
+                          <span>{ride.diaSemana || 'Dia de semana'}</span>
+                          <span>•</span>
+                          <span>{ride.hora || '00:00'}</span>
+                        </div>
+                        <div className="flex items-center gap-1.5 shrink-0">
+                          {ride.rideTrackPoints && ride.rideTrackPoints.length > 0 && (
+                            <button
+                              onClick={() => setSelectedRouteRide(ride)}
+                              className="px-2 py-0.5 rounded bg-purple-950/40 hover:bg-purple-950/70 border border-purple-900/35 text-purple-300 font-bold select-none cursor-pointer transition-all hover:text-purple-100 flex items-center gap-1 text-[9px]"
+                            >
+                              <Navigation className="w-2.5 h-2.5" /> Ver rota
+                            </button>
+                          )}
+                          <button
+                            onClick={() => handleEditRide(ride)}
+                            className="px-2 py-0.5 rounded bg-slate-950/40 hover:bg-slate-950/70 border border-slate-900/35 text-slate-400 font-bold select-none cursor-pointer transition-all hover:text-slate-200 flex items-center gap-1 text-[9px]"
+                          >
+                            <Edit className="w-2.5 h-2.5" /> Editar
+                          </button>
+                        </div>
                       </div>
                     </div>
                   );
@@ -1686,84 +2591,144 @@ export const JornadaPage: React.FC = () => {
                   </div>
                 </div>
 
-                {/* Calibração Geográfica */}
-                <div className="p-3 bg-purple-950/10 rounded-2xl border border-purple-950/20 space-y-3">
-                  <h4 className="font-bold text-purple-400 uppercase tracking-wide text-[10px] select-none flex items-center gap-1.5">
-                    <Bot className="w-3.5 h-3.5" /> Calibração de Geolocalização (IA)
-                  </h4>
+                {/* Calibração Geográfica por GPS Real */}
+                <div className="p-4 bg-purple-950/15 rounded-2xl border border-purple-950/20 space-y-3">
+                  <div className="flex items-center justify-between">
+                    <h4 className="font-bold text-purple-400 uppercase tracking-wide text-[10px] select-none flex items-center gap-1.5">
+                      <Bot className="w-3.5 h-3.5 animate-pulse" /> Detecção Geográfica por GPS Real
+                    </h4>
+                    {isResolvingGeocode && (
+                      <span className="flex items-center gap-1 text-[9px] text-purple-300 font-mono">
+                        <span className="h-1.5 w-1.5 rounded-full bg-purple-400 animate-ping" />
+                        Detectando...
+                      </span>
+                    )}
+                  </div>
 
-                  <div className="grid grid-cols-2 gap-3">
-                    <div className="space-y-1">
-                      <label className="text-slate-400 font-bold block select-none">Bairro Origem*</label>
-                      <select 
-                        value={originNeighborhood}
-                        onChange={(e) => setOriginNeighborhood(e.target.value)}
-                        className="w-full p-2 bg-[#050310] rounded-lg border border-purple-950/20 text-[#e1e1e6] focus:border-purple-500 focus:outline-none"
-                      >
-                        <option value="">Selecione...</option>
-                        <option value="Centro">Centro</option>
-                        <option value="Parque do Povo">Parque do Povo</option>
-                        <option value="Prudenshopping">Prudenshopping</option>
-                        <option value="Jardim Bongiovani">Jardim Bongiovani</option>
-                        <option value="Jardim Aviação">Jardim Aviação</option>
-                        <option value="Vila Industrial">Vila Industrial</option>
-                        <option value="Cidade Universitária">Cidade Universitária</option>
-                        <option value="Ana Jacinta">Ana Jacinta</option>
-                        <option value="Brasil Novo">Brasil Novo</option>
-                        <option value="Cohab">Cohab</option>
-                        <option value="Montalvão">Montalvão</option>
-                        <option value="Álvares Machado">Álvares Machado</option>
-                        <option value="Regente Feijó">Regente Feijó</option>
-                      </select>
+                  <div className="space-y-2.5">
+                    <div className="flex gap-2.5 items-start p-2.5 bg-[#050310]/70 rounded-xl border border-purple-950/10">
+                      <div className="w-5 h-5 rounded-lg bg-emerald-950/40 flex items-center justify-center text-emerald-400 mt-0.5 shrink-0">
+                        <MapPin className="w-3 h-3" />
+                      </div>
+                      <div className="space-y-0.5 min-w-0">
+                        <span className="text-[8.5px] uppercase font-mono text-slate-500 font-bold tracking-wider">Origem do GPS</span>
+                        <p className="text-[11px] font-medium text-slate-200 leading-normal truncate">{pickupAddress || "Buscando coordenadas..."}</p>
+                        <p className="text-[9px] font-mono text-slate-400">{pickupNeighborhood}, {pickupCity}</p>
+                      </div>
                     </div>
 
-                    <div className="space-y-1">
-                      <label className="text-slate-400 font-bold block select-none">Bairro Destino*</label>
-                      <select 
-                        value={destNeighborhood}
-                        onChange={(e) => setDestNeighborhood(e.target.value)}
-                        className="w-full p-2 bg-[#050310] rounded-lg border border-purple-950/20 text-[#e1e1e6] focus:border-purple-500 focus:outline-none"
-                      >
-                        <option value="">Selecione...</option>
-                        <option value="Centro">Centro</option>
-                        <option value="Parque do Povo">Parque do Povo</option>
-                        <option value="Prudenshopping">Prudenshopping</option>
-                        <option value="Jardim Bongiovani">Jardim Bongiovani</option>
-                        <option value="Jardim Aviação">Jardim Aviação</option>
-                        <option value="Vila Industrial">Vila Industrial</option>
-                        <option value="Cidade Universitária">Cidade Universitária</option>
-                        <option value="Ana Jacinta">Ana Jacinta</option>
-                        <option value="Brasil Novo">Brasil Novo</option>
-                        <option value="Cohab">Cohab</option>
-                        <option value="Montalvão">Montalvão</option>
-                        <option value="Álvares Machado">Álvares Machado</option>
-                        <option value="Regente Feijó">Regente Feijó</option>
-                      </select>
+                    <div className="flex gap-2.5 items-start p-2.5 bg-[#050310]/70 rounded-xl border border-purple-950/10">
+                      <div className="w-5 h-5 rounded-lg bg-rose-950/40 flex items-center justify-center text-rose-400 mt-0.5 shrink-0">
+                        <Navigation className="w-3 h-3" />
+                      </div>
+                      <div className="space-y-0.5 min-w-0">
+                        <span className="text-[8.5px] uppercase font-mono text-slate-500 font-bold tracking-wider">Destino do GPS</span>
+                        <p className="text-[11px] font-medium text-slate-200 leading-normal truncate">{destAddress || "Buscando coordenadas..."}</p>
+                        <p className="text-[9px] font-mono text-slate-400">{destNeighborhood}, {destCity}</p>
+                      </div>
                     </div>
                   </div>
 
-                  <div className="grid grid-cols-2 gap-3">
-                    <div className="space-y-1">
-                      <label className="text-slate-400 font-semibold block select-none">Cidade Origem</label>
-                      <input 
-                        type="text" 
-                        value={originCity}
-                        onChange={(e) => setOriginCity(e.target.value)}
-                        className="w-full p-2 bg-[#050310] rounded-lg border border-purple-950/20 text-[#e1e1e6] focus:border-purple-500 focus:outline-none"
-                        placeholder="Ex: Presidente Prudente"
-                      />
-                    </div>
-                    <div className="space-y-1">
-                      <label className="text-slate-400 font-semibold block select-none">Cidade Destino</label>
-                      <input 
-                        type="text" 
-                        value={destCity}
-                        onChange={(e) => setDestCity(e.target.value)}
-                        className="w-full p-2 bg-[#050310] rounded-lg border border-purple-950/20 text-[#e1e1e6] focus:border-purple-500 focus:outline-none"
-                        placeholder="Ex: Presidente Prudente"
-                      />
-                    </div>
+                  {geocodeError && (
+                    <p className="text-[9px] text-amber-400 font-mono italic">{geocodeError}</p>
+                  )}
+
+                  <div className="pt-1 flex justify-end">
+                    <button
+                      type="button"
+                      onClick={() => setShowManualCorrection(!showManualCorrection)}
+                      className="text-[9.5px] text-purple-300 hover:text-purple-200 underline cursor-pointer font-semibold select-none flex items-center gap-1 transition-all"
+                    >
+                      {showManualCorrection ? "Ocultar Correção Manual (Debug)" : "⚙️ Corrigir manualmente (Debug)"}
+                    </button>
                   </div>
+
+                  {showManualCorrection && (
+                    <div className="pt-3 border-t border-purple-950/10 space-y-3">
+                      <div className="grid grid-cols-2 gap-3">
+                        <div className="space-y-1">
+                          <label className="text-slate-400 font-bold block select-none">Bairro Origem*</label>
+                          <select 
+                            value={pickupNeighborhood}
+                            onChange={(e) => {
+                              setPickupNeighborhood(e.target.value);
+                              setPickupAddress(`${e.target.value}, ${pickupCity}`);
+                            }}
+                            className="w-full p-2 bg-[#050310] rounded-lg border border-purple-950/20 text-[#e1e1e6] focus:border-purple-500 focus:outline-none text-[10.5px]"
+                          >
+                            <option value="">Selecione...</option>
+                            <option value="Centro">Centro</option>
+                            <option value="Parque do Povo">Parque do Povo</option>
+                            <option value="Prudenshopping">Prudenshopping</option>
+                            <option value="Jardim Bongiovani">Jardim Bongiovani</option>
+                            <option value="Jardim Aviação">Jardim Aviação</option>
+                            <option value="Vila Industrial">Vila Industrial</option>
+                            <option value="Cidade Universitária">Cidade Universitária</option>
+                            <option value="Ana Jacinta">Ana Jacinta</option>
+                            <option value="Brasil Novo">Brasil Novo</option>
+                            <option value="Cohab">Cohab</option>
+                            <option value="Montalvão">Montalvão</option>
+                            <option value="Álvares Machado">Álvares Machado</option>
+                            <option value="Regente Feijó">Regente Feijó</option>
+                          </select>
+                        </div>
+
+                        <div className="space-y-1">
+                          <label className="text-slate-400 font-bold block select-none">Bairro Destino*</label>
+                          <select 
+                            value={destNeighborhood}
+                            onChange={(e) => {
+                              setDestNeighborhood(e.target.value);
+                              setDestAddress(`${e.target.value}, ${destCity}`);
+                            }}
+                            className="w-full p-2 bg-[#050310] rounded-lg border border-purple-950/20 text-[#e1e1e6] focus:border-purple-500 focus:outline-none text-[10.5px]"
+                          >
+                            <option value="">Selecione...</option>
+                            <option value="Centro">Centro</option>
+                            <option value="Parque do Povo">Parque do Povo</option>
+                            <option value="Prudenshopping">Prudenshopping</option>
+                            <option value="Jardim Bongiovani">Jardim Bongiovani</option>
+                            <option value="Jardim Aviação">Jardim Aviação</option>
+                            <option value="Vila Industrial">Vila Industrial</option>
+                            <option value="Cidade Universitária">Cidade Universitária</option>
+                            <option value="Ana Jacinta">Ana Jacinta</option>
+                            <option value="Brasil Novo">Brasil Novo</option>
+                            <option value="Cohab">Cohab</option>
+                            <option value="Montalvão">Montalvão</option>
+                            <option value="Álvares Machado">Álvares Machado</option>
+                            <option value="Regente Feijó">Regente Feijó</option>
+                          </select>
+                        </div>
+                      </div>
+
+                      <div className="grid grid-cols-2 gap-3">
+                        <div className="space-y-1">
+                          <label className="text-slate-400 font-semibold block select-none">Cidade Origem</label>
+                          <input 
+                            type="text" 
+                            value={pickupCity}
+                            onChange={(e) => {
+                              setPickupCity(e.target.value);
+                              setPickupAddress(`${pickupNeighborhood}, ${e.target.value}`);
+                            }}
+                            className="w-full p-2 bg-[#050310] rounded-lg border border-purple-950/20 text-[#e1e1e6] focus:border-purple-500 focus:outline-none text-[10.5px]"
+                          />
+                        </div>
+                        <div className="space-y-1">
+                          <label className="text-slate-400 font-semibold block select-none">Cidade Destino</label>
+                          <input 
+                            type="text" 
+                            value={destCity}
+                            onChange={(e) => {
+                              setDestCity(e.target.value);
+                              setDestAddress(`${destNeighborhood}, ${e.target.value}`);
+                            }}
+                            className="w-full p-2 bg-[#050310] rounded-lg border border-purple-950/20 text-[#e1e1e6] focus:border-purple-500 focus:outline-none text-[10.5px]"
+                          />
+                        </div>
+                      </div>
+                    </div>
+                  )}
                 </div>
 
                 {/* Calibração Contextual */}
@@ -1809,18 +2774,132 @@ export const JornadaPage: React.FC = () => {
                 </div>
               </div>
 
-              <div className="p-5 border-t border-purple-950/20 bg-purple-950/10 flex items-center justify-end gap-3 shrink-0">
+              {saveError && (
+                <div className="mx-5 mb-2 p-3 bg-rose-950/30 border border-rose-900/40 text-rose-400 text-xs rounded-xl font-mono">
+                  ⚠️ Erro ao Salvar: {saveError}
+                </div>
+              )}
+
+              <div className="p-5 border-t border-purple-950/20 bg-purple-950/10 flex items-center justify-between gap-3 shrink-0">
                 <button 
-                  onClick={() => setFinishModalOpen(false)}
-                  className="px-4 py-2.5 rounded-xl border border-purple-950/45 hover:bg-purple-950/20 text-purple-400 font-semibold select-none cursor-pointer transition-all"
+                  onClick={() => setShowDebugDataModal(true)}
+                  disabled={isSavingCalibration}
+                  className="px-4 py-2.5 rounded-xl border border-dashed border-purple-600/40 hover:bg-purple-950/25 text-purple-300 font-mono text-xs select-none cursor-pointer transition-all flex items-center gap-1.5 disabled:opacity-50 disabled:cursor-not-allowed"
                 >
-                  Voltar
+                  <Terminal className="w-3.5 h-3.5" /> Ver dados capturados
                 </button>
-                <button 
-                  onClick={handleConfirmFinishRide}
-                  className="px-5 py-2.5 rounded-xl bg-gradient-to-r from-emerald-600 to-green-600 hover:from-emerald-500 hover:to-green-500 text-white font-bold select-none cursor-pointer transition-all shadow-[0_2px_10px_rgba(16,185,129,0.15)]"
+
+                <div className="flex items-center gap-2">
+                  <button 
+                    onClick={() => setFinishModalOpen(false)}
+                    disabled={isSavingCalibration}
+                    className="px-4 py-2.5 rounded-xl border border-purple-950/45 hover:bg-purple-950/20 text-purple-400 font-semibold select-none cursor-pointer transition-all disabled:opacity-50 disabled:cursor-not-allowed"
+                  >
+                    Voltar
+                  </button>
+                  <button 
+                    onClick={handleConfirmFinishRide}
+                    disabled={isSavingCalibration}
+                    className="px-5 py-2.5 rounded-xl bg-gradient-to-r from-emerald-600 to-green-600 hover:from-emerald-500 hover:to-green-500 text-white font-bold select-none cursor-pointer transition-all shadow-[0_2px_10px_rgba(16,185,129,0.15)] flex items-center gap-1.5 disabled:opacity-60 disabled:cursor-not-allowed"
+                  >
+                    {isSavingCalibration ? (
+                      <>
+                        <svg className="animate-spin h-4 w-4 text-white" fill="none" viewBox="0 0 24 24">
+                          <circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4" />
+                          <path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4zm2 5.291A7.962 7.962 0 014 12H0c0 3.042 1.135 5.824 3 7.938l3-2.647z" />
+                        </svg>
+                        Salvando...
+                      </>
+                    ) : (
+                      'Confirmar & Salvar para IA'
+                    )}
+                  </button>
+                </div>
+              </div>
+            </motion.div>
+          </motion.div>
+        )}
+      </AnimatePresence>
+
+      {/* MODAL: VER DADOS CAPTURADOS (Requirement 7) */}
+      <AnimatePresence>
+        {showDebugDataModal && (
+          <motion.div
+            initial={{ opacity: 0 }}
+            animate={{ opacity: 1 }}
+            exit={{ opacity: 0 }}
+            className="fixed inset-0 z-[60] flex items-center justify-center p-4 bg-[#050310]/95 backdrop-blur-md"
+          >
+            <motion.div
+              initial={{ scale: 0.95, y: 15 }}
+              animate={{ scale: 1, y: 0 }}
+              exit={{ scale: 0.95, y: 15 }}
+              className="w-full max-w-2xl max-h-[90vh] rounded-2xl bg-[#0b081e] border border-purple-950/45 shadow-2xl flex flex-col overflow-hidden text-left"
+            >
+              <div className="p-5 border-b border-purple-950/20 bg-purple-950/10 flex items-center justify-between">
+                <div className="flex items-center gap-2">
+                  <Terminal className="w-5 h-5 text-purple-400" />
+                  <h3 className="text-[#f1f1f6] text-lg font-bold">Dados Capturados para IA (Debug)</h3>
+                </div>
+                <button
+                  onClick={() => setShowDebugDataModal(false)}
+                  className="p-1 rounded-lg hover:bg-purple-950/40 text-slate-400 hover:text-white transition-colors"
                 >
-                  Confirmar & Salvar para IA
+                  <X className="w-5 h-5" />
+                </button>
+              </div>
+
+              <div className="p-5 overflow-y-auto space-y-4 font-mono text-xs text-[#c9c9d4] leading-relaxed">
+                <p className="text-slate-400 mb-2">Estes são os metadados de alta fidelidade que serão persistidos no banco de dados para calibração dos modelos de IA:</p>
+                
+                {(() => {
+                  const preview = getPreviewData();
+                  if (!preview) return <p className="text-rose-400">Nenhum dado ativo de corrida encontrado.</p>;
+                  return (
+                    <div className="space-y-3 text-left">
+                      <div className="bg-[#050310] p-4 rounded-xl border border-purple-950/20 space-y-2">
+                        <div className="text-emerald-400 font-bold border-b border-purple-950/15 pb-1 mb-2">📍 ROTA E LOCALIZAÇÃO</div>
+                        <div><span className="text-purple-400">Origem Bairro:</span> {preview.pickup_neighborhood}</div>
+                        <div><span className="text-purple-400">Origem GPS:</span> Lat: {preview.origem?.lat?.toFixed(6)}, Lng: {preview.origem?.lng?.toFixed(6)}</div>
+                        <div><span className="text-purple-400">Destino Bairro:</span> {preview.destination_neighborhood}</div>
+                        <div><span className="text-purple-400">Destino GPS:</span> Lat: {preview.desembarque?.lat?.toFixed(6)}, Lng: {preview.desembarque?.lng?.toFixed(6)}</div>
+                        <div><span className="text-purple-400">Rota Completa:</span> {preview.rota_completa?.length || 0} pontos capturados</div>
+                      </div>
+
+                      <div className="bg-[#050310] p-4 rounded-xl border border-purple-950/20 space-y-2">
+                        <div className="text-sky-400 font-bold border-b border-purple-950/15 pb-1 mb-2">⏱️ CRONOMETRAGEM & TELEMETRIA</div>
+                        <div><span className="text-purple-400">Duração Total:</span> {Math.floor(preview.duração / 60)}m {preview.duração % 60}s ({preview.duração} segundos)</div>
+                        <div><span className="text-purple-400">Tempo Parado (Idle):</span> {(preview.tempo_parado / 60).toFixed(2)} minutos ({preview.tempo_parado?.toFixed(0)} segundos)</div>
+                        <div><span className="text-purple-400">Velocidade Média:</span> {preview.velocidade_media} km/h</div>
+                        <div><span className="text-purple-400">Velocidade Máxima:</span> {preview.velocidade_maxima} km/h</div>
+                      </div>
+
+                      <div className="bg-[#050310] p-4 rounded-xl border border-purple-950/20 space-y-2">
+                        <div className="text-amber-400 font-bold border-b border-purple-950/15 pb-1 mb-2">💸 FINANÇAS & CONSUMO</div>
+                        <div><span className="text-purple-400">Valor Recebido:</span> R$ {preview.fare_value.toFixed(2)}</div>
+                        <div><span className="text-purple-400">Distância Real:</span> {preview.distancia_real} km</div>
+                        <div><span className="text-purple-400">Custo de Operação:</span> R$ {preview.custo?.toFixed(2)}</div>
+                        <div><span className="text-purple-400">Lucro Líquido:</span> R$ {preview.lucro?.toFixed(2)}</div>
+                        <div><span className="text-purple-400">Consumo Calculado:</span> {preview.consumo?.amount} {preview.consumo?.unit}</div>
+                      </div>
+
+                      <div className="bg-[#050310] p-3 rounded-xl border border-purple-950/20">
+                        <div className="text-purple-400 font-bold mb-1">JSON RAW DE TELEMETRIA:</div>
+                        <pre className="p-2.5 bg-black/40 rounded-lg overflow-x-auto text-[10px] text-slate-300 max-h-48">
+                          {JSON.stringify(preview, null, 2)}
+                        </pre>
+                      </div>
+                    </div>
+                  );
+                })()}
+              </div>
+
+              <div className="p-5 border-t border-purple-950/20 bg-purple-950/10 flex items-center justify-end">
+                <button
+                  onClick={() => setShowDebugDataModal(false)}
+                  className="px-5 py-2 rounded-xl bg-purple-600 hover:bg-purple-500 text-white font-semibold cursor-pointer select-none transition-all"
+                >
+                  Fechar Visualização
                 </button>
               </div>
             </motion.div>
@@ -1902,6 +2981,247 @@ export const JornadaPage: React.FC = () => {
                 </button>
               </div>
             </motion.div>
+          </motion.div>
+        )}
+      </AnimatePresence>
+
+      {/* MODAL: EDITAR CORRIDA CALIBRADA */}
+      <AnimatePresence>
+        {editModalOpen && editingRide && (
+          <motion.div 
+            initial={{ opacity: 0 }}
+            animate={{ opacity: 1 }}
+            exit={{ opacity: 0 }}
+            className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-[#050310]/85 backdrop-blur-md"
+          >
+            <motion.div 
+              initial={{ scale: 0.95, y: 15 }}
+              animate={{ scale: 1, y: 0 }}
+              exit={{ scale: 0.95, y: 15 }}
+              className="bg-[#0d0926] border border-purple-950/40 rounded-3xl w-full max-w-lg overflow-hidden shadow-[0_10px_50px_rgba(76,29,149,0.3)] text-left flex flex-col max-h-[90vh]"
+            >
+              <div className="p-5 border-b border-purple-950/20 bg-purple-950/10 flex items-center justify-between">
+                <div>
+                  <h3 className="text-sm font-bold text-white uppercase font-mono tracking-wider flex items-center gap-2">
+                    ⚙️ Editar Dados de Calibração
+                  </h3>
+                  <p className="text-[10px] text-purple-300 mt-0.5">
+                    Modifique dados reais ou corrija pendências de IA.
+                  </p>
+                </div>
+                <button 
+                  onClick={() => setEditModalOpen(false)}
+                  className="p-1 rounded-lg bg-purple-950/20 hover:bg-purple-950/40 text-purple-400 cursor-pointer select-none"
+                >
+                  <X className="w-4 h-4" />
+                </button>
+              </div>
+
+              <div className="p-5 space-y-4 overflow-y-auto custom-scrollbar flex-1 text-xs">
+                {/* Financeiro */}
+                <div className="grid grid-cols-2 gap-4">
+                  <div className="space-y-1">
+                    <label className="text-slate-400 font-bold block select-none">Valor Recebido (R$)*</label>
+                    <input 
+                      type="number" 
+                      step="0.01"
+                      value={receivedValue}
+                      onChange={(e) => setReceivedValue(e.target.value)}
+                      className="w-full p-2.5 bg-[#050310] rounded-xl border border-purple-950/25 text-[#e1e1e6] focus:border-purple-500 focus:outline-none font-mono"
+                    />
+                  </div>
+                  <div className="space-y-1">
+                    <label className="text-slate-400 font-bold block select-none">Plataforma*</label>
+                    <select 
+                      value={platform}
+                      onChange={(e) => setPlatform(e.target.value)}
+                      className="w-full p-2.5 bg-[#050310] rounded-xl border border-purple-950/25 text-[#e1e1e6] focus:border-purple-500 focus:outline-none"
+                    >
+                      <option value="Uber">Uber</option>
+                      <option value="99">99</option>
+                      <option value="InDrive">InDrive</option>
+                      <option value="Particular">Particular</option>
+                    </select>
+                  </div>
+                </div>
+
+                <div className="grid grid-cols-2 gap-4">
+                  <div className="space-y-1">
+                    <label className="text-slate-400 font-semibold block select-none">Gorjeta (R$ - Opcional)</label>
+                    <input 
+                      type="number" 
+                      step="0.01"
+                      value={tipValue}
+                      onChange={(e) => setTipValue(e.target.value)}
+                      className="w-full p-2.5 bg-[#050310] rounded-xl border border-purple-950/25 text-[#e1e1e6] focus:border-purple-500 focus:outline-none font-mono"
+                    />
+                  </div>
+                  <div className="space-y-1">
+                    <label className="text-slate-400 font-semibold block select-none">Pedágio (R$ - Opcional)</label>
+                    <input 
+                      type="number" 
+                      step="0.01"
+                      value={tollValue}
+                      onChange={(e) => setTollValue(e.target.value)}
+                      className="w-full p-2.5 bg-[#050310] rounded-xl border border-purple-950/25 text-[#e1e1e6] focus:border-purple-500 focus:outline-none font-mono"
+                    />
+                  </div>
+                </div>
+
+                {/* Localização */}
+                <div className="p-4 bg-purple-950/15 rounded-2xl border border-purple-950/20 space-y-3">
+                  <h4 className="font-bold text-purple-400 uppercase tracking-wide text-[10px] select-none flex items-center gap-1.5">
+                    ⚙️ Correção de Localidades
+                  </h4>
+                  <div className="grid grid-cols-2 gap-3">
+                    <div className="space-y-1">
+                      <label className="text-slate-400 font-bold block select-none">Bairro Origem*</label>
+                      <input 
+                        type="text"
+                        value={pickupNeighborhood}
+                        onChange={(e) => setPickupNeighborhood(e.target.value)}
+                        placeholder="Ex: Centro"
+                        className="w-full p-2 bg-[#050310] rounded-lg border border-purple-950/20 text-[#e1e1e6] focus:border-purple-500 focus:outline-none text-[10.5px]"
+                      />
+                    </div>
+                    <div className="space-y-1">
+                      <label className="text-slate-400 font-bold block select-none">Bairro Destino*</label>
+                      <input 
+                        type="text"
+                        value={destNeighborhood}
+                        onChange={(e) => setDestNeighborhood(e.target.value)}
+                        placeholder="Ex: Bongiovani"
+                        className="w-full p-2 bg-[#050310] rounded-lg border border-purple-950/20 text-[#e1e1e6] focus:border-purple-500 focus:outline-none text-[10.5px]"
+                      />
+                    </div>
+                  </div>
+
+                  <div className="grid grid-cols-2 gap-3">
+                    <div className="space-y-1">
+                      <label className="text-slate-400 font-semibold block select-none">Cidade Origem</label>
+                      <input 
+                        type="text"
+                        value={pickupCity}
+                        onChange={(e) => setPickupCity(e.target.value)}
+                        className="w-full p-2 bg-[#050310] rounded-lg border border-purple-950/20 text-[#e1e1e6] focus:border-purple-500 focus:outline-none text-[10.5px]"
+                      />
+                    </div>
+                    <div className="space-y-1">
+                      <label className="text-slate-400 font-semibold block select-none">Cidade Destino</label>
+                      <input 
+                        type="text"
+                        value={destCity}
+                        onChange={(e) => setDestCity(e.target.value)}
+                        className="w-full p-2 bg-[#050310] rounded-lg border border-purple-950/20 text-[#e1e1e6] focus:border-purple-500 focus:outline-none text-[10.5px]"
+                      />
+                    </div>
+                  </div>
+                </div>
+
+                {/* Contextuais */}
+                <div className="grid grid-cols-2 gap-4">
+                  <div className="space-y-1">
+                    <label className="text-slate-400 font-semibold block select-none">Condições de Clima</label>
+                    <select 
+                      value={selectedClimate}
+                      onChange={(e) => setSelectedClimate(e.target.value)}
+                      className="w-full p-2.5 bg-[#050310] rounded-xl border border-purple-950/25 text-[#e1e1e6] focus:border-purple-500 focus:outline-none"
+                    >
+                      <option value="Limpo">Limpo / Ensolarado</option>
+                      <option value="Chuvoso">Chuvoso</option>
+                      <option value="Nublado">Nublado</option>
+                      <option value="Calor Extremo">Calor Extremo</option>
+                      <option value="Frio">Frio</option>
+                    </select>
+                  </div>
+                  <div className="space-y-1">
+                    <label className="text-slate-400 font-semibold block select-none">Eventos Ativos na Região</label>
+                    <select 
+                      value={selectedSpecialEvent}
+                      onChange={(e) => setSelectedSpecialEvent(e.target.value)}
+                      className="w-full p-2.5 bg-[#050310] rounded-xl border border-purple-950/25 text-[#e1e1e6] focus:border-purple-500 focus:outline-none"
+                    >
+                      <option value="Nenhum">Nenhum evento especial</option>
+                      <option value="Show / Concerto">Show / Concerto de Música</option>
+                      <option value="Jogo de Futebol">Jogo de Futebol</option>
+                      <option value="Feriado">Feriado Municipal</option>
+                      <option value="Greve / Evento Especial">Greve / Interrupção de Ônibus</option>
+                    </select>
+                  </div>
+                </div>
+
+                <div className="space-y-1">
+                  <label className="text-slate-400 font-semibold block select-none">Observações da Viagem (Opcional)</label>
+                  <textarea 
+                    value={observations}
+                    onChange={(e) => setObservations(e.target.value)}
+                    className="w-full p-2.5 bg-[#050310] rounded-xl border border-purple-950/25 text-[#e1e1e6] focus:border-purple-500 focus:outline-none min-h-[50px] leading-relaxed resize-none"
+                    placeholder="Ex: Trânsito intenso..."
+                  />
+                </div>
+              </div>
+
+              {saveError && (
+                <div className="mx-5 mb-2 p-3 bg-rose-950/30 border border-rose-900/40 text-rose-400 text-xs rounded-xl font-mono">
+                  ⚠️ Erro ao Salvar: {saveError}
+                </div>
+              )}
+
+              <div className="p-5 border-t border-purple-950/20 bg-purple-950/10 flex items-center justify-end gap-3 shrink-0">
+                <button 
+                  onClick={() => setEditModalOpen(false)}
+                  className="px-4 py-2.5 rounded-xl border border-purple-950/45 hover:bg-purple-950/20 text-purple-400 font-semibold select-none cursor-pointer transition-all"
+                >
+                  Voltar
+                </button>
+                <button 
+                  onClick={handleConfirmEditRide}
+                  className="px-5 py-2.5 rounded-xl bg-gradient-to-r from-emerald-600 to-green-600 hover:from-emerald-500 hover:to-green-500 text-white font-bold select-none cursor-pointer transition-all shadow-[0_2px_10px_rgba(16,185,129,0.15)]"
+                >
+                  Confirmar & Salvar para IA
+                </button>
+              </div>
+            </motion.div>
+          </motion.div>
+        )}
+      </AnimatePresence>
+
+      {/* MODAL: MAPA DA ROTA */}
+      <AnimatePresence>
+        {selectedRouteRide && (
+          <CalibrationRouteMap 
+            routePoints={selectedRouteRide.rideTrackPoints || []}
+            startLocation={selectedRouteRide.pickup_lat && selectedRouteRide.pickup_lng ? { lat: selectedRouteRide.pickup_lat, lng: selectedRouteRide.pickup_lng } : null}
+            endLocation={selectedRouteRide.dropoff_lat && selectedRouteRide.dropoff_lng ? { lat: selectedRouteRide.dropoff_lat, lng: selectedRouteRide.dropoff_lng } : null}
+            bairroOrigem={selectedRouteRide.bairroOrigem}
+            bairroDestino={selectedRouteRide.bairroDestino}
+            onClose={() => setSelectedRouteRide(null)} 
+          />
+        )}
+      </AnimatePresence>
+
+      {/* COMPONENT: TOAST NOTIFICATION PREMIUM */}
+      <AnimatePresence>
+        {toast.show && (
+          <motion.div
+            initial={{ opacity: 0, y: 50, scale: 0.9 }}
+            animate={{ opacity: 1, y: 0, scale: 1 }}
+            exit={{ opacity: 0, y: 20, scale: 0.95 }}
+            className="fixed bottom-6 right-6 z-50 p-4 bg-emerald-950 border border-emerald-500/30 text-emerald-300 rounded-2xl flex items-center gap-3 shadow-[0_10px_40px_rgba(16,185,129,0.25)] w-full max-w-sm"
+          >
+            <div className="h-8 w-8 rounded-full bg-emerald-900/50 flex items-center justify-center text-emerald-400 shrink-0">
+              <Check className="w-5 h-5" />
+            </div>
+            <div className="text-left font-sans text-xs">
+              <p className="font-bold text-white leading-normal">Sucesso</p>
+              <p className="text-[11px] text-emerald-400">{toast.message}</p>
+            </div>
+            <button
+              onClick={() => setToast(prev => ({ ...prev, show: false }))}
+              className="ml-auto p-1 text-emerald-400 hover:text-emerald-200 cursor-pointer select-none"
+            >
+              <X className="w-4 h-4" />
+            </button>
           </motion.div>
         )}
       </AnimatePresence>
