@@ -24,6 +24,7 @@ export interface LocalTelemetryPoint {
   distance_meters: number;
   recorded_at: string;
   status: 'pending' | 'syncing' | 'synced' | 'failed';
+  synced?: boolean; // REGRA 1: Cada ponto deve ter synced: boolean
   retry_count: number;
   last_retry_at?: string;
   error_message?: string;
@@ -99,12 +100,9 @@ class TelemetrySyncService {
    */
   private savePoints(points: LocalTelemetryPoint[]) {
     try {
-      // Keep only up to 500 synced points to avoid exceeding localStorage limits
-      const synced = points.filter(p => p.status === 'synced');
-      const nonSynced = points.filter(p => p.status !== 'synced');
-      
-      const prunedSynced = synced.slice(-200); // Keep last 200 for visualization history
-      const finalPoints = [...nonSynced, ...prunedSynced];
+      // REGRA: Se synced = true ou status === 'synced' → remover permanentemente da fila local.
+      // Nunca salvar ou manter pontos sincronizados na fila de sincronização.
+      const finalPoints = points.filter(p => p.status !== 'synced' && p.synced !== true);
 
       localStorage.setItem(TELEMETRY_STORAGE_KEY, JSON.stringify(finalPoints));
       this.notify();
@@ -174,9 +172,9 @@ class TelemetrySyncService {
     
     const points = this.getPoints();
 
-    // Check for duplicity inside local storage to avoid duplicates
+    // Check for duplicity inside local storage to avoid duplicates (REGRA 6)
     if (points.some(p => p.idLocal === idLocal)) {
-      console.log(`[Sync] Duplicate telemetry point ignored: ${idLocal}`);
+      console.log(`[SYNC_DUPLICATE_BLOCKED] Duplicate telemetry point blocked: ${idLocal}`);
       return;
     }
 
@@ -227,13 +225,14 @@ class TelemetrySyncService {
       distance_meters: point.distance_meters ?? 0,
       recorded_at: timestamp,
       status: 'pending',
+      synced: false,
       retry_count: 0,
       segment_type: segment,
       ride_event_id: activeEventId
     };
 
     points.push(newPoint);
-    console.log(`[Sync] pending count incremented. Total queue: ${points.length}`);
+    console.log('[SYNC_QUEUE_ADD]', { idLocal, session_id: point.session_id });
     this.savePoints(points);
 
     // Automatically trigger background sync upon queuing a new point
@@ -356,14 +355,19 @@ class TelemetrySyncService {
 
       // Success! Update local points status to 'synced'
       const finalPoints = this.getPoints();
+      const syncedIds: string[] = [];
       batch.forEach(bPoint => {
         const p = finalPoints.find(item => item.idLocal === bPoint.idLocal);
         if (p) {
           p.status = 'synced';
+          p.synced = true;
           p.error_message = undefined;
+          syncedIds.push(bPoint.idLocal);
         }
       });
       syncedCount = batch.length;
+      console.log('[SYNC_BATCH_SUCCESS]', { batchSize: batch.length, ids: syncedIds });
+      console.log('[SYNC_QUEUE_REMOVE]', syncedIds);
       this.savePoints(finalPoints);
 
       console.log(`[Sync] batch success. Uploaded ${batch.length} coordinates.`);
@@ -374,8 +378,8 @@ class TelemetrySyncService {
       });
 
     } catch (err: any) {
-      console.error('[Sync] batch error during uploading:', err);
       const errorMessage = err?.message || 'Erro desconhecido na rede';
+      console.error('[SYNC_BATCH_FAILED]', { error: errorMessage, ids: batch.map(b => b.idLocal) });
 
       // Rollback to failed status with retry increment
       const finalPoints = this.getPoints();
@@ -415,6 +419,7 @@ class TelemetrySyncService {
    * If some points remain unsynced, let the user know.
    */
   async finalFlushBeforeEnd(sessionId?: string): Promise<{ success: boolean; pendingCount: number }> {
+    console.log('[SYNC_QUEUE_FLUSH]', { sessionId });
     console.log('[Sync] [SYNC_BEFORE_END_START] final flush before journey end initiated.', { sessionId });
     
     // 1. Prune/cleanup buffer of old or orphaned points before ending journey (Requirements)
@@ -463,6 +468,69 @@ class TelemetrySyncService {
       success: remaining.length === 0,
       pendingCount: remaining.length
     };
+  }
+
+  /**
+   * Flush all coordinates for a session
+   */
+  async flushSyncQueue(sessionId: string): Promise<{ success: boolean; pendingCount: number }> {
+    return this.finalFlushBeforeEnd(sessionId);
+  }
+
+  /**
+   * Reset/clear telemetry sync queue completely
+   */
+  clearQueue() {
+    console.log('[SYNC_QUEUE_FLUSH] Clearing telemetry sync queue completely');
+    try {
+      localStorage.removeItem(TELEMETRY_STORAGE_KEY);
+      localStorage.removeItem(SYNC_STATS_STORAGE_KEY);
+      
+      // Clean other related queue and buffer keys requested by requirements
+      const targetKeys = [
+        'telemetrySyncQueue',
+        'pendingSyncBuffer',
+        'rideTrackPoints',
+        'offlineSyncQueue'
+      ];
+      targetKeys.forEach(key => {
+        localStorage.removeItem(key);
+        localStorage.removeItem(`${STORAGE_PREFIX}${key}`);
+        sessionStorage.removeItem(key);
+        sessionStorage.removeItem(`${STORAGE_PREFIX}${key}`);
+      });
+
+      // Clear any keys pattern matched (Requirements)
+      const keysToClear: string[] = [];
+      for (let i = 0; i < localStorage.length; i++) {
+        const key = localStorage.key(i);
+        if (key && (
+          key.startsWith('driverdash_sync_') || 
+          key.includes('telemetry_pending_') || 
+          key.includes('sync_queue_')
+        )) {
+          keysToClear.push(key);
+        }
+      }
+      keysToClear.forEach(key => localStorage.removeItem(key));
+
+      const sKeysToClear: string[] = [];
+      for (let i = 0; i < sessionStorage.length; i++) {
+        const key = sessionStorage.key(i);
+        if (key && (
+          key.startsWith('driverdash_sync_') || 
+          key.includes('telemetry_pending_') || 
+          key.includes('sync_queue_')
+        )) {
+          sKeysToClear.push(key);
+        }
+      }
+      sKeysToClear.forEach(key => sessionStorage.removeItem(key));
+
+      this.notify();
+    } catch (err) {
+      console.error('[Sync] Error clearing queue:', err);
+    }
   }
 
   /**

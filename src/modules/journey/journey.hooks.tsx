@@ -28,6 +28,8 @@ const getErrorName = (code: number) => {
 export const JourneyProvider: React.FC<{ children: React.ReactNode }> = ({ children }) => {
   const { user, dbStatus } = useAuth();
   const [driverSessions, setDriverSessions] = useState<DriverSession[]>([]);
+  const activeSession = driverSessions.find(s => s.status === 'active');
+  const activeSessionId = activeSession?.id;
   const [routePoints, setRoutePoints] = useState<RoutePoint[]>([]);
   const [unsyncedPointsCount, setUnsyncedPointsCount] = useState<number>(0);
 
@@ -64,10 +66,14 @@ export const JourneyProvider: React.FC<{ children: React.ReactNode }> = ({ child
     const updateLocalSyncStates = () => {
       const points = telemetrySyncService.getPoints();
       const stats = telemetrySyncService.getStats();
+      const activeId = activeSessionRef.current?.id;
       
-      const pending = points.filter(p => p.status === 'pending').length;
-      const synced = points.filter(p => p.status === 'synced').length;
-      const failed = points.filter(p => p.status === 'failed').length;
+      // REGRA: Apenas pontos da sessão ativa. Não pode incluir histórico antigo de outras sessões.
+      const filtered = activeId ? points.filter(p => p.session_id === activeId) : [];
+      
+      const pending = filtered.filter(p => p.status === 'pending').length;
+      const synced = filtered.filter(p => p.status === 'synced').length;
+      const failed = filtered.filter(p => p.status === 'failed').length;
       
       setPendingPointsCount(pending);
       setSyncedPointsCount(synced);
@@ -85,7 +91,7 @@ export const JourneyProvider: React.FC<{ children: React.ReactNode }> = ({ child
     return () => {
       unsubscribe();
     };
-  }, []);
+  }, [activeSessionId]);
 
   useEffect(() => {
     if (!user) {
@@ -165,9 +171,6 @@ export const JourneyProvider: React.FC<{ children: React.ReactNode }> = ({ child
   }, [dbStatus]);
 
   // Sync activeSession reference and run the GPS engine
-  const activeSession = driverSessions.find(s => s.status === 'active');
-  const activeSessionId = activeSession?.id;
-
   useEffect(() => {
     activeSessionRef.current = activeSession || null;
   }, [activeSession]);
@@ -797,12 +800,25 @@ export const JourneyProvider: React.FC<{ children: React.ReactNode }> = ({ child
     const duration_seconds = Math.max(1, Math.round((new Date().getTime() - startTime) / 1000));
     const finalDurationMinutes = totalDurationMinutes || Math.max(1, Math.round(duration_seconds / 60));
 
-    // Try to sync pending points first
+    // Try to sync pending points first (REGRA 4)
     console.log("[Sync] Attempting final flush of telemetry points");
+    let flushResult = { success: false, pendingCount: 0 };
     try {
-      await telemetrySyncService.finalFlushBeforeEnd(sessionId);
+      flushResult = await telemetrySyncService.flushSyncQueue(sessionId);
     } catch (e) {
       console.warn("[Sync] Failed to flush telemetry before ending:", e);
+    }
+
+    if (flushResult.success) {
+      console.log("[Sync] Flush succeeded! Zeroing pending counters immediately.");
+      setUnsyncedPointsCount(0);
+      setPendingPointsCount(0);
+      setFailedPointsCount(0);
+    } else {
+      console.log(`[Sync] Flush failed! Showing only real session points: ${flushResult.pendingCount}`);
+      setUnsyncedPointsCount(flushResult.pendingCount);
+      setPendingPointsCount(flushResult.pendingCount);
+      setFailedPointsCount(0); // Zero out other failed states to prevent old historical additions in UI
     }
 
     // Save unsynced points to separate cache if there are any

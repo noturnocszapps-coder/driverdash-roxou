@@ -331,6 +331,14 @@ export const DebugPage: React.FC = () => {
       }
       sessionKeysToRemove.forEach(k => sessionStorage.removeItem(k));
 
+      // 3.5 Clear telemetry sync queue, buffers, and offline queues (REGRA 3)
+      console.log('[RESET_TEST_DATA_START] Clearing telemetrySyncQueue, pendingSyncBuffer, and offline queues...');
+      try {
+        telemetrySyncService.clearQueue();
+      } catch (e) {
+        console.warn('[RESET_TEST_DATA_START] Error in telemetrySyncService.clearQueue:', e);
+      }
+
       // 4. Parar watchPosition, limpar timers, zerar estado do GPS
       console.log('[RESET_TEST_DATA_START] Clearing active journey states...');
       try {
