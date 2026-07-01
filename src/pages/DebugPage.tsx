@@ -8,9 +8,10 @@ import React, { useState, useEffect, useMemo } from 'react';
 import { useApp } from '../context/AppContext';
 import { trackingSync } from '../modules/tracking/tracking.sync';
 import { telemetrySyncService } from '../modules/journey/telemetrySync.service';
+import { supabase } from '../modules/shared/supabase.helpers';
 import { 
   Wifi, WifiOff, Compass, MapPin, Database, Sparkles, Activity, AlertTriangle, 
-  RefreshCw, Play, Square, ShieldCheck, ShieldAlert, Cpu, Navigation
+  RefreshCw, Play, Square, ShieldCheck, ShieldAlert, Cpu, Navigation, Trash2
 } from 'lucide-react';
 import { motion, AnimatePresence } from 'motion/react';
 
@@ -43,7 +44,8 @@ export const DebugPage: React.FC = () => {
     currentAccuracy,
     discardedPointsCount,
     lastDiscardReason,
-    idleStatus
+    idleStatus,
+    clearAllJourneyState
   } = useApp();
 
   const [simulatedOnline, setSimulatedOnline] = useState(navigator.onLine);
@@ -194,6 +196,164 @@ export const DebugPage: React.FC = () => {
       description: `Buffer antigo de GPS limpo com sucesso! Removidos: ${result.cleanedCount} pontos antigos ou órfãos. Restantes: ${result.remainingCount} pontos ativos.`,
       severity: 'low'
     });
+  };
+
+  const hasOldPoints = useMemo(() => {
+    const pts = telemetrySyncService.getPoints();
+    const activeId = activeSession?.id;
+    return pts.some(p => !p.session_id || (activeId && p.session_id !== activeId));
+  }, [activeSession, unsyncedPointsCount, syncedPointsCount]);
+
+  const [resetModalOpen, setResetModalOpen] = useState(false);
+  const [isResetting, setIsResetting] = useState(false);
+
+  const handleResetTestPoints = async () => {
+    console.log('[RESET_TEST_DATA_START] Starting total test data reset flow...');
+    setIsResetting(true);
+    try {
+      const { data: { session } } = await supabase.auth.getSession();
+      const userId = session?.user?.id;
+      
+      if (!userId) {
+        throw new Error('Usuário não autenticado ou sessão expirada');
+      }
+
+      // 1. Call secure PostgreSQL RPC function
+      console.log('[RESET_TEST_DATA_START] Calling RPC reset_my_driverdash_test_data...');
+      const { data: rpcData, error: rpcError } = await supabase.rpc('reset_my_driverdash_test_data');
+      if (rpcError) {
+        console.warn('[RESET_TEST_DATA_START] RPC returned notice (falling back to direct client deletions):', rpcError);
+      } else {
+        console.log('[RESET_TEST_DATA_START] RPC executed successfully:', rpcData);
+      }
+
+      // 2. Perform direct client deletions as fallback/reinforcement
+      console.log('[RESET_TEST_DATA_START] Performing safety deletions across tables...');
+      
+      // route_points
+      const { error: rpErr } = await supabase.from('route_points').delete().eq('driver_id', userId);
+      if (rpErr) console.warn('[RESET_TEST_DATA_START] route_points delete warning:', rpErr.message);
+
+      // driver_sessions
+      const { error: dsErr } = await supabase.from('driver_sessions').delete().eq('user_id', userId);
+      if (dsErr) console.warn('[RESET_TEST_DATA_START] driver_sessions delete warning:', dsErr.message);
+
+      // earnings
+      const { error: earnErr } = await supabase.from('earnings').delete().eq('user_id', userId);
+      if (earnErr) console.warn('[RESET_TEST_DATA_START] earnings delete warning:', earnErr.message);
+
+      // expenses
+      const { error: expErr } = await supabase.from('expenses').delete().eq('user_id', userId);
+      if (expErr) console.warn('[RESET_TEST_DATA_START] expenses delete warning:', expErr.message);
+
+      // daily_closings
+      const { error: dcErr } = await supabase.from('daily_closings').delete().eq('user_id', userId);
+      if (dcErr) console.warn('[RESET_TEST_DATA_START] daily_closings delete warning:', dcErr.message);
+
+      // weekly_closings
+      const { error: wcErr } = await supabase.from('weekly_closings').delete().eq('user_id', userId);
+      if (wcErr) console.warn('[RESET_TEST_DATA_START] weekly_closings delete warning:', wcErr.message);
+
+      // financial_goals
+      const { error: fgErr } = await supabase.from('financial_goals').delete().eq('user_id', userId);
+      if (fgErr) console.warn('[RESET_TEST_DATA_START] financial_goals delete warning:', fgErr.message);
+
+      // smart_alerts
+      const { error: saErr } = await supabase.from('smart_alerts').delete().eq('user_id', userId);
+      if (saErr) console.warn('[RESET_TEST_DATA_START] smart_alerts delete warning:', saErr.message);
+
+      // driver_uber_pass_settings
+      const { error: upErr } = await supabase.from('driver_uber_pass_settings').delete().eq('user_id', userId);
+      if (upErr) console.warn('[RESET_TEST_DATA_START] driver_uber_pass_settings delete warning:', upErr.message);
+
+      // ride_offers
+      const { error: roErr } = await supabase.from('ride_offers').delete().eq('user_id', userId);
+      if (roErr) console.warn('[RESET_TEST_DATA_START] ride_offers delete warning:', roErr.message);
+
+      // driver_ride_logs
+      const { error: drlErr } = await supabase.from('driver_ride_logs').delete().eq('driver_id', userId);
+      if (drlErr) console.warn('[RESET_TEST_DATA_START] driver_ride_logs delete warning:', drlErr.message);
+
+      // 3. Clean local & session storage
+      console.log('[RESET_TEST_DATA_START] Cleaning local & session storage buffers...');
+      
+      const keysToRemove: string[] = [];
+      for (let i = 0; i < localStorage.length; i++) {
+        const key = localStorage.key(i);
+        if (key) {
+          if (
+            key.startsWith('driverdash_') ||
+            key.includes('ride_logs') ||
+            key.includes('telemetry') ||
+            key.includes('sync') ||
+            key.includes('active') ||
+            key.includes('journey') ||
+            key.includes('dashboard') ||
+            key.includes('calibration') ||
+            key.includes('route') ||
+            key.includes('map_tracker') ||
+            key.includes('predictive') ||
+            key.includes('intelligence') ||
+            key.includes('driver_sessions') ||
+            key.includes('gps') ||
+            key.includes('position')
+          ) {
+            keysToRemove.push(key);
+          }
+        }
+      }
+      keysToRemove.forEach(k => localStorage.removeItem(k));
+
+      const sessionKeysToRemove: string[] = [];
+      for (let i = 0; i < sessionStorage.length; i++) {
+        const key = sessionStorage.key(i);
+        if (key) {
+          if (
+            key.startsWith('driverdash_') ||
+            key.includes('ride_logs') ||
+            key.includes('telemetry') ||
+            key.includes('sync') ||
+            key.includes('active') ||
+            key.includes('journey') ||
+            key.includes('dashboard') ||
+            key.includes('calibration') ||
+            key.includes('route') ||
+            key.includes('map_tracker') ||
+            key.includes('predictive') ||
+            key.includes('intelligence') ||
+            key.includes('driver_sessions') ||
+            key.includes('gps') ||
+            key.includes('position')
+          ) {
+            sessionKeysToRemove.push(key);
+          }
+        }
+      }
+      sessionKeysToRemove.forEach(k => sessionStorage.removeItem(k));
+
+      // 4. Parar watchPosition, limpar timers, zerar estado do GPS
+      console.log('[RESET_TEST_DATA_START] Clearing active journey states...');
+      try {
+        clearAllJourneyState();
+      } catch (e) {
+        console.warn('[RESET_TEST_DATA_START] Error in clearAllJourneyState:', e);
+      }
+
+      console.log('[RESET_TEST_DATA_SUCCESS] All driver test data successfully reset.');
+      
+      // Redirect to clean dashboard and trigger fresh reload to re-instantiate clean state
+      window.location.href = '/dashboard';
+      setTimeout(() => {
+        window.location.reload();
+      }, 150);
+
+    } catch (err: any) {
+      console.error('[RESET_TEST_DATA_ERROR] Reset test data error:', err);
+      alert('Erro ao resetar os dados de teste: ' + err.message);
+    } finally {
+      setIsResetting(false);
+      setResetModalOpen(false);
+    }
   };
 
   // Automatically log technical alerts when simulated network changes
@@ -729,12 +889,22 @@ export const DebugPage: React.FC = () => {
               {isSyncing ? 'Forçando Upload...' : 'Forçar Sincronização'}
             </button>
 
+            {hasOldPoints && (
+              <button
+                onClick={handleCleanupBuffer}
+                className="w-full mt-2 py-3 rounded-2xl font-semibold text-purple-300 hover:text-white bg-purple-950/25 hover:bg-purple-900/30 border border-purple-900/30 flex items-center justify-center gap-2 text-xs transition-all cursor-pointer shadow-md"
+              >
+                <Database className="w-3.5 h-3.5" />
+                Limpar buffer antigo
+              </button>
+            )}
+
             <button
-              onClick={handleCleanupBuffer}
-              className="w-full mt-2 py-3 rounded-2xl font-semibold text-purple-300 hover:text-white bg-purple-950/25 hover:bg-purple-900/30 border border-purple-900/30 flex items-center justify-center gap-2 text-xs transition-all cursor-pointer shadow-md"
+              onClick={() => setResetModalOpen(true)}
+              className="w-full mt-2 py-3 rounded-2xl font-semibold text-rose-300 hover:text-white bg-rose-950/25 hover:bg-rose-900/30 border border-rose-900/30 flex items-center justify-center gap-2 text-xs transition-all cursor-pointer shadow-md"
             >
-              <Database className="w-3.5 h-3.5" />
-              Limpar buffer antigo
+              <Trash2 className="w-3.5 h-3.5" />
+              Resetar dados de teste
             </button>
           </div>
 
@@ -866,6 +1036,59 @@ export const DebugPage: React.FC = () => {
           )}
         </div>
       </div>
+
+      {/* RESET TEST DATA CONFIRMATION MODAL */}
+      <AnimatePresence>
+        {resetModalOpen && (
+          <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/80 backdrop-blur-md">
+            <motion.div
+              initial={{ opacity: 0, scale: 0.95 }}
+              animate={{ opacity: 1, scale: 1 }}
+              exit={{ opacity: 0, scale: 0.95 }}
+              className="w-full max-w-md bg-[#0a061d] border border-rose-950/50 rounded-3xl p-6 shadow-2xl space-y-6 text-center"
+            >
+              <div className="mx-auto w-12 h-12 rounded-full bg-rose-950/30 border border-rose-500/30 flex items-center justify-center">
+                <AlertTriangle className="w-6 h-6 text-rose-400 animate-pulse" />
+              </div>
+
+              <div className="space-y-2">
+                <h3 className="text-lg font-bold text-white font-mono tracking-tight">Confirmar Reset de Testes</h3>
+                <p className="text-xs text-slate-300 leading-relaxed text-left bg-rose-950/15 p-4 rounded-2xl border border-rose-950/25">
+                  <strong className="text-rose-400">Atenção:</strong> isso apagará todos os dados de jornadas, GPS, corridas, ganhos, despesas, alertas, calibração da IA e dashboards deste usuário. 
+                  <br /><br />
+                  Seu perfil, cadastro do veículo e login serão mantidos intactos. Esta ação é irreversível.
+                </p>
+              </div>
+
+              <div className="flex gap-3">
+                <button
+                  type="button"
+                  onClick={() => setResetModalOpen(false)}
+                  disabled={isResetting}
+                  className="flex-1 py-3 px-4 rounded-xl font-semibold text-slate-400 hover:text-white bg-purple-950/15 hover:bg-purple-900/20 border border-purple-950/35 text-xs transition-all cursor-pointer disabled:opacity-50"
+                >
+                  Cancelar
+                </button>
+                <button
+                  type="button"
+                  onClick={handleResetTestPoints}
+                  disabled={isResetting}
+                  className="flex-1 py-3 px-4 rounded-xl font-bold text-white bg-rose-700 hover:bg-rose-600 border border-rose-600 flex items-center justify-center gap-2 text-xs transition-all cursor-pointer shadow-lg shadow-rose-950/40 disabled:opacity-50"
+                >
+                  {isResetting ? (
+                    <>
+                      <RefreshCw className="w-3.5 h-3.5 animate-spin" />
+                      Resetando...
+                    </>
+                  ) : (
+                    'Resetar meus testes'
+                  )}
+                </button>
+              </div>
+            </motion.div>
+          </div>
+        )}
+      </AnimatePresence>
     </div>
   );
 };

@@ -611,3 +611,97 @@ CREATE POLICY "Drivers manage their own uber pass settings"
     ON public.driver_uber_pass_settings FOR ALL
     USING (auth.uid() = user_id OR public.is_admin())
     WITH CHECK (auth.uid() = user_id OR public.is_admin());
+
+
+-- ==========================================
+-- 12. SECURE RESET TEST DATA FUNCTION
+-- ==========================================
+
+CREATE OR REPLACE FUNCTION public.reset_my_driverdash_test_data()
+RETURNS jsonb AS $$
+DECLARE
+  v_user_id UUID;
+  v_session_ids UUID[];
+BEGIN
+  -- Get the current authenticated user's ID
+  v_user_id := auth.uid();
+  
+  IF v_user_id IS NULL THEN
+    RAISE EXCEPTION 'Not authenticated';
+  END IF;
+
+  -- Get session IDs belonging to this user
+  SELECT COALESCE(array_agg(id), '{}'::uuid[]) INTO v_session_ids
+  FROM public.driver_sessions
+  WHERE user_id = v_user_id;
+
+  -- 1. Delete route points connected to this user's sessions
+  IF v_session_ids IS NOT NULL AND array_length(v_session_ids, 1) > 0 THEN
+    DELETE FROM public.route_points
+    WHERE session_id = ANY(v_session_ids);
+  END IF;
+
+  -- Also delete route points where driver_id is explicitly this user
+  DELETE FROM public.route_points
+  WHERE driver_id = v_user_id;
+
+  -- 2. Delete driver sessions
+  DELETE FROM public.driver_sessions
+  WHERE user_id = v_user_id;
+
+  -- 3. Delete earnings
+  DELETE FROM public.earnings
+  WHERE user_id = v_user_id;
+
+  -- 4. Delete expenses
+  DELETE FROM public.expenses
+  WHERE user_id = v_user_id;
+
+  -- 5. Delete daily_closings
+  DELETE FROM public.daily_closings
+  WHERE user_id = v_user_id;
+
+  -- 6. Delete weekly_closings
+  DELETE FROM public.weekly_closings
+  WHERE user_id = v_user_id;
+
+  -- 7. Delete financial_goals
+  DELETE FROM public.financial_goals
+  WHERE user_id = v_user_id;
+
+  -- 8. Delete smart_alerts
+  DELETE FROM public.smart_alerts
+  WHERE user_id = v_user_id;
+
+  -- 9. Delete driver_uber_pass_settings
+  DELETE FROM public.driver_uber_pass_settings
+  WHERE user_id = v_user_id;
+
+  -- 10. Delete ride_offers (safely)
+  BEGIN
+    DELETE FROM public.ride_offers
+    WHERE user_id = v_user_id;
+  EXCEPTION WHEN OTHERS THEN
+    -- Table might not exist, ignore
+  END;
+
+  -- 11. Delete driver_ride_logs / driver_ride_events (safely)
+  BEGIN
+    DELETE FROM public.driver_ride_logs
+    WHERE driver_id = v_user_id;
+  EXCEPTION WHEN OTHERS THEN
+    -- Table might not exist, ignore
+  END;
+
+  -- 12. Delete driver_custom_costs (safely)
+  BEGIN
+    DELETE FROM public.driver_custom_costs
+    WHERE user_id = v_user_id;
+  EXCEPTION WHEN OTHERS THEN
+    -- Table might not exist, ignore
+  END;
+
+  RETURN jsonb_build_object('success', true, 'message', 'Test data reset successfully');
+END;
+$$ LANGUAGE plpgsql SECURITY DEFINER;
+

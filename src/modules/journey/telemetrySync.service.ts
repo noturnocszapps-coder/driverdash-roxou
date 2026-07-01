@@ -415,21 +415,49 @@ class TelemetrySyncService {
    * If some points remain unsynced, let the user know.
    */
   async finalFlushBeforeEnd(sessionId?: string): Promise<{ success: boolean; pendingCount: number }> {
-    console.log('[Sync] [SYNC_BEFORE_END_START] final flush before journey end initiated.');
+    console.log('[Sync] [SYNC_BEFORE_END_START] final flush before journey end initiated.', { sessionId });
+    
+    // 1. Prune/cleanup buffer of old or orphaned points before ending journey (Requirements)
+    const allPoints = this.getPoints();
+    const originalCount = allPoints.length;
+    
+    const filteredPoints = allPoints.filter(p => {
+      // Remover automaticamente pontos sem session_id
+      if (!p.session_id) {
+        console.log('[Sync] [BUFFER_CLEANUP] Removing point with missing session_id during pre-end flush');
+        return false;
+      }
+      
+      // Se tivermos um sessionId ativo, qualquer ponto pendente de outra sessão antiga/órfã pode ser removido/ignorado
+      if (sessionId && p.session_id !== sessionId) {
+        if (p.status === 'pending' || p.status === 'failed') {
+          console.log(`[Sync] [BUFFER_CLEANUP] Removing old pending/failed point from another session: ${p.session_id}`);
+          return false;
+        }
+      }
+      
+      return true;
+    });
+
+    if (filteredPoints.length !== originalCount) {
+      console.log(`[Sync] [BUFFER_CLEANUP] Pre-end pruner removed ${originalCount - filteredPoints.length} old or orphaned points.`);
+      this.savePoints(filteredPoints);
+    }
+
     try {
-      // Run sync immediately
+      // Run sync immediately to upload coordinates of the active session
       await this.sync();
       console.log('[Sync] [SYNC_BEFORE_END_SUCCESS] pre-end synchronization completed.');
     } catch (err) {
       console.error('[Sync] [SYNC_BEFORE_END_FAILED] pre-end synchronization failed:', err);
     }
     
-    const allPoints = this.getPoints();
+    const updatedPoints = this.getPoints();
     const remaining = sessionId
-      ? allPoints.filter(p => p.session_id === sessionId && (p.status === 'pending' || p.status === 'failed'))
-      : allPoints.filter(p => p.status === 'pending' || p.status === 'failed');
+      ? updatedPoints.filter(p => p.session_id === sessionId && (p.status === 'pending' || p.status === 'failed'))
+      : updatedPoints.filter(p => p.status === 'pending' || p.status === 'failed');
 
-    console.log(`[Sync] [BUFFER_SESSION_COUNT] Remaining unsynced: ${remaining.length}`);
+    console.log(`[Sync] [SESSION_END_SAFE] Remaining unsynced coordinates for session ${sessionId || 'all'}: ${remaining.length}`);
     
     return {
       success: remaining.length === 0,
