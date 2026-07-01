@@ -79,6 +79,7 @@ interface AppContextType {
   addSmartAlert: (alertData: { type: 'goal' | 'fuel' | 'profit' | 'rental'; title: string; description: string; severity: 'low' | 'medium' | 'high' }) => Promise<void>;
   
   // GPS Engine States
+  isTrackingActive: boolean;
   gpsStatus: 'Aguardando permissão' | 'Solicitando primeira posição' | 'GPS ativo' | 'GPS sem sinal' | 'GPS erro' | 'GPS negado' | 'Sensor inativo';
   permissionState: 'granted' | 'prompt' | 'denied' | 'unknown';
   lastCoord: { lat: number; lng: number; accuracy: number; speed: number; heading: number | null; altitude: number | null; timestamp: number } | null;
@@ -390,6 +391,7 @@ const LegacyAppBridgeProvider: React.FC<{ children: React.ReactNode }> = ({ chil
         addRoutePoint: journey.addRoutePoint,
         addSmartAlert: alerts.addSmartAlert,
 
+        isTrackingActive: journey.isTrackingActive,
         gpsStatus: journey.gpsStatus,
         permissionState: journey.permissionState,
         lastCoord: journey.lastCoord,

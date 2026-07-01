@@ -24,6 +24,7 @@ export const RealTimeTrackerMap: React.FC<RealTimeTrackerMapProps> = ({
   const markerStartRef = useRef<L.Marker | null>(null);
   const markerEndRef = useRef<L.Marker | null>(null);
   const polylineRef = useRef<L.Polyline | null>(null);
+  const hasCenteredOnFirstPointRef = useRef(false);
 
   // Load Leaflet CSS dynamically if not present
   useEffect(() => {
@@ -105,6 +106,13 @@ export const RealTimeTrackerMap: React.FC<RealTimeTrackerMapProps> = ({
     // 1. Current position (Blue Marker)
     if (lastCoord) {
       const currentPos: [number, number] = [lastCoord.lat, lastCoord.lng];
+
+      // Auto-center map ONLY on the very first received point
+      if (!hasCenteredOnFirstPointRef.current) {
+        console.log("[MAP_CENTER] Auto-centering map on the first received GPS point:", currentPos);
+        map.setView(currentPos, 16);
+        hasCenteredOnFirstPointRef.current = true;
+      }
 
       // Custom Blue Neon Dot for driver's current position
       const blueIcon = L.divIcon({

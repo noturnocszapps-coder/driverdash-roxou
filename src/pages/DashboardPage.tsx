@@ -97,7 +97,7 @@ export const DashboardPage: React.FC = () => {
   } = useApp();
 
   const navigate = useNavigate();
-  const [activeTab, setActiveTab] = useState<'home' | 'driver-ai' | 'score' | 'goals' | 'pass' | 'weekly' | 'demand' | 'fuel' | 'maintenance' | 'compare'>('home');
+  const [activeTab, setActiveTab] = useState<'home' | 'driver-ai' | 'score' | 'goals' | 'pass' | 'weekly' | 'demand' | 'fuel' | 'maintenance' | 'compare' | 'analytics'>('home');
   const [dashboardPeriod, setDashboardPeriod] = useState<'today' | 'yesterday' | 'week' | 'month' | 'year' | 'total'>('today');
 
   const [showAnalytics, setShowAnalytics] = useState<boolean>(false);
@@ -515,42 +515,71 @@ export const DashboardPage: React.FC = () => {
         </div>
       </div>
 
-      {/* Navigation Tabs - Modern Stripe Navigation Bar */}
-      <div className="flex border-b border-purple-950/20 gap-1 overflow-x-auto whitespace-nowrap pb-1 scrollbar-none select-none" id="tabs-menu-selector">
-        {[
-          { id: 'home', label: 'Painel Geral', icon: LayoutDashboard },
-          { id: 'driver-ai', label: 'Driver AI', icon: Sparkles },
-          { id: 'score', label: 'DriverScore', icon: Gauge },
-          { id: 'goals', label: 'Metas Inteligentes', icon: Award },
-          { id: 'pass', label: 'IA do Passe', icon: Percent },
-          { id: 'weekly', label: 'Planejador', icon: Calendar },
-          { id: 'demand', label: 'Mapa de Demanda', icon: Map },
-          { id: 'fuel', label: 'IA Combustível', icon: Fuel },
-          { id: 'maintenance', label: 'Manutenção', icon: Wrench },
-          { id: 'compare', label: 'Plataformas', icon: Layers }
-        ].map((tab) => {
-          const Icon = tab.icon;
-          const isActive = activeTab === tab.id;
-          return (
-            <button
-              key={tab.id}
-              id={`tab-btn-${tab.id}`}
-              onClick={() => setActiveTab(tab.id as any)}
-              className={`flex items-center gap-2 py-3 px-5 text-xs font-semibold border-b-2 transition-all relative cursor-pointer ${
-                isActive 
-                  ? 'border-purple-500 text-purple-300 bg-purple-950/10' 
-                  : 'border-transparent text-slate-400 hover:text-slate-200'
-              }`}
-            >
-              <Icon className={`w-3.5 h-3.5 ${isActive ? 'text-purple-400' : 'text-slate-400'}`} />
-              {tab.label}
-              {tab.id === 'driver-ai' && (
-                <span className="w-1.5 h-1.5 bg-purple-400 rounded-full animate-pulse absolute top-2 right-2"></span>
-              )}
-            </button>
-          );
-        })}
+      {/* Primary Tab Bar */}
+      <div className="flex border-b border-purple-950/20 gap-2 pb-1" id="primary-tabs-selector">
+        <button
+          onClick={() => setActiveTab('home')}
+          className={`flex items-center gap-2 py-3 px-6 text-sm font-bold border-b-2 transition-all cursor-pointer ${
+            activeTab === 'home'
+              ? 'border-purple-500 text-purple-300 bg-purple-950/10'
+              : 'border-transparent text-slate-400 hover:text-slate-200'
+          }`}
+        >
+          <LayoutDashboard className="w-4 h-4" />
+          Painel Geral
+        </button>
+        <button
+          onClick={() => {
+            if (activeTab === 'home') {
+              setActiveTab('analytics');
+            }
+          }}
+          className={`flex items-center gap-2 py-3 px-6 text-sm font-bold border-b-2 transition-all cursor-pointer ${
+            activeTab !== 'home'
+              ? 'border-purple-500 text-purple-300 bg-purple-950/10'
+              : 'border-transparent text-slate-400 hover:text-slate-200'
+          }`}
+        >
+          <Sparkles className="w-4 h-4" />
+          Análises Avançadas
+        </button>
       </div>
+
+      {/* Secondary (Advanced) Tab Bar */}
+      {activeTab !== 'home' && (
+        <div className="flex gap-1 overflow-x-auto whitespace-nowrap pb-2 border-b border-purple-950/10 scrollbar-none select-none" id="advanced-tabs-selector">
+          {[
+            { id: 'analytics', label: 'Analytics Completo', icon: TrendingUp },
+            { id: 'driver-ai', label: 'Driver AI', icon: Sparkles },
+            { id: 'score', label: 'DriverScore', icon: Gauge },
+            { id: 'goals', label: 'Metas Inteligentes', icon: Award },
+            { id: 'pass', label: 'IA do Passe', icon: Percent },
+            { id: 'weekly', label: 'Planejador', icon: Calendar },
+            { id: 'demand', label: 'Mapa de Demanda', icon: Map },
+            { id: 'fuel', label: 'IA Combustível', icon: Fuel },
+            { id: 'maintenance', label: 'Manutenção', icon: Wrench },
+            { id: 'compare', label: 'Plataformas', icon: Layers }
+          ].map((tab) => {
+            const Icon = tab.icon;
+            const isActive = activeTab === tab.id;
+            return (
+              <button
+                key={tab.id}
+                id={`tab-btn-${tab.id}`}
+                onClick={() => setActiveTab(tab.id as any)}
+                className={`flex items-center gap-1.5 py-2 px-4 text-xs font-semibold rounded-lg transition-all cursor-pointer ${
+                  isActive 
+                    ? 'bg-purple-600/30 text-purple-200 border border-purple-500/40 font-bold' 
+                    : 'text-slate-400 hover:text-slate-200 hover:bg-purple-950/10'
+                }`}
+              >
+                <Icon className="w-3.5 h-3.5" />
+                {tab.label}
+              </button>
+            );
+          })}
+        </div>
+      )}
 
       {/* TAB CONTENT AREA */}
       <AnimatePresence mode="wait">
@@ -565,7 +594,7 @@ export const DashboardPage: React.FC = () => {
           {/* =========================================================================
               MÓDULO 10 & HOME TAB: DASHBOARD EXECUTIVO
               ========================================================================= */}
-          {activeTab === 'home' && (
+          {(activeTab === 'home' || activeTab === 'analytics') && (
             <div className="space-y-8" id="home-dashboard-main-view">
               
               {/* Onboarding checklist */}
@@ -633,7 +662,7 @@ export const DashboardPage: React.FC = () => {
                 <div id="bento-dashboard-home" className="space-y-6">
                   
                   {/* MODE A: SIMPLE DASHBOARD */}
-                  {!showAnalytics ? (
+                  {activeTab === 'home' ? (
                     <div className="space-y-8">
                       {/* 6 Key Metrics Grid */}
                       <div className="grid grid-cols-2 lg:grid-cols-3 gap-4">
@@ -729,7 +758,7 @@ export const DashboardPage: React.FC = () => {
                       </div>
 
                       {/* Goal & Copiloto Cards Grid */}
-                      <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
+                      <div className={`grid grid-cols-1 ${activeTab === 'home' ? '' : 'md:grid-cols-2'} gap-6`}>
                         {/* META DO DIA CARD */}
                         <div className="p-6 rounded-2xl bg-[#0b0821]/80 border border-purple-950/30 flex flex-col justify-between min-h-[180px]">
                           <div className="flex justify-between items-start">
@@ -812,40 +841,42 @@ export const DashboardPage: React.FC = () => {
                         </div>
 
                         {/* COPILOTO IA CARD */}
-                        <div className={`p-6 rounded-2xl bg-[#0b0821]/80 border ${copilotoContent.learning ? 'border-purple-950/30' : copilotoContent.isPositive ? 'border-emerald-950/30 hover:border-emerald-800/40' : 'border-rose-950/30 hover:border-rose-800/40'} flex flex-col justify-between min-h-[180px] transition-colors`}>
-                          <div className="flex items-center gap-2">
-                            <Sparkles className={`w-4 h-4 animate-pulse ${copilotoContent.learning ? 'text-purple-400' : copilotoContent.isPositive ? 'text-emerald-400' : 'text-rose-400'}`} />
-                            <span className="text-xs font-bold font-mono tracking-wider uppercase">Copiloto Inteligente</span>
-                          </div>
+                        {activeTab !== 'home' && (
+                          <div className={`p-6 rounded-2xl bg-[#0b0821]/80 border ${copilotoContent.learning ? 'border-purple-950/30' : copilotoContent.isPositive ? 'border-emerald-950/30 hover:border-emerald-800/40' : 'border-rose-950/30 hover:border-rose-800/40'} flex flex-col justify-between min-h-[180px] transition-colors`}>
+                            <div className="flex items-center gap-2">
+                              <Sparkles className={`w-4 h-4 animate-pulse ${copilotoContent.learning ? 'text-purple-400' : copilotoContent.isPositive ? 'text-emerald-400' : 'text-rose-400'}`} />
+                              <span className="text-xs font-bold font-mono tracking-wider uppercase">Copiloto Inteligente</span>
+                            </div>
 
-                          {copilotoContent.learning ? (
-                            <div className="space-y-1 my-2">
-                              <p className="text-slate-300 text-xs leading-relaxed italic">
-                                "{copilotoContent.text}"
-                              </p>
-                              <span className="text-[9px] text-slate-500 block uppercase font-mono">Aguardando calibração operacional</span>
-                            </div>
-                          ) : (
-                            <div className="space-y-3 my-2">
-                              <p className={`text-sm font-bold ${copilotoContent.isPositive ? 'text-emerald-400' : 'text-rose-400'}`}>
-                                {copilotoContent.advice}
-                              </p>
-                              <div className="space-y-1.5">
-                                {copilotoContent.details?.map((detail: any, idx: number) => (
-                                  <div key={idx} className="flex justify-between text-[11px] font-mono">
-                                    <span className="text-slate-400">{detail.label}:</span>
-                                    <strong className="text-slate-200">{detail.value}</strong>
-                                  </div>
-                                ))}
+                            {copilotoContent.learning ? (
+                              <div className="space-y-1 my-2">
+                                <p className="text-slate-300 text-xs leading-relaxed italic">
+                                  "{copilotoContent.text}"
+                                </p>
+                                <span className="text-[9px] text-slate-500 block uppercase font-mono">Aguardando calibração operacional</span>
                               </div>
-                            </div>
-                          )}
-                          <div className="text-[9px] text-slate-500 font-mono">RECOMENDAÇÃO BASEADA EM DADOS REAIS</div>
-                        </div>
+                            ) : (
+                              <div className="space-y-3 my-2">
+                                <p className={`text-sm font-bold ${copilotoContent.isPositive ? 'text-emerald-400' : 'text-rose-400'}`}>
+                                  {copilotoContent.advice}
+                                </p>
+                                <div className="space-y-1.5">
+                                  {copilotoContent.details?.map((detail: any, idx: number) => (
+                                    <div key={idx} className="flex justify-between text-[11px] font-mono">
+                                      <span className="text-slate-400">{detail.label}:</span>
+                                      <strong className="text-slate-200">{detail.value}</strong>
+                                    </div>
+                                  ))}
+                                </div>
+                              </div>
+                            )}
+                            <div className="text-[9px] text-slate-500 font-mono">RECOMENDAÇÃO BASEADA EM DADOS REAIS</div>
+                          </div>
+                        )}
                       </div>
 
                       {/* Últimas Corridas List */}
-                      {lastFiveRides.length > 0 && (
+                      {lastFiveRides.length > 0 && activeTab !== 'home' && (
                         <div className="space-y-4">
                           <h3 className="text-xs font-bold font-mono tracking-wider text-purple-400 uppercase">Últimas Corridas</h3>
                           <div className="space-y-3">
@@ -891,24 +922,26 @@ export const DashboardPage: React.FC = () => {
                       )}
 
                       {/* VER ANALYTICS COMPLETO BUTTON */}
-                      <div className="pt-4">
-                        <button
-                          onClick={() => {
-                            setDashboardPeriod('today');
-                            setShowAnalytics(true);
-                          }}
-                          className="w-full py-4 bg-gradient-to-r from-purple-600 to-indigo-600 hover:from-purple-500 hover:to-indigo-500 text-white font-extrabold text-sm rounded-xl transition-all flex items-center justify-center gap-2 cursor-pointer shadow-lg hover:shadow-purple-950/20 active:scale-95"
-                        >
-                          Ver Analytics Completo <ArrowRight className="w-4 h-4" />
-                        </button>
-                      </div>
+                      {activeTab === 'home' && (
+                        <div className="pt-4">
+                          <button
+                            onClick={() => {
+                              setDashboardPeriod('today');
+                              setActiveTab('analytics');
+                            }}
+                            className="w-full py-4 bg-gradient-to-r from-purple-600 to-indigo-600 hover:from-purple-500 hover:to-indigo-500 text-white font-extrabold text-sm rounded-xl transition-all flex items-center justify-center gap-2 cursor-pointer shadow-lg hover:shadow-purple-950/20 active:scale-95"
+                          >
+                            Ver Analytics Completo <ArrowRight className="w-4 h-4" />
+                          </button>
+                        </div>
+                      )}
                     </div>
                   ) : (
                     /* MODE B: DETAILED ANALYTICS (expanded view) */
                     <div className="space-y-8">
                       <div className="flex justify-between items-center border-b border-purple-950/20 pb-4">
                         <button
-                          onClick={() => setShowAnalytics(false)}
+                          onClick={() => setActiveTab('home')}
                           className="flex items-center gap-2 px-4 py-2 rounded-xl bg-purple-950/20 hover:bg-purple-950/40 border border-purple-900/30 text-purple-300 text-xs font-bold transition-all cursor-pointer"
                         >
                           ← Voltar para Painel Geral

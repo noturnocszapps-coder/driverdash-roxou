@@ -51,6 +51,7 @@ export interface JourneyContextType {
   idleStatus: 'moving' | 'stopped';
   
   // GPS Engine States
+  isTrackingActive: boolean;
   gpsStatus: 'Aguardando permissão' | 'Solicitando primeira posição' | 'GPS ativo' | 'GPS sem sinal' | 'GPS erro' | 'GPS negado' | 'Sensor inativo';
   permissionState: 'granted' | 'prompt' | 'denied' | 'unknown';
   lastCoord: { lat: number; lng: number; accuracy: number; speed: number; heading: number | null; altitude: number | null; timestamp: number } | null;
