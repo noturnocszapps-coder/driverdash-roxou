@@ -5,7 +5,7 @@ import { supabase } from '../modules/shared/supabase.helpers';
 import { 
   LayoutDashboard, DollarSign, Car, AlertTriangle, Users, 
   LogOut, Menu, X, Database, ShieldAlert, Award, Copy, Check, TrendingUp, Sparkles, Bell, MapPin, Map,
-  Ticket, Settings
+  Ticket, Settings, ArrowLeft
 } from 'lucide-react';
 import { motion, AnimatePresence } from 'motion/react';
 import { useAuth } from '../modules/auth/auth.hooks';
@@ -405,13 +405,24 @@ ALTER TABLE IF EXISTS public.profiles ENABLE ROW LEVEL SECURITY;
       {/* Top Header & Header - Mobile */}
       <header className="md:hidden flex items-center justify-between bg-[#0a061b] border-b border-purple-950/30 px-6 h-16 z-20 shrink-0">
         <div className="flex items-center gap-2">
-          <div className="w-8 h-8 rounded-lg bg-gradient-to-tr from-purple-600 to-indigo-500 shadow-[0_0_10px_rgba(168,85,247,0.4)] flex items-center justify-center font-bold text-white text-md font-mono">
-            R
-          </div>
-          <div>
-            <h1 className="text-sm font-bold text-white whitespace-nowrap">DriverDash</h1>
-            <p className="text-[8px] text-purple-400 font-mono tracking-wider font-semibold uppercase">Roxou</p>
-          </div>
+          {location.pathname !== '/dashboard' ? (
+            <button
+              onClick={() => navigate('/dashboard')}
+              className="flex items-center gap-1.5 px-3 py-1.5 bg-[#110729]/80 border border-purple-950/45 rounded-xl text-purple-300 hover:text-white font-bold text-xs active:scale-95 cursor-pointer transition-all"
+            >
+              <ArrowLeft className="w-3.5 h-3.5 text-purple-400" /> Voltar
+            </button>
+          ) : (
+            <>
+              <div className="w-8 h-8 rounded-lg bg-gradient-to-tr from-purple-600 to-indigo-500 shadow-[0_0_10px_rgba(168,85,247,0.4)] flex items-center justify-center font-bold text-white text-md font-mono">
+                R
+              </div>
+              <div>
+                <h1 className="text-sm font-bold text-white whitespace-nowrap">DriverDash</h1>
+                <p className="text-[8px] text-purple-400 font-mono tracking-wider font-semibold uppercase">Roxou</p>
+              </div>
+            </>
+          )}
         </div>
 
         <div className="flex items-center gap-3">
@@ -508,6 +519,30 @@ ALTER TABLE IF EXISTS public.profiles ENABLE ROW LEVEL SECURITY;
 
       {/* Main Content Pane */}
       <main className="flex-1 overflow-y-auto p-4 md:p-8 z-10 relative">
+        {dbStatus === 'fallback' && (
+          <div className="mb-6 p-4 rounded-2xl bg-amber-950/20 border border-amber-500/30 text-amber-300 text-xs flex flex-col sm:flex-row items-start sm:items-center justify-between gap-4">
+            <div className="flex items-start sm:items-center gap-2.5">
+              <ShieldAlert className="w-5 h-5 text-amber-500 shrink-0 animate-pulse mt-0.5 sm:mt-0" />
+              <div>
+                <p className="font-bold">Sem conexão — dados locais ativos</p>
+                <p className="text-slate-400 mt-0.5 text-[11px]">Suas alterações serão salvas localmente e sincronizadas quando a internet retornar.</p>
+              </div>
+            </div>
+            <span className="px-2 py-1 rounded bg-amber-950 text-amber-400 font-bold border border-amber-900/30 text-[9px] uppercase font-mono select-none">Offline</span>
+          </div>
+        )}
+
+        {location.pathname !== '/dashboard' && (
+          <div className="hidden md:block mb-6">
+            <button
+              onClick={() => navigate('/dashboard')}
+              className="inline-flex items-center gap-2 px-3 py-1.5 text-xs font-semibold bg-[#0e0924]/60 hover:bg-purple-950/30 text-purple-300 hover:text-white border border-purple-950/40 hover:border-purple-800/40 rounded-xl transition-all cursor-pointer"
+            >
+              <ArrowLeft className="w-3.5 h-3.5" /> Voltar ao Painel Geral
+            </button>
+          </div>
+        )}
+
         {children}
       </main>
 

@@ -288,6 +288,18 @@ export const AdminPage: React.FC = () => {
     return matchesSearch && matchesPlan && matchesStatus && matchesRole;
   });
 
+  if (dbStatus !== 'connected') {
+    return (
+      <div className="p-8 text-center space-y-4 max-w-md mx-auto my-12 bg-[#0e0924]/60 border border-purple-950/40 rounded-2xl">
+        <ShieldAlert className="w-12 h-12 text-amber-500 mx-auto animate-pulse" />
+        <h2 className="text-xl font-bold text-white font-display">Painel Administrativo Suspenso</h2>
+        <p className="text-slate-400 text-xs leading-relaxed">
+          O Painel de Administração não pode ser acessado em modo offline (Armazenamento Local). Garanta uma conexão ativa com o Supabase para gerenciar usuários, planos e ocorrências.
+        </p>
+      </div>
+    );
+  }
+
   return (
     <div className="space-y-6">
       

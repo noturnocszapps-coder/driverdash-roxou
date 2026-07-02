@@ -4,7 +4,7 @@ import { Check, ShieldCheck, Zap, Sparkles, Coins, HelpCircle, Copy, CheckCircle
 import { motion, AnimatePresence } from 'motion/react';
 
 export const PlansPage: React.FC = () => {
-  const { profile, requestUpgrade, payments } = useApp();
+  const { profile, requestUpgrade, payments, dbStatus } = useApp();
   const [copied, setCopied] = useState(false);
   const [selectedPlan, setSelectedPlan] = useState<'pro' | 'pro_plus' | null>(null);
   const [requestSent, setRequestSent] = useState(false);
@@ -180,7 +180,7 @@ export const PlansPage: React.FC = () => {
               ) : (
                 <button
                   onClick={() => handleOpenUpgradeModal(pl.id)}
-                  disabled={pl.id === 'free' || !!pendingPayment}
+                  disabled={pl.id === 'free' || !!pendingPayment || dbStatus !== 'connected'}
                   className={`w-full py-3 rounded-xl text-xs font-bold tracking-wide cursor-pointer transition-transform active:scale-95 flex items-center justify-center ${
                     pl.id === 'free'
                       ? 'bg-purple-950/10 border border-purple-950/30 text-purple-300/40'
@@ -189,7 +189,7 @@ export const PlansPage: React.FC = () => {
                       : 'bg-purple-600 hover:bg-purple-500 text-white'
                   } disabled:opacity-40 disabled:cursor-not-allowed`}
                 >
-                  {pl.cta}
+                  {dbStatus !== 'connected' ? 'Indisponível Offline' : pl.cta}
                 </button>
               )}
             </div>

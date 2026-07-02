@@ -27,13 +27,13 @@ export const calculateFinancialMetrics = (
   filteredEarnings: Earning[],
   filteredExpenses: Expense[]
 ): FinancialMetrics => {
-  const totalRev = filteredEarnings.reduce((sum, e) => sum + Number(e.gross_amount), 0);
-  const totalExp = filteredExpenses.reduce((sum, exp) => sum + Number(exp.amount), 0);
+  const totalRev = filteredEarnings.reduce((sum, e) => sum + Number(e?.gross_amount || 0), 0);
+  const totalExp = filteredExpenses.reduce((sum, exp) => sum + Number(exp?.amount || 0), 0);
   const net = totalRev - totalExp;
-  const totalDist = filteredEarnings.reduce((sum, e) => sum + Number(e.total_km), 0);
-  const rides = filteredEarnings.reduce((sum, e) => sum + Number(e.rides_count), 0);
-  const timeOnline = filteredEarnings.reduce((sum, e) => sum + Number(e.online_minutes), 0);
-  const timeWaiting = filteredEarnings.reduce((sum, e) => sum + Number(e.waiting_minutes), 0);
+  const totalDist = filteredEarnings.reduce((sum, e) => sum + Number(e?.total_km || 0), 0);
+  const rides = filteredEarnings.reduce((sum, e) => sum + Number(e?.rides_count || 0), 0);
+  const timeOnline = filteredEarnings.reduce((sum, e) => sum + Number(e?.online_minutes || 0), 0);
+  const timeWaiting = filteredEarnings.reduce((sum, e) => sum + Number(e?.waiting_minutes || 0), 0);
 
   const costPerKm = totalDist > 0 ? totalExp / totalDist : 0;
   const profitPerKm = totalDist > 0 ? net / totalDist : 0;

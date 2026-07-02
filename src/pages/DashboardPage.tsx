@@ -341,6 +341,11 @@ export const DashboardPage: React.FC = () => {
     return result;
   }, [rideLogs, expenses, isNoData]);
 
+  const isPeriodNoData = (p: 'today' | 'yesterday' | 'week' | 'month' | 'year' | 'total') => {
+    const stats = periodStats[p];
+    return !stats || (stats.corridas === 0 && stats.hours === 0 && stats.km === 0);
+  };
+
   // Onboarding
   const hasVehicle = vehicle !== null;
   const hasCosts = vehicleCostSettings !== null;
@@ -685,9 +690,11 @@ export const DashboardPage: React.FC = () => {
                           </div>
                           <div>
                             <h3 className="text-lg sm:text-xl font-bold text-white tracking-tight font-mono">
-                              {formatCurrency(periodStats['today'].receita)}
+                              {isPeriodNoData('today') ? "--" : formatCurrency(periodStats['today'].receita)}
                             </h3>
-                            <p className="text-[9px] text-slate-400 truncate mt-0.5">Faturamento bruto do dia</p>
+                            <p className="text-[9px] text-slate-400 truncate mt-0.5">
+                              {isPeriodNoData('today') ? "Sem dados suficientes" : "Faturamento bruto do dia"}
+                            </p>
                           </div>
                         </div>
 
@@ -699,9 +706,11 @@ export const DashboardPage: React.FC = () => {
                           </div>
                           <div>
                             <h3 className="text-lg sm:text-xl font-bold text-emerald-400 tracking-tight font-mono">
-                              {formatCurrency(periodStats['today'].lucro)}
+                              {isPeriodNoData('today') ? "--" : formatCurrency(periodStats['today'].lucro)}
                             </h3>
-                            <p className="text-[9px] text-slate-400 truncate mt-0.5">Sobra limpa no bolso hoje</p>
+                            <p className="text-[9px] text-slate-400 truncate mt-0.5">
+                              {isPeriodNoData('today') ? "Sem dados suficientes" : "Sobra limpa no bolso hoje"}
+                            </p>
                           </div>
                         </div>
 
@@ -713,9 +722,11 @@ export const DashboardPage: React.FC = () => {
                           </div>
                           <div>
                             <h3 className="text-lg sm:text-xl font-bold text-white tracking-tight font-mono">
-                              {periodStats['today'].km.toFixed(1)} km
+                              {isPeriodNoData('today') ? "-- km" : `${periodStats['today'].km.toFixed(1)} km`}
                             </h3>
-                            <p className="text-[9px] text-slate-400 truncate mt-0.5">Distância percorrida hoje</p>
+                            <p className="text-[9px] text-slate-400 truncate mt-0.5">
+                              {isPeriodNoData('today') ? "Sem dados suficientes" : "Distância percorrida hoje"}
+                            </p>
                           </div>
                         </div>
 
@@ -727,11 +738,13 @@ export const DashboardPage: React.FC = () => {
                           </div>
                           <div>
                             <h3 className="text-lg sm:text-xl font-bold text-white tracking-tight font-mono">
-                              {periodStats['today'].hours >= 1 
+                              {isPeriodNoData('today') ? "-- h" : (periodStats['today'].hours >= 1 
                                 ? `${periodStats['today'].hours.toFixed(1)} h` 
-                                : `${Math.round(periodStats['today'].hours * 60)} min`}
+                                : `${Math.round(periodStats['today'].hours * 60)} min`)}
                             </h3>
-                            <p className="text-[9px] text-slate-400 truncate mt-0.5">Duração ativa hoje</p>
+                            <p className="text-[9px] text-slate-400 truncate mt-0.5">
+                              {isPeriodNoData('today') ? "Sem dados suficientes" : "Duração ativa hoje"}
+                            </p>
                           </div>
                         </div>
 
@@ -743,11 +756,13 @@ export const DashboardPage: React.FC = () => {
                           </div>
                           <div>
                             <h3 className="text-lg sm:text-xl font-bold text-white tracking-tight font-mono">
-                              {periodStats['today'].hours > 0 
+                              {isPeriodNoData('today') ? "--" : (periodStats['today'].hours > 0 
                                 ? formatCurrency(periodStats['today'].receita / periodStats['today'].hours) 
-                                : formatCurrency(0)}
+                                : formatCurrency(0))}
                             </h3>
-                            <p className="text-[9px] text-slate-400 truncate mt-0.5">Eficiência por hora logada</p>
+                            <p className="text-[9px] text-slate-400 truncate mt-0.5">
+                              {isPeriodNoData('today') ? "Sem dados suficientes" : "Eficiência por hora logada"}
+                            </p>
                           </div>
                         </div>
 
@@ -759,11 +774,13 @@ export const DashboardPage: React.FC = () => {
                           </div>
                           <div>
                             <h3 className="text-lg sm:text-xl font-bold text-white tracking-tight font-mono">
-                              {periodStats['today'].km > 0 
+                              {isPeriodNoData('today') ? "--" : (periodStats['today'].km > 0 
                                 ? formatCurrency(periodStats['today'].receita / periodStats['today'].km) 
-                                : formatCurrency(0)}
+                                : formatCurrency(0))}
                             </h3>
-                            <p className="text-[9px] text-slate-400 truncate mt-0.5">Média por quilômetro rodado</p>
+                            <p className="text-[9px] text-slate-400 truncate mt-0.5">
+                              {isPeriodNoData('today') ? "Sem dados suficientes" : "Média por quilômetro rodado"}
+                            </p>
                           </div>
                         </div>
                       </div>
@@ -1007,9 +1024,11 @@ export const DashboardPage: React.FC = () => {
                           </div>
                           <div>
                             <h3 className="text-xl font-bold text-white tracking-tight font-mono">
-                              {formatCurrency(periodStats[dashboardPeriod].receita)}
+                              {isPeriodNoData(dashboardPeriod) ? "--" : formatCurrency(periodStats[dashboardPeriod].receita)}
                             </h3>
-                            <p className="text-[9px] text-slate-400 truncate mt-0.5">Faturamento bruto consolidado</p>
+                            <p className="text-[9px] text-slate-400 truncate mt-0.5">
+                              {isPeriodNoData(dashboardPeriod) ? "Sem dados suficientes" : "Faturamento bruto consolidado"}
+                            </p>
                           </div>
                         </div>
 
@@ -1028,9 +1047,11 @@ export const DashboardPage: React.FC = () => {
                           </div>
                           <div>
                             <h3 className="text-xl font-bold text-rose-400 tracking-tight font-mono">
-                              {formatCurrency(periodStats[dashboardPeriod].despesas)}
+                              {isPeriodNoData(dashboardPeriod) ? "--" : formatCurrency(periodStats[dashboardPeriod].despesas)}
                             </h3>
-                            <p className="text-[9px] text-slate-400 truncate mt-0.5">Combustível, desgaste & despesas</p>
+                            <p className="text-[9px] text-slate-400 truncate mt-0.5">
+                              {isPeriodNoData(dashboardPeriod) ? "Sem dados suficientes" : "Combustível, desgaste & despesas"}
+                            </p>
                           </div>
                         </div>
 
@@ -1049,9 +1070,11 @@ export const DashboardPage: React.FC = () => {
                           </div>
                           <div>
                             <h3 className="text-xl font-bold text-emerald-400 tracking-tight font-mono">
-                              {formatCurrency(periodStats[dashboardPeriod].lucro)}
+                              {isPeriodNoData(dashboardPeriod) ? "--" : formatCurrency(periodStats[dashboardPeriod].lucro)}
                             </h3>
-                            <p className="text-[9px] text-slate-400 truncate mt-0.5">Sobra limpa no seu bolso</p>
+                            <p className="text-[9px] text-slate-400 truncate mt-0.5">
+                              {isPeriodNoData(dashboardPeriod) ? "Sem dados suficientes" : "Sobra limpa no seu bolso"}
+                            </p>
                           </div>
                         </div>
 
@@ -1070,9 +1093,11 @@ export const DashboardPage: React.FC = () => {
                           </div>
                           <div>
                             <h3 className="text-xl font-bold text-white tracking-tight font-mono">
-                              {periodStats[dashboardPeriod].km.toFixed(1)} km
+                              {isPeriodNoData(dashboardPeriod) ? "-- km" : `${periodStats[dashboardPeriod].km.toFixed(1)} km`}
                             </h3>
-                            <p className="text-[9px] text-slate-400 truncate mt-0.5">Distância total percorrida</p>
+                            <p className="text-[9px] text-slate-400 truncate mt-0.5">
+                              {isPeriodNoData(dashboardPeriod) ? "Sem dados suficientes" : "Distância total percorrida"}
+                            </p>
                           </div>
                         </div>
 
@@ -1091,9 +1116,11 @@ export const DashboardPage: React.FC = () => {
                           </div>
                           <div>
                             <h3 className="text-xl font-bold text-white tracking-tight font-mono">
-                              {periodStats[dashboardPeriod].hours.toFixed(1)} h
+                              {isPeriodNoData(dashboardPeriod) ? "-- h" : `${periodStats[dashboardPeriod].hours.toFixed(1)} h`}
                             </h3>
-                            <p className="text-[9px] text-slate-400 truncate mt-0.5">Duração total logado no app</p>
+                            <p className="text-[9px] text-slate-400 truncate mt-0.5">
+                              {isPeriodNoData(dashboardPeriod) ? "Sem dados suficientes" : "Duração total logado no app"}
+                            </p>
                           </div>
                         </div>
 
@@ -1105,9 +1132,11 @@ export const DashboardPage: React.FC = () => {
                           </div>
                           <div>
                             <h3 className="text-xl font-bold text-white tracking-tight font-mono">
-                              {periodStats[dashboardPeriod].jornadas}
+                              {isPeriodNoData(dashboardPeriod) ? "--" : periodStats[dashboardPeriod].jornadas}
                             </h3>
-                            <p className="text-[9px] text-slate-400 truncate mt-0.5">Expedientes iniciados</p>
+                            <p className="text-[9px] text-slate-400 truncate mt-0.5">
+                              {isPeriodNoData(dashboardPeriod) ? "Sem dados suficientes" : "Expedientes iniciados"}
+                            </p>
                           </div>
                         </div>
 
@@ -1119,9 +1148,11 @@ export const DashboardPage: React.FC = () => {
                           </div>
                           <div>
                             <h3 className="text-xl font-bold text-white tracking-tight font-mono">
-                              {periodStats[dashboardPeriod].corridas}
+                              {isPeriodNoData(dashboardPeriod) ? "--" : periodStats[dashboardPeriod].corridas}
                             </h3>
-                            <p className="text-[9px] text-slate-400 truncate mt-0.5">Viagens produtivas registradas</p>
+                            <p className="text-[9px] text-slate-400 truncate mt-0.5">
+                              {isPeriodNoData(dashboardPeriod) ? "Sem dados suficientes" : "Viagens produtivas registradas"}
+                            </p>
                           </div>
                         </div>
 
@@ -1133,9 +1164,11 @@ export const DashboardPage: React.FC = () => {
                           </div>
                           <div>
                             <h3 className="text-xl font-bold text-white tracking-tight font-mono">
-                              {periodStats[dashboardPeriod].velMedia} km/h
+                              {isPeriodNoData(dashboardPeriod) ? "-- km/h" : `${periodStats[dashboardPeriod].velMedia} km/h`}
                             </h3>
-                            <p className="text-[9px] text-slate-400 truncate mt-0.5">Média de cruzeiro do GPS</p>
+                            <p className="text-[9px] text-slate-400 truncate mt-0.5">
+                              {isPeriodNoData(dashboardPeriod) ? "Sem dados suficientes" : "Média de cruzeiro do GPS"}
+                            </p>
                           </div>
                         </div>
 
@@ -1147,9 +1180,11 @@ export const DashboardPage: React.FC = () => {
                           </div>
                           <div>
                             <h3 className="text-xl font-bold text-slate-300 tracking-tight font-mono">
-                              {periodStats[dashboardPeriod].tempoParado} min
+                              {isPeriodNoData(dashboardPeriod) ? "-- min" : `${periodStats[dashboardPeriod].tempoParado} min`}
                             </h3>
-                            <p className="text-[9px] text-slate-400 truncate mt-0.5">Tempo logado parado / ocioso</p>
+                            <p className="text-[9px] text-slate-400 truncate mt-0.5">
+                              {isPeriodNoData(dashboardPeriod) ? "Sem dados suficientes" : "Tempo logado parado / ocioso"}
+                            </p>
                           </div>
                         </div>
 
