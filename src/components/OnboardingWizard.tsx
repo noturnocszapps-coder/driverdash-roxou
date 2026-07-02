@@ -1,4 +1,4 @@
-import React, { useState } from 'react';
+import React, { useState, useEffect, useRef } from 'react';
 import { motion, AnimatePresence } from 'motion/react';
 import { 
   Car, 
@@ -18,14 +18,17 @@ import {
 } from 'lucide-react';
 import { useApp } from '../context/AppContext';
 import { driverProfileService, DriverProfilePreferences } from '../modules/copilot-intelligence/driverProfile.service';
+import { onboardingService, OnboardingProgress } from '../modules/onboarding/onboarding.service';
 
 interface OnboardingWizardProps {
   onComplete?: () => void;
 }
 
 export const OnboardingWizard: React.FC<OnboardingWizardProps> = ({ onComplete }) => {
-  const { upsertVehicle, upsertVehicleCostSettings, completeOnboarding } = useApp();
+  const { user, dbStatus, upsertVehicle, upsertVehicleCostSettings, completeOnboarding } = useApp();
   const [step, setStep] = useState(1);
+  const [isLoadingProgress, setIsLoadingProgress] = useState(true);
+  const [saveStatus, setSaveStatus] = useState<'idle' | 'saving' | 'saved' | 'error'>('idle');
   
   // Step 1: Vehicle ownership
   const [ownership, setOwnership] = useState<'own' | 'rented'>('own');
@@ -50,6 +53,173 @@ export const OnboardingWizard: React.FC<OnboardingWizardProps> = ({ onComplete }
   const [model, setModel] = useState('Onix');
   const [year, setYear] = useState('2022');
 
+  const isLoadedRef = useRef(false);
+
+  // 1. Dynamic priority state recovery (Supabase -> localStorage -> defaults)
+  useEffect(() => {
+    if (!user) return;
+    
+    const loadSavedProgress = async () => {
+      setIsLoadingProgress(true);
+      try {
+        const progress = await onboardingService.loadProgress(user.id, dbStatus === 'connected');
+        
+        // Recover values gracefully if they are valid
+        if (progress.current_step) setStep(progress.current_step);
+        if (progress.ownershipType) setOwnership(progress.ownershipType);
+        if (progress.fuelType) setFuel(progress.fuelType);
+        if (progress.platforms && progress.platforms.length > 0) setPlatforms(progress.platforms);
+        if (progress.daysPerWeek) setDays(progress.daysPerWeek);
+        if (progress.hoursPerDay) setHours(progress.hoursPerDay);
+        if (progress.objective) setGoal(progress.objective);
+        if (progress.brand) setBrand(progress.brand);
+        if (progress.model) setModel(progress.model);
+        if (progress.year) setYear(progress.year);
+        
+        if (progress.current_step && progress.current_step > 1) {
+          console.log('[ONBOARDING] Recovery', progress.current_step);
+        }
+      } catch (err) {
+        console.error('Error recovering onboarding progress:', err);
+      } finally {
+        setIsLoadingProgress(false);
+        isLoadedRef.current = true;
+      }
+    };
+    
+    loadSavedProgress();
+  }, [user, dbStatus]);
+
+  // 2. Debounced auto-saving for all fields
+  useEffect(() => {
+    if (isLoadingProgress || !user || !isLoadedRef.current) return;
+
+    setSaveStatus('saving');
+
+    const progressPayload: OnboardingProgress = {
+      ownershipType: ownership,
+      fuelType: fuel,
+      platforms,
+      daysPerWeek: days,
+      hoursPerDay: hours,
+      objective: goal,
+      brand,
+      model,
+      year,
+      current_step: step,
+      onboarding_completed: false
+    };
+
+    const timer = setTimeout(async () => {
+      const isDbConnected = dbStatus === 'connected';
+      
+      // Auto-save progress to both LocalStorage and Supabase
+      const synced = await onboardingService.saveProgress(user.id, progressPayload, isDbConnected);
+      
+      // Incrementally update vehicle table if Step 1 details are valid
+      const yearNum = Number(year);
+      if (brand.trim() !== '' && model.trim() !== '' && !isNaN(yearNum) && yearNum >= 1980 && yearNum <= 2027) {
+        try {
+          const isElectric = fuel === 'electric';
+          const vehiclePayload = {
+            brand: brand,
+            model: model,
+            year: yearNum,
+            plate_optional: '',
+            fuel_type: fuel,
+            km_per_liter: isElectric ? 0 : 10,
+            ownership_type: ownership,
+            weekly_km_limit: ownership === 'rented' ? 1000 : undefined,
+            monthly_km_limit: ownership === 'rented' ? 4000 : undefined,
+            rental_amount: ownership === 'rented' ? 550 : 0,
+            rental_period: 'weekly' as const,
+            rental_food_daily: 0,
+            rental_damage_monthly: 0,
+            rental_cleaning_monthly: 0,
+            electric_consumption_kwh_100km: isElectric ? 16 : undefined,
+            electricity_price_kwh: isElectric ? 0.85 : undefined,
+            charging_type: isElectric ? 'residential' as const : null
+          };
+          await upsertVehicle(vehiclePayload);
+        } catch (e) {
+          console.warn('Incremental vehicle upsert missed:', e);
+        }
+      }
+
+      if (synced) {
+        setSaveStatus('saved');
+      } else {
+        setSaveStatus('error');
+      }
+    }, 500);
+
+    return () => clearTimeout(timer);
+  }, [ownership, fuel, platforms, days, hours, goal, brand, model, year, step, isLoadingProgress, user, dbStatus]);
+
+  // Clear "Configuração salva" feedback after 2 seconds
+  useEffect(() => {
+    if (saveStatus === 'saved') {
+      const timer = setTimeout(() => {
+        setSaveStatus('idle');
+      }, 2000);
+      return () => clearTimeout(timer);
+    }
+  }, [saveStatus]);
+
+  // 3. Background/offline sync retry listener
+  useEffect(() => {
+    if (!user) return;
+
+    const attemptSync = async () => {
+      const isDbConnected = dbStatus === 'connected';
+      if (isDbConnected) {
+        const synced = await onboardingService.syncPendingProgress(user.id, isDbConnected);
+        if (synced) {
+          setSaveStatus('saved');
+        }
+      }
+    };
+
+    window.addEventListener('online', attemptSync);
+    const interval = setInterval(attemptSync, 15000); // retry every 15 seconds
+
+    return () => {
+      window.removeEventListener('online', attemptSync);
+      clearInterval(interval);
+    };
+  }, [user, dbStatus]);
+
+  // 4. Validations
+  const isStepValid = () => {
+    if (step === 1) {
+      const yearNum = Number(year);
+      return (
+        brand.trim() !== '' &&
+        model.trim() !== '' &&
+        !isNaN(yearNum) &&
+        yearNum >= 1980 &&
+        yearNum <= 2027
+      );
+    }
+    if (step === 3) {
+      return platforms.length > 0;
+    }
+    return true;
+  };
+
+  // Get estimated remaining time
+  const getEstimatedTime = () => {
+    switch (step) {
+      case 1: return '≈ 50 segundos restantes';
+      case 2: return '≈ 40 segundos restantes';
+      case 3: return '≈ 30 segundos restantes';
+      case 4: return '≈ 20 segundos restantes';
+      case 5: return '≈ 10 segundos restantes';
+      case 6: return '≈ 5 segundos restantes';
+      default: return '≈ 30 segundos restantes';
+    }
+  };
+
   const togglePlatform = (p: string) => {
     if (platforms.includes(p)) {
       if (platforms.length > 1) {
@@ -61,6 +231,7 @@ export const OnboardingWizard: React.FC<OnboardingWizardProps> = ({ onComplete }
   };
 
   const handleNext = () => {
+    if (!isStepValid()) return;
     if (step < 6) {
       setStep(step + 1);
     } else {
@@ -76,6 +247,8 @@ export const OnboardingWizard: React.FC<OnboardingWizardProps> = ({ onComplete }
 
   const handleFinish = async () => {
     try {
+      if (!user) return;
+
       // 1. Construct preferences object
       const prefs: DriverProfilePreferences = {
         ownershipType: ownership,
@@ -135,8 +308,27 @@ export const OnboardingWizard: React.FC<OnboardingWizardProps> = ({ onComplete }
       // 4. Save driver profile preferences to local storage
       driverProfileService.savePreferences(prefs);
 
-      // 5. Set completed status in DB and Context
+      // 5. Update final completed progress payload
+      const progressPayload: OnboardingProgress = {
+        ownershipType: ownership,
+        fuelType: fuel,
+        platforms,
+        daysPerWeek: days,
+        hoursPerDay: hours,
+        objective: goal,
+        brand,
+        model,
+        year,
+        current_step: step,
+        onboarding_completed: true
+      };
+
+      await onboardingService.saveProgress(user.id, progressPayload, dbStatus === 'connected');
+
+      // 6. Set completed status in DB and Context
       await completeOnboarding();
+
+      console.log('[ONBOARDING] Completed');
 
       if (onComplete) {
         onComplete();
@@ -159,20 +351,159 @@ export const OnboardingWizard: React.FC<OnboardingWizardProps> = ({ onComplete }
         paddingRight: 'calc(1rem + env(safe-area-inset-right))',
       }}
     >
-      <div className="w-full max-w-xl my-auto bg-gradient-to-b from-[#110729] to-[#04010b] border border-purple-500/30 rounded-3xl p-6 sm:p-8 shadow-[0_0_50px_rgba(147,51,234,0.15)] relative overflow-hidden">
+      <style>{`
+        @media (max-height: 720px) {
+          .onboarding-card {
+            padding: 1.25rem !important;
+            border-radius: 1.5rem !important;
+          }
+          .onboarding-progress-spacing {
+            margin-bottom: 0.75rem !important;
+          }
+          .onboarding-step-spacing {
+            gap: 0.75rem !important;
+          }
+          .onboarding-container-minh {
+            min-height: 240px !important;
+          }
+          .onboarding-footer-spacing {
+            margin-top: 1rem !important;
+            padding-top: 0.75rem !important;
+          }
+        }
+
+        @media (max-height: 600px) {
+          .onboarding-card {
+            padding: 1rem !important;
+            border-radius: 1.25rem !important;
+          }
+          .onboarding-progress-spacing {
+            margin-bottom: 0.5rem !important;
+          }
+          .onboarding-step-spacing {
+            gap: 0.5rem !important;
+          }
+          .onboarding-container-minh {
+            min-height: 180px !important;
+          }
+          .onboarding-footer-spacing {
+            margin-top: 0.75rem !important;
+            padding-top: 0.5rem !important;
+          }
+          .onboarding-grid-gap {
+            gap: 0.5rem !important;
+            padding-top: 0.25rem !important;
+          }
+          .onboarding-flex-gap {
+            gap: 0.375rem !important;
+            padding-top: 0.5rem !important;
+          }
+          .onboarding-btn-p1 {
+            padding: 0.75rem !important;
+            border-radius: 0.75rem !important;
+          }
+          .onboarding-btn-p1 .w-10 {
+            width: 1.75rem !important;
+            height: 1.75rem !important;
+            margin-bottom: 0.25rem !important;
+          }
+          .onboarding-btn-p1 .w-10 svg {
+            width: 1rem !important;
+            height: 1rem !important;
+          }
+          .onboarding-btn-p1 .text-sm {
+            font-size: 0.75rem !important;
+          }
+          .onboarding-btn-p1 .text-\\[11px\\] {
+            font-size: 9px !important;
+            line-height: 1.15 !important;
+          }
+          .onboarding-input {
+            padding: 0.5rem !important;
+          }
+          .onboarding-btn-p2 {
+            padding: 0.5rem !important;
+            border-radius: 0.75rem !important;
+          }
+          .onboarding-btn-p2 .text-xl {
+            font-size: 1.125rem !important;
+            margin-bottom: 0px !important;
+          }
+          .onboarding-btn-p2 .text-xs {
+            font-size: 10px !important;
+          }
+          .onboarding-btn-p3 {
+            padding: 0.5rem 0.75rem !important;
+            border-radius: 0.75rem !important;
+          }
+          .onboarding-btn-p3 .text-xs {
+            font-size: 10px !important;
+          }
+          .onboarding-btn-p3 .text-\\[10px\\] {
+            font-size: 8px !important;
+          }
+          .onboarding-btn-p3 .w-5 {
+            width: 1rem !important;
+            height: 1rem !important;
+          }
+          .onboarding-flex-btn {
+            width: 2.25rem !important;
+            height: 2.25rem !important;
+            border-radius: 0.5rem !important;
+            font-size: 11px !important;
+          }
+          .onboarding-btn-p6 {
+            padding: 0.375rem 0.75rem !important;
+            border-radius: 0.75rem !important;
+          }
+          .onboarding-btn-p6 .text-xl {
+            font-size: 1.125rem !important;
+          }
+          .onboarding-btn-p6 .text-xs {
+            font-size: 10px !important;
+          }
+          .onboarding-btn-p6 .text-\\[10px\\] {
+            font-size: 8px !important;
+          }
+          h3.text-lg {
+            font-size: 0.95rem !important;
+          }
+          h3.text-lg svg {
+            width: 1.125rem !important;
+            height: 1.125rem !important;
+          }
+          p.text-xs {
+            font-size: 10px !important;
+            line-height: 1.25 !important;
+          }
+        }
+      `}</style>
+
+      <div className="w-full max-w-xl my-auto bg-gradient-to-b from-[#110729] to-[#04010b] border border-purple-500/30 rounded-3xl p-6 sm:p-8 shadow-[0_0_50px_rgba(147,51,234,0.15)] relative overflow-hidden onboarding-card">
         {/* Glowing background elements */}
         <div className="absolute top-0 right-0 w-32 h-32 bg-purple-600/10 rounded-full filter blur-2xl pointer-events-none" />
         <div className="absolute bottom-0 left-0 w-32 h-32 bg-indigo-600/10 rounded-full filter blur-2xl pointer-events-none" />
 
         {/* Progress bar */}
-        <div className="mb-6 space-y-2">
-          <div className="flex items-center justify-between">
+        <div className="mb-6 space-y-2 onboarding-progress-spacing">
+          <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-1">
             <span className="text-[10px] font-mono font-bold tracking-wider text-purple-400 uppercase">
-              Onboarding Inteligente • Passo {step} de 6
+              Onboarding Inteligente • Passo {step} de 6 • <span className="text-slate-400 font-normal">{getEstimatedTime()}</span>
             </span>
-            <span className="text-[10px] font-mono font-bold text-purple-300">
-              {percentComplete}%
-            </span>
+            <div className="flex items-center gap-2">
+              {saveStatus === 'saving' && (
+                <span className="text-[9px] font-mono text-amber-400 animate-pulse bg-amber-950/20 px-1.5 py-0.5 rounded border border-amber-900/30">✔ Salvando...</span>
+              )}
+              {saveStatus === 'saved' && (
+                <span className="text-[9px] font-mono text-emerald-400 bg-emerald-950/20 px-1.5 py-0.5 rounded border border-emerald-900/30">✔ Configuração salva</span>
+              )}
+              {saveStatus === 'error' && (
+                <span className="text-[9px] font-mono text-yellow-500 bg-yellow-950/20 px-1.5 py-0.5 rounded border border-yellow-900/30">✔ Salvo (Sincronização pendente)</span>
+              )}
+              <span className="text-[10px] font-mono font-bold text-purple-300">
+                {percentComplete}%
+              </span>
+            </div>
           </div>
           <div className="h-1.5 w-full bg-[#070311] rounded-full overflow-hidden border border-purple-950/45">
             <motion.div 
@@ -185,7 +516,7 @@ export const OnboardingWizard: React.FC<OnboardingWizardProps> = ({ onComplete }
         </div>
 
         {/* Form Container */}
-        <div className="min-h-[280px] flex flex-col justify-between">
+        <div className="min-h-[280px] onboarding-container-minh flex flex-col justify-between">
           <AnimatePresence mode="wait">
             <motion.div
               key={step}
@@ -193,7 +524,7 @@ export const OnboardingWizard: React.FC<OnboardingWizardProps> = ({ onComplete }
               animate={{ opacity: 1, x: 0 }}
               exit={{ opacity: 0, x: -15 }}
               transition={{ duration: 0.2 }}
-              className="space-y-5"
+              className="space-y-5 onboarding-step-spacing"
             >
               {/* STEP 1: VEHICLE TYPE */}
               {step === 1 && (
@@ -207,10 +538,10 @@ export const OnboardingWizard: React.FC<OnboardingWizardProps> = ({ onComplete }
                     </p>
                   </div>
 
-                  <div className="grid grid-cols-1 sm:grid-cols-2 gap-4 pt-2">
+                  <div className="grid grid-cols-1 sm:grid-cols-2 gap-4 pt-2 onboarding-grid-gap">
                     <button
                       onClick={() => setOwnership('own')}
-                      className={`p-5 rounded-2xl border-2 text-left transition-all ${
+                      className={`p-5 rounded-2xl border-2 text-left transition-all onboarding-btn-p1 ${
                         ownership === 'own'
                           ? 'border-purple-500 bg-purple-950/30'
                           : 'border-purple-950/40 bg-purple-950/5 hover:border-purple-900/50'
@@ -227,7 +558,7 @@ export const OnboardingWizard: React.FC<OnboardingWizardProps> = ({ onComplete }
 
                     <button
                       onClick={() => setOwnership('rented')}
-                      className={`p-5 rounded-2xl border-2 text-left transition-all ${
+                      className={`p-5 rounded-2xl border-2 text-left transition-all onboarding-btn-p1 ${
                         ownership === 'rented'
                           ? 'border-purple-500 bg-purple-950/30'
                           : 'border-purple-950/40 bg-purple-950/5 hover:border-purple-900/50'
@@ -251,21 +582,21 @@ export const OnboardingWizard: React.FC<OnboardingWizardProps> = ({ onComplete }
                         placeholder="Marca (ex: Chevrolet)" 
                         value={brand} 
                         onChange={e => setBrand(e.target.value)}
-                        className="bg-[#030107] border border-purple-950/50 rounded-xl p-2.5 text-xs text-white focus:outline-none focus:border-purple-600"
+                        className="bg-[#030107] border border-purple-950/50 rounded-xl p-2.5 text-xs text-white focus:outline-none focus:border-purple-600 onboarding-input"
                       />
                       <input 
                         type="text" 
                         placeholder="Modelo (ex: Onix)" 
                         value={model} 
                         onChange={e => setModel(e.target.value)}
-                        className="bg-[#030107] border border-purple-950/50 rounded-xl p-2.5 text-xs text-white focus:outline-none focus:border-purple-600"
+                        className="bg-[#030107] border border-purple-950/50 rounded-xl p-2.5 text-xs text-white focus:outline-none focus:border-purple-600 onboarding-input"
                       />
                       <input 
                         type="text" 
                         placeholder="Ano" 
                         value={year} 
                         onChange={e => setYear(e.target.value)}
-                        className="bg-[#030107] border border-purple-950/50 rounded-xl p-2.5 text-xs text-white focus:outline-none focus:border-purple-600"
+                        className="bg-[#030107] border border-purple-950/50 rounded-xl p-2.5 text-xs text-white focus:outline-none focus:border-purple-600 onboarding-input"
                       />
                     </div>
                   </div>
@@ -284,7 +615,7 @@ export const OnboardingWizard: React.FC<OnboardingWizardProps> = ({ onComplete }
                     </p>
                   </div>
 
-                  <div className="grid grid-cols-2 sm:grid-cols-3 gap-3 pt-2">
+                  <div className="grid grid-cols-2 sm:grid-cols-3 gap-3 pt-2 onboarding-grid-gap">
                     {[
                       { id: 'gasolina', name: 'Gasolina', icon: '⛽' },
                       { id: 'etanol', name: 'Etanol', icon: '🌱' },
@@ -296,7 +627,7 @@ export const OnboardingWizard: React.FC<OnboardingWizardProps> = ({ onComplete }
                       <button
                         key={f.id}
                         onClick={() => setFuel(f.id as any)}
-                        className={`p-4 rounded-xl border text-center transition-all ${
+                        className={`p-4 rounded-xl border text-center transition-all onboarding-btn-p2 ${
                           fuel === f.id
                             ? 'border-purple-500 bg-purple-950/20 text-white'
                             : 'border-purple-950/40 bg-purple-950/5 text-slate-400 hover:border-purple-900/50'
@@ -322,7 +653,7 @@ export const OnboardingWizard: React.FC<OnboardingWizardProps> = ({ onComplete }
                     </p>
                   </div>
 
-                  <div className="grid grid-cols-1 sm:grid-cols-2 gap-3 pt-2">
+                  <div className="grid grid-cols-1 sm:grid-cols-2 gap-3 pt-2 onboarding-grid-gap">
                     {[
                       { id: 'uber', name: 'Uber', desc: 'Passageiros, Comfort e Black' },
                       { id: '99', name: '99 App', desc: 'Pop, Compartilhado e Comfort' },
@@ -334,7 +665,7 @@ export const OnboardingWizard: React.FC<OnboardingWizardProps> = ({ onComplete }
                         <button
                           key={p.id}
                           onClick={() => togglePlatform(p.id)}
-                          className={`p-4 rounded-xl border text-left flex items-center justify-between transition-all ${
+                          className={`p-4 rounded-xl border text-left flex items-center justify-between transition-all onboarding-btn-p3 ${
                             isSelected
                               ? 'border-purple-500 bg-purple-950/20 text-white'
                               : 'border-purple-950/40 bg-purple-950/5 text-slate-400 hover:border-purple-900/50'
@@ -368,12 +699,12 @@ export const OnboardingWizard: React.FC<OnboardingWizardProps> = ({ onComplete }
                     </p>
                   </div>
 
-                  <div className="flex flex-wrap justify-center gap-2 pt-4">
+                  <div className="flex flex-wrap justify-center gap-2 pt-4 onboarding-flex-gap">
                     {[1, 2, 3, 4, 5, 6, 7].map(d => (
                       <button
                         key={d}
                         onClick={() => setDays(d)}
-                        className={`w-12 h-12 rounded-xl border font-bold text-sm transition-all ${
+                        className={`w-12 h-12 rounded-xl border font-bold text-sm transition-all onboarding-flex-btn ${
                           days === d
                             ? 'border-purple-500 bg-purple-950/40 text-white shadow-lg shadow-purple-500/20'
                             : 'border-purple-950/40 bg-purple-950/5 text-slate-400 hover:border-purple-900/50'
@@ -404,12 +735,12 @@ export const OnboardingWizard: React.FC<OnboardingWizardProps> = ({ onComplete }
                     </p>
                   </div>
 
-                  <div className="flex flex-wrap justify-center gap-2 pt-4">
+                  <div className="flex flex-wrap justify-center gap-2 pt-4 onboarding-flex-gap">
                     {[4, 5, 6, 7, 8, 9, 10, 11, 12].map(h => (
                       <button
                         key={h}
                         onClick={() => setHours(h)}
-                        className={`w-12 h-12 rounded-xl border font-bold text-sm transition-all ${
+                        className={`w-12 h-12 rounded-xl border font-bold text-sm transition-all onboarding-flex-btn ${
                           hours === h
                             ? 'border-purple-500 bg-purple-950/40 text-white shadow-lg shadow-purple-500/20'
                             : 'border-purple-950/40 bg-purple-950/5 text-slate-400 hover:border-purple-900/50'
@@ -440,7 +771,7 @@ export const OnboardingWizard: React.FC<OnboardingWizardProps> = ({ onComplete }
                     </p>
                   </div>
 
-                  <div className="grid grid-cols-1 gap-2 pt-2">
+                  <div className="grid grid-cols-1 gap-2 pt-2 onboarding-grid-gap">
                     {[
                       { id: 'max_profit', name: 'Maior lucro real', desc: 'Gastar o mínimo possível com combustível e quilometragem vazia.', icon: '💰' },
                       { id: 'max_revenue', name: 'Maior faturamento bruto', desc: 'Foco no volume total faturado no final do dia/semana.', icon: '📈' },
@@ -451,7 +782,7 @@ export const OnboardingWizard: React.FC<OnboardingWizardProps> = ({ onComplete }
                       <button
                         key={g.id}
                         onClick={() => setGoal(g.id as any)}
-                        className={`p-3 px-4 rounded-xl border text-left flex items-center gap-3 transition-all ${
+                        className={`p-3 px-4 rounded-xl border text-left flex items-center gap-3 transition-all onboarding-btn-p6 ${
                           goal === g.id
                             ? 'border-purple-500 bg-purple-950/25 text-white'
                             : 'border-purple-950/40 bg-purple-950/5 text-slate-400 hover:border-purple-900/50'
@@ -471,8 +802,23 @@ export const OnboardingWizard: React.FC<OnboardingWizardProps> = ({ onComplete }
           </AnimatePresence>
         </div>
 
+        {/* Validation Warning banner */}
+        {!isStepValid() && (
+          <div className="mt-4 text-[11px] text-amber-400 bg-amber-950/20 border border-amber-900/30 rounded-xl p-3 flex items-start gap-2.5">
+            <ShieldAlert className="w-4 h-4 shrink-0 text-amber-500 animate-pulse mt-0.5" />
+            <div className="flex-1">
+              {step === 1 && (
+                <p>Por favor, preencha a marca, modelo e ano de fabricação do veículo (entre 1980 e 2027) para poder continuar.</p>
+              )}
+              {step === 3 && (
+                <p>Selecione pelo menos uma plataforma de aplicativo para prosseguir.</p>
+              )}
+            </div>
+          </div>
+        )}
+
         {/* Footer Actions */}
-        <div className="flex items-center justify-between border-t border-purple-950/60 pt-5 mt-6">
+        <div className="flex items-center justify-between border-t border-purple-950/60 pt-5 mt-6 onboarding-footer-spacing">
           <button
             onClick={handleBack}
             disabled={step === 1}
@@ -483,7 +829,8 @@ export const OnboardingWizard: React.FC<OnboardingWizardProps> = ({ onComplete }
 
           <button
             onClick={handleNext}
-            className="px-5 py-2.5 bg-gradient-to-r from-purple-600 to-indigo-500 hover:from-purple-500 hover:to-indigo-400 text-white font-bold rounded-xl text-xs flex items-center gap-2 shadow-[0_0_20px_rgba(147,51,234,0.3)] transition-all cursor-pointer active:scale-95"
+            disabled={!isStepValid()}
+            className="px-5 py-2.5 bg-gradient-to-r from-purple-600 to-indigo-500 hover:from-purple-500 hover:to-indigo-400 text-white font-bold rounded-xl text-xs flex items-center gap-2 shadow-[0_0_20px_rgba(147,51,234,0.3)] transition-all cursor-pointer active:scale-95 disabled:opacity-40 disabled:cursor-not-allowed disabled:pointer-events-none disabled:from-purple-950/50 disabled:to-indigo-950/50 disabled:text-slate-500 disabled:shadow-none"
           >
             {step === 6 ? (
               <>

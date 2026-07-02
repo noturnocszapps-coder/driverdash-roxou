@@ -5,18 +5,75 @@ import { supabase } from '../modules/shared/supabase.helpers';
 import { 
   LayoutDashboard, DollarSign, Car, AlertTriangle, Users, 
   LogOut, Menu, X, Database, ShieldAlert, Award, Copy, Check, TrendingUp, Sparkles, Bell, MapPin, Map,
-  Ticket
+  Ticket, Settings
 } from 'lucide-react';
 import { motion, AnimatePresence } from 'motion/react';
+import { useAuth } from '../modules/auth/auth.hooks';
+import { STORAGE_PREFIX } from '../modules/shared/constants';
 
 export const AppLayout: React.FC<{ children: React.ReactNode }> = ({ children }) => {
   const { user, profile, logout, dbStatus, driverSessions, routePoints, endSession } = useApp();
+  const { setProfileState } = useAuth();
   const navigate = useNavigate();
   const location = useLocation();
   const [isMobileMenuOpen, setIsMobileMenuOpen] = useState(false);
   const [showSqlPopup, setShowSqlPopup] = useState(false);
   const [copied, setCopied] = useState(false);
   const [showSessionRecovery, setShowSessionRecovery] = useState(false);
+  const [isSettingsOpen, setIsSettingsOpen] = useState(false);
+
+  const handleResetOnboarding = async () => {
+    if (!profile) return;
+    
+    const confirmReset = window.confirm(
+      "Deseja realmente refazer o onboarding? Seu veículo e suas preferências atuais serão mantidos como ponto de partida."
+    );
+    
+    if (!confirmReset) return;
+
+    try {
+      // 1. Set onboarding_completed: false locally and in Supabase
+      const updatedProfile = { ...profile, onboarding_completed: false, onboarding_step: 1 };
+      
+      if (dbStatus === 'connected' && user?.id) {
+        try {
+          await supabase
+            .from('profiles')
+            .update({ 
+              onboarding_completed: false, 
+              onboarding_step: 1 
+            })
+            .eq('id', user.id);
+        } catch (e) {
+          console.error("Failed to reset onboarding on Supabase:", e);
+        }
+      }
+
+      // Update auth context state and localStorage
+      setProfileState(updatedProfile);
+      localStorage.setItem(`${STORAGE_PREFIX}profile`, JSON.stringify(updatedProfile));
+
+      // Update onboarding progress table locally to start from step 1
+      const localProgress = localStorage.getItem(`${STORAGE_PREFIX}onboarding_v2_progress`);
+      if (localProgress) {
+        try {
+          const parsed = JSON.parse(localProgress);
+          const updatedProgress = { ...parsed, onboarding_completed: false, current_step: 1 };
+          localStorage.setItem(`${STORAGE_PREFIX}onboarding_v2_progress`, JSON.stringify(updatedProgress));
+        } catch (e) {
+          console.warn('Failed to reset local progress step:', e);
+        }
+      }
+
+      console.log('[ONBOARDING] Reset');
+      
+      // Close configurations modal and redirect to dashboard to open wizard
+      setIsSettingsOpen(false);
+      navigate('/dashboard');
+    } catch (e) {
+      console.error('Failed to reset onboarding:', e);
+    }
+  };
 
   const activeSessionRef = driverSessions?.find(s => s.status === 'active' && !s.end_time && !(s as any).ended_at);
   const isJornadaPage = location.pathname === '/jornada';
@@ -325,6 +382,13 @@ ALTER TABLE IF EXISTS public.profiles ENABLE ROW LEVEL SECURITY;
                   </span>
                 </div>
               </div>
+              <button
+                onClick={() => setIsSettingsOpen(true)}
+                title="Configurações"
+                className="text-purple-400 hover:text-white p-1 rounded-lg hover:bg-purple-900/20 transition-all cursor-pointer shrink-0"
+              >
+                <Settings className="w-4 h-4" />
+              </button>
             </div>
           )}
 
@@ -409,9 +473,21 @@ ALTER TABLE IF EXISTS public.profiles ENABLE ROW LEVEL SECURITY;
                   />
                   <div>
                     <p className="text-xs font-semibold text-white">{profile.name}</p>
-                    <span className="text-[8px] bg-purple-950 text-purple-300 font-mono px-1 py-0.2 rounded font-medium">
-                      {(profile.role || 'driver').toUpperCase()}
-                    </span>
+                    <div className="flex items-center gap-1.5">
+                      <span className="text-[8px] bg-purple-950 text-purple-300 font-mono px-1 py-0.2 rounded font-medium">
+                        {(profile.role || 'driver').toUpperCase()}
+                      </span>
+                      <button
+                        onClick={() => {
+                          setIsMobileMenuOpen(false);
+                          setIsSettingsOpen(true);
+                        }}
+                        title="Configurações"
+                        className="text-purple-400 hover:text-white p-0.5 rounded transition-all cursor-pointer"
+                      >
+                        <Settings className="w-3.5 h-3.5" />
+                      </button>
+                    </div>
                   </div>
                 </div>
               )}
@@ -520,6 +596,61 @@ ALTER TABLE IF EXISTS public.profiles ENABLE ROW LEVEL SECURITY;
                 >
                   Encerrar Jornada Ativa
                 </button>
+              </div>
+            </motion.div>
+          </div>
+        )}
+      </AnimatePresence>
+
+      {/* App Configurations Settings Modal */}
+      <AnimatePresence>
+        {isSettingsOpen && (
+          <div className="fixed inset-0 bg-black/80 flex items-center justify-center p-4 z-50 backdrop-blur-sm">
+            <motion.div
+              initial={{ scale: 0.95, opacity: 0 }}
+              animate={{ scale: 1, opacity: 1 }}
+              exit={{ scale: 0.95, opacity: 0 }}
+              className="bg-[#0b0821] border border-purple-900/50 rounded-3xl max-w-md w-full p-6 md:p-8 shadow-2xl relative"
+            >
+              <button 
+                onClick={() => setIsSettingsOpen(false)}
+                className="absolute top-4 right-4 text-purple-400 hover:text-white p-1.5 rounded-full hover:bg-purple-950/30 cursor-pointer transition-all"
+              >
+                <X className="w-4 h-4" />
+              </button>
+              
+              <div className="flex items-center gap-3 mb-5 text-purple-400">
+                <Settings className="w-5 h-5 text-purple-400" />
+                <h3 className="text-lg font-bold text-white font-sans">Configurações do DriverDash</h3>
+              </div>
+
+              <div className="space-y-6">
+                <div className="p-4 bg-purple-950/15 border border-purple-950/30 rounded-2xl">
+                  <div className="flex items-center gap-2 text-white font-semibold text-xs mb-1.5">
+                    <Car className="w-4 h-4 text-purple-400" />
+                    <span>Configuração de Perfil & Onboarding</span>
+                  </div>
+                  <p className="text-[11px] text-slate-400 leading-relaxed mb-4">
+                    Ao reexecutar o onboarding, você poderá reconfigurar seu veículo atual, combustíveis preferidos, plataformas operadas, dias e horários pretendidos e metas operacionais.
+                  </p>
+                  
+                  <button
+                    onClick={handleResetOnboarding}
+                    className="w-full py-2.5 px-4 rounded-xl font-bold bg-purple-600 hover:bg-purple-500 text-white text-xs cursor-pointer transition-all duration-200 shadow-[0_0_15px_rgba(147,51,234,0.3)] flex items-center justify-center gap-2"
+                  >
+                    <Settings className="w-3.5 h-3.5 text-purple-200 animate-spin-slow" />
+                    Executar Onboarding novamente
+                  </button>
+                </div>
+
+                <div className="flex justify-end pt-2">
+                  <button
+                    onClick={() => setIsSettingsOpen(false)}
+                    className="px-4 py-2 text-xs font-semibold bg-purple-950/40 hover:bg-purple-950/60 border border-purple-900/30 rounded-xl text-slate-300 hover:text-white transition-all cursor-pointer"
+                  >
+                    Fechar
+                  </button>
+                </div>
               </div>
             </motion.div>
           </div>

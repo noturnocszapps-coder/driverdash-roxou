@@ -12,6 +12,8 @@ export interface Profile {
   is_blocked?: boolean;
   beta_tester?: boolean;
   onboarding_completed?: boolean;
+  onboarding_step?: number;
+  onboarding_progress?: any;
   last_access?: string;
 }
 

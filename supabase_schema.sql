@@ -13,6 +13,9 @@ CREATE TABLE IF NOT EXISTS public.profiles (
     avatar_url TEXT,
     role TEXT CHECK (role IN ('driver', 'admin')) DEFAULT 'driver'::TEXT NOT NULL,
     plan TEXT CHECK (plan IN ('free', 'pro', 'pro_plus')) DEFAULT 'free'::TEXT NOT NULL,
+    onboarding_completed BOOLEAN DEFAULT false,
+    onboarding_step INTEGER DEFAULT 1,
+    onboarding_progress JSONB,
     created_at TIMESTAMP WITH TIME ZONE DEFAULT TIMEZONE('utc'::TEXT, NOW()) NOT NULL
 );
 
@@ -469,6 +472,9 @@ CREATE INDEX IF NOT EXISTS idx_demand_signals_coords ON public.demand_signals (l
 
 -- 9.1 Add beta_tester to profiles
 ALTER TABLE public.profiles ADD COLUMN IF NOT EXISTS beta_tester BOOLEAN DEFAULT false;
+ALTER TABLE public.profiles ADD COLUMN IF NOT EXISTS onboarding_completed BOOLEAN DEFAULT false;
+ALTER TABLE public.profiles ADD COLUMN IF NOT EXISTS onboarding_step INTEGER DEFAULT 1;
+ALTER TABLE public.profiles ADD COLUMN IF NOT EXISTS onboarding_progress JSONB;
 
 -- 9.2 App Logs Table
 CREATE TABLE IF NOT EXISTS public.app_logs (
