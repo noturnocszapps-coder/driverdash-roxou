@@ -211,11 +211,13 @@ export const DemandMap: React.FC<DemandMapProps> = ({
   }, [demandStatus, demandSignals, selectedRegionName]);
 
   return (
-    <div className="relative rounded-3xl overflow-hidden border border-purple-950/20 shadow-inner" style={{ height }}>
+    <div className="relative rounded-3xl overflow-hidden border border-purple-950/20 shadow-inner" style={{ height, isolation: 'isolate' }}>
       {/* Dynamic Style Injection for Leaflet tooltip overrides */}
       <style>{`
         .leaflet-container {
           background-color: #050214 !important;
+          border-radius: 24px !important;
+          overflow: hidden !important;
         }
         .custom-map-tooltip {
           background: #09051d !important;
@@ -234,7 +236,7 @@ export const DemandMap: React.FC<DemandMapProps> = ({
           border: none !important;
         }
       `}</style>
-      <div id={mapId} ref={containerRef} className="w-full h-full" />
+      <div id={mapId} ref={containerRef} className="w-full h-full rounded-3xl overflow-hidden" />
     </div>
   );
 };

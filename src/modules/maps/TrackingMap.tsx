@@ -330,7 +330,7 @@ export const TrackingMap: React.FC<TrackingMapProps> = ({
   return (
     <div 
       className="relative rounded-3xl overflow-hidden border border-purple-950/20 bg-[#060412] flex flex-col justify-between shadow-[0_4px_30px_rgba(0,0,0,0.4)]"
-      style={{ height }}
+      style={{ height, isolation: 'isolate' }}
       ref={containerRef}
     >
       {/* Sleek Custom Leaflet Dark Mode Inversion Styles */}
@@ -340,6 +340,8 @@ export const TrackingMap: React.FC<TrackingMapProps> = ({
         }
         .leaflet-container {
           background-color: #060412 !important;
+          border-radius: 24px !important;
+          overflow: hidden !important;
         }
         .leaflet-popup-content-wrapper {
           background: #09051d !important;
@@ -353,7 +355,7 @@ export const TrackingMap: React.FC<TrackingMapProps> = ({
       `}</style>
 
       {/* Actual Map Target Container */}
-      <div id={mapId} className="w-full h-full z-0 absolute inset-0"></div>
+      <div id={mapId} className="w-full h-full z-0 absolute inset-0 rounded-3xl overflow-hidden"></div>
       
       {/* Map Control Overlay */}
       <div className="absolute top-4 left-4 z-10 flex flex-col gap-2 pointer-events-none">

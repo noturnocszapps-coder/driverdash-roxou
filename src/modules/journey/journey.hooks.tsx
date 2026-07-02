@@ -649,14 +649,24 @@ export const JourneyProvider: React.FC<{ children: React.ReactNode }> = ({ child
     auditLogger.logJourneyAction('started', { sessionId: newSession.id, userId });
   };
 
-  const calculateStoppedMinutes = (points: RoutePoint[]): number => {
-    if (points.length < 2) return 0;
-    let totalDuration = 0;
-    let runStart: number | null = null;
-    let runEnd: number | null = null;
-
+  const calculateStoppedMinutes = (points: RoutePoint[], startTimeMs?: number, endTimeMs?: number): number => {
+    let totalDurationMs = 0;
     const sortedPoints = [...points].sort((a, b) => new Date(a.recorded_at).getTime() - new Date(b.recorded_at).getTime());
 
+    if (sortedPoints.length === 0) {
+      if (startTimeMs && endTimeMs) {
+        return Math.floor(Math.max(0, endTimeMs - startTimeMs) / 60000);
+      }
+      return 0;
+    }
+
+    // 1. Check period from startTimeMs to first point
+    const firstPointTime = new Date(sortedPoints[0].recorded_at).getTime();
+    if (startTimeMs && firstPointTime > startTimeMs) {
+      totalDurationMs += (firstPointTime - startTimeMs);
+    }
+
+    // 2. Sum intervals where speed is < 5 km/h or distance is 0
     for (let i = 1; i < sortedPoints.length; i++) {
       const p1 = sortedPoints[i - 1];
       const p2 = sortedPoints[i];
@@ -670,33 +680,22 @@ export const JourneyProvider: React.FC<{ children: React.ReactNode }> = ({ child
       const dist = calculateHaversineDistanceMeters(p1.latitude, p1.longitude, p2.latitude, p2.longitude);
       const speedKmh = (dist / (dtMs / 1000)) * 3.6;
 
-      if (speedKmh < 5) {
-        if (runStart === null) {
-          runStart = t1;
-          runEnd = t2;
-        } else {
-          runEnd = t2;
-        }
-      } else {
-        if (runStart !== null && runEnd !== null) {
-          const runLength = runEnd - runStart;
-          if (runLength >= 3 * 60 * 1000) {
-            totalDuration += runLength;
-          }
-        }
-        runStart = null;
-        runEnd = null;
+      if (speedKmh < 5 || dist === 0) {
+        totalDurationMs += dtMs;
       }
     }
 
-    if (runStart !== null && runEnd !== null) {
-      const runLength = runEnd - runStart;
-      if (runLength >= 3 * 60 * 1000) {
-        totalDuration += runLength;
+    // 3. Check period from last point to endTimeMs
+    const lastPointTime = new Date(sortedPoints[sortedPoints.length - 1].recorded_at).getTime();
+    if (endTimeMs && endTimeMs > lastPointTime) {
+      const lastPoint = sortedPoints[sortedPoints.length - 1];
+      const isGpsPausedOrNoDisplacement = (endTimeMs - lastPointTime > 15000);
+      if (lastPoint.speed_kmh < 5 || isGpsPausedOrNoDisplacement) {
+        totalDurationMs += (endTimeMs - lastPointTime);
       }
     }
 
-    return Math.floor(totalDuration / (60 * 1000));
+    return Math.floor(totalDurationMs / 60000);
   };
 
   const clearAllJourneyState = () => {
@@ -833,7 +832,10 @@ export const JourneyProvider: React.FC<{ children: React.ReactNode }> = ({ child
 
     // Calculate metrics
     const sessionPoints = routePoints.filter(p => p.session_id === sessionId);
-    const stopped_minutes = calculateStoppedMinutes(sessionPoints);
+    const sessionToClose = driverSessions.find(s => s.id === sessionId);
+    const startTime = sessionToClose ? new Date(sessionToClose.start_time).getTime() : new Date().getTime();
+    const endTime = new Date(endedAt).getTime();
+    const stopped_minutes = calculateStoppedMinutes(sessionPoints, startTime, endTime);
     
     let total_distance_meters = totalDistanceMeters;
     if (total_distance_meters === 0) {
@@ -844,8 +846,6 @@ export const JourneyProvider: React.FC<{ children: React.ReactNode }> = ({ child
       }
     }
     const finalDistanceKm = totalDistanceKm || (total_distance_meters / 1000);
-    const sessionToClose = driverSessions.find(s => s.id === sessionId);
-    const startTime = sessionToClose ? new Date(sessionToClose.start_time).getTime() : new Date().getTime();
     const duration_seconds = Math.max(1, Math.round((new Date().getTime() - startTime) / 1000));
     const finalDurationMinutes = totalDurationMinutes || Math.max(1, Math.round(duration_seconds / 60));
 

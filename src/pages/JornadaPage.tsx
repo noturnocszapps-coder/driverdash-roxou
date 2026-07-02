@@ -1944,17 +1944,29 @@ export const JornadaPage: React.FC = () => {
   const totalKmToday = totalDistanceKm;
 
   // Mathematical "Tempo Parado Hoje" speed calculation
-  // "Considerar parado when: velocidade estimada < 5 km/h for more than 3 minutes"
+  // "Considerar parado when: velocidade estimada < 5 km/h ou sem deslocamento"
   const totalStoppedDurationMs = useMemo(() => {
-    if (currentSessionPoints.length < 2) return 0;
+    if (!activeSession) return 0;
 
     let totalDuration = 0;
-    let runStart: number | null = null;
-    let runEnd: number | null = null;
+    const sortedPoints = [...currentSessionPoints].sort((a, b) => new Date(a.recorded_at).getTime() - new Date(b.recorded_at).getTime());
+    const startTimeMs = new Date(activeSession.start_time).getTime();
+    const endTimeMs = Date.now();
 
-    for (let i = 1; i < currentSessionPoints.length; i++) {
-      const p1 = currentSessionPoints[i - 1];
-      const p2 = currentSessionPoints[i];
+    if (sortedPoints.length === 0) {
+      return Math.max(0, endTimeMs - startTimeMs);
+    }
+
+    // 1. Check period from startTimeMs to first point
+    const firstPointTime = new Date(sortedPoints[0].recorded_at).getTime();
+    if (firstPointTime > startTimeMs) {
+      totalDuration += (firstPointTime - startTimeMs);
+    }
+
+    // 2. Sum intervals where speed is < 5 km/h or distance is 0
+    for (let i = 1; i < sortedPoints.length; i++) {
+      const p1 = sortedPoints[i - 1];
+      const p2 = sortedPoints[i];
 
       const t1 = new Date(p1.recorded_at).getTime();
       const t2 = new Date(p2.recorded_at).getTime();
@@ -1962,41 +1974,27 @@ export const JornadaPage: React.FC = () => {
 
       if (dtMs <= 0) continue;
 
-      const dist = calculateHaversineDistance(p1.latitude, p1.longitude, p2.latitude, p2.longitude);
-      const dtHours = dtMs / 3600000;
-      const speedKmh = dist / dtHours;
+      const dist = calculateHaversineDistance(p1.latitude, p1.longitude, p2.latitude, p2.longitude) * 1000; // in meters
+      const speedKmh = (dist / (dtMs / 1000)) * 3.6;
 
-      if (speedKmh < 5) {
-        // We are stopped. Manage run sequence:
-        if (runStart === null) {
-          runStart = t1;
-          runEnd = t2;
-        } else {
-          runEnd = t2;
-        }
-      } else {
-        // We are moving. End current potential run and add if > 3 mins:
-        if (runStart !== null && runEnd !== null) {
-          const runLength = runEnd - runStart;
-          if (runLength >= 3 * 60 * 1000) {
-            totalDuration += runLength;
-          }
-        }
-        runStart = null;
-        runEnd = null;
+      if (speedKmh < 5 || dist === 0) {
+        totalDuration += dtMs;
       }
     }
 
-    // Checking final open run
-    if (runStart !== null && runEnd !== null) {
-      const runLength = runEnd - runStart;
-      if (runLength >= 3 * 60 * 1000) {
-        totalDuration += runLength;
+    // 3. Check period from last point to endTimeMs
+    const lastPointTime = new Date(sortedPoints[sortedPoints.length - 1].recorded_at).getTime();
+    if (endTimeMs > lastPointTime) {
+      const lastPoint = sortedPoints[sortedPoints.length - 1];
+      const isGpsPaused = gpsStatus === 'GPS sem sinal' || gpsStatus === 'GPS erro' || gpsStatus === 'GPS negado' || (endTimeMs - lastPointTime > 15000);
+      
+      if (lastPoint.speed_kmh < 5 || isGpsPaused) {
+        totalDuration += (endTimeMs - lastPointTime);
       }
     }
 
     return totalDuration;
-  }, [currentSessionPoints]);
+  }, [currentSessionPoints, activeSession, elapsedTime, gpsStatus]);
 
   // Convert stopped duration ms to readable format (Xh Ym)
   const formattedStoppedTime = useMemo(() => {
@@ -2018,7 +2016,7 @@ export const JornadaPage: React.FC = () => {
       return `${hrs}h ${remMins}min`;
     }
     return `${mins} min`;
-  }, [totalStoppedDurationMs, activeRide]);
+  }, [totalStoppedDurationMs, activeRide, elapsedTime]);
 
   const handleStartTracking = async () => {
     setAllowRealTimeMap(true);
