@@ -18,6 +18,8 @@ export const RealTimeTrackerMap: React.FC<RealTimeTrackerMapProps> = ({
   const mapRef = useRef<L.Map | null>(null);
   const [showRoute, setShowRoute] = useState(true);
   const [mapError, setMapError] = useState<string | null>(null);
+  const [streetName, setStreetName] = useState<string>('');
+  const lastStreetCheckTimeRef = useRef<number>(0);
   
   // Marker and Polyline references to update them without recreating the map
   const markerCurrentRef = useRef<L.Marker | null>(null);
@@ -25,6 +27,7 @@ export const RealTimeTrackerMap: React.FC<RealTimeTrackerMapProps> = ({
   const markerEndRef = useRef<L.Marker | null>(null);
   const polylineRef = useRef<L.Polyline | null>(null);
   const hasCenteredOnFirstPointRef = useRef(false);
+  const userIsDraggingMapRef = useRef(false);
 
   // Load Leaflet CSS dynamically if not present
   useEffect(() => {
@@ -56,6 +59,13 @@ export const RealTimeTrackerMap: React.FC<RealTimeTrackerMapProps> = ({
       });
 
       mapRef.current = map;
+
+      map.on("dragstart", () => {
+        userIsDraggingMapRef.current = true;
+      });
+      map.on("dragend", () => {
+        userIsDraggingMapRef.current = false;
+      });
 
       // Register map to global tracker
       leafletManager.registerMap(mapContainerId.current, map, () => {
@@ -103,6 +113,15 @@ export const RealTimeTrackerMap: React.FC<RealTimeTrackerMapProps> = ({
     const map = mapRef.current;
     if (!map) return;
 
+    // Fetch street name at most once every 15 seconds
+    if (lastCoord && typeof lastCoord.lat === 'number' && typeof lastCoord.lng === 'number') {
+      const now = Date.now();
+      if (now - lastStreetCheckTimeRef.current >= 15000) {
+        lastStreetCheckTimeRef.current = now;
+        fetchStreetName(lastCoord.lat, lastCoord.lng);
+      }
+    }
+
     // 1. Current position (Blue Marker)
     if (lastCoord) {
       const currentPos: [number, number] = [lastCoord.lat, lastCoord.lng];
@@ -112,6 +131,11 @@ export const RealTimeTrackerMap: React.FC<RealTimeTrackerMapProps> = ({
         console.log("[MAP_CENTER] Auto-centering map on the first received GPS point:", currentPos);
         map.setView(currentPos, 16);
         hasCenteredOnFirstPointRef.current = true;
+      } else if (!userIsDraggingMapRef.current) {
+        map.panTo(currentPos, {
+          animate: true,
+          duration: 0.3
+        });
       }
 
       // Custom Blue Neon Dot for driver's current position
@@ -226,6 +250,19 @@ export const RealTimeTrackerMap: React.FC<RealTimeTrackerMapProps> = ({
 
   }, [lastCoord, activeRide, showRoute]);
 
+  const fetchStreetName = async (lat: number, lng: number) => {
+    try {
+      const res = await fetch(
+        `https://nominatim.openstreetmap.org/reverse?format=json&lat=${lat}&lon=${lng}`
+      );
+      const data = await res.json();
+      const name = data?.address?.road || data?.display_name || 'Rua não identificada';
+      setStreetName(name);
+    } catch (err) {
+      console.error('[REALTIME_MAP] Error fetching street name:', err);
+    }
+  };
+
   // Center Map on current position
   const handleCenterMap = () => {
     const map = mapRef.current;
@@ -303,6 +340,17 @@ export const RealTimeTrackerMap: React.FC<RealTimeTrackerMapProps> = ({
           <div id={mapContainerId.current} className="w-full h-full" />
         )}
       </div>
+
+      {/* Current Street Name Display */}
+      {streetName && (
+        <div className="px-4 py-2.5 bg-[#050310]/60 border-t border-purple-950/20 flex items-center gap-2 text-left">
+          <MapPin className="w-3.5 h-3.5 text-emerald-400 shrink-0" />
+          <div className="overflow-hidden text-ellipsis whitespace-nowrap">
+            <span className="text-[9px] uppercase tracking-wider text-purple-400 block font-mono">Localização Atual</span>
+            <span className="text-xs font-semibold text-slate-200">{streetName}</span>
+          </div>
+        </div>
+      )}
 
       {/* Real-time Telemetry Stats Footing (GPS status, Precision, Speed, Last Update) */}
       <div className="p-3 bg-[#050310]/80 border-t border-purple-950/20 text-[10.5px] font-mono grid grid-cols-2 md:grid-cols-4 gap-2 text-left">

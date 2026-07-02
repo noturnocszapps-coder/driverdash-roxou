@@ -79,6 +79,10 @@ class LeafletManager {
     }
   }
 
+  public destroyAll() {
+    this.cleanupAllExcept();
+  }
+
   public getActiveMapsCount(): number {
     return this.activeMaps.size;
   }

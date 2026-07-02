@@ -36,6 +36,8 @@ import { CalibrationRouteMap } from '../components/CalibrationRouteMap';
 import { filterGpsNoise, snapTrackToRoads } from '../modules/journey/roadMatching.service';
 import { RealTimeTrackerMap } from '../components/RealTimeTrackerMap';
 import { TelemetryDebugModal } from '../components/TelemetryDebugModal';
+import { leafletManager } from '../modules/maps/leafletManager';
+import { errorTracker } from '../modules/observability/errorTracker';
 
 // Haversine Formula helper
 export function calculateHaversineDistance(lat1: number, lon1: number, lat2: number, lon2: number): number {
@@ -195,13 +197,14 @@ export const JornadaPage: React.FC = () => {
   const [showDebugDataModal, setShowDebugDataModal] = useState<boolean>(false);
 
   useEffect(() => {
-    if (journeyEndModalOpen) {
-      console.log('[MAP_BLOCKING_UI_DETECTED] Journey end modal opened. Forcing map components to close and unmount.');
+    if (journeyEndModalOpen || finishModalOpen) {
+      console.log('[MAP_BLOCKING_UI_DETECTED] Journey end or finish modal opened. Forcing map components to close and unmount.');
       setIsMapOpen(false);
       setSelectedRouteRide(null);
+      leafletManager.destroyAll();
       console.log('[MAP_CLOSE]');
     }
-  }, [journeyEndModalOpen]);
+  }, [journeyEndModalOpen, finishModalOpen]);
 
   useEffect(() => {
     if (toast.show) {
@@ -240,9 +243,12 @@ export const JornadaPage: React.FC = () => {
             console.log(`[SYNC_QUEUE] Corrida ${ride.id} sincronizada com sucesso.`);
             ride.pending_sync = false;
             updatedAny = true;
+          } else {
+            errorTracker.trackSupabaseError(`Sincronização de Corrida Pendente (${ride.id})`, syncError);
           }
         } catch (err) {
           console.error(`[SYNC_QUEUE] Erro ao sincronizar corrida ${ride.id}:`, err);
+          errorTracker.trackSupabaseError(`Sincronização de Corrida Pendente Exception (${ride.id})`, err);
         }
       }
 
@@ -1696,6 +1702,51 @@ export const JornadaPage: React.FC = () => {
     return { label: 'Sem sinal', color: 'text-rose-500', bg: 'bg-rose-950/30 border border-rose-900/30' };
   }, [gpsAccuracy, gpsStatus, gpsError]);
 
+  // System State Computation (Requirement 8)
+  const systemState = useMemo(() => {
+    if (isSyncingBeforeEnd || syncStatusBeforeEnd === 'syncing') {
+      return 'STATE_SYNCING';
+    }
+    if (journeyEndModalOpen || finishModalOpen) {
+      return 'STATE_JOURNEY_ENDING';
+    }
+    if (activeSession) {
+      if (activeRide) {
+        return 'STATE_JOURNEY_ACTIVE';
+      }
+      return 'STATE_TRACKING';
+    }
+    return 'STATE_IDLE';
+  }, [isSyncingBeforeEnd, syncStatusBeforeEnd, journeyEndModalOpen, finishModalOpen, activeSession, activeRide]);
+
+  const metrics = useMemo(() => {
+    const totalKm = activeSession ? totalDistanceKm : 0;
+    
+    const activeSessionDateStr = activeSession 
+      ? new Date(activeSession.start_time).toISOString().substring(0, 10)
+      : new Date().toISOString().substring(0, 10);
+
+    const dayEarnings = (earnings || []).filter(e => e.date === activeSessionDateStr);
+    const revenue = dayEarnings.reduce((acc, curr) => acc + Number(curr.gross_amount || 0), 0);
+
+    const costPerKm = calculateCostPerKmEstimate(vehicle, vehicleCostSettings) || 0.45;
+    const cost = totalKm * costPerKm;
+    
+    // Fallback inteligente
+    const kmRate = totalKm > 0 ? (revenue > 0 ? revenue / totalKm : 2.0) : 2.0;
+    const lucro = revenue - (cost ?? 0);
+
+    return {
+      tempoOnline: activeSession ? elapsedTime : "00:00:00",
+      kmRodados: `${totalKm.toFixed(1)} km`,
+      status: systemState,
+      revenue,
+      cost,
+      lucro,
+      kmRate
+    };
+  }, [activeSession, earnings, vehicle, vehicleCostSettings, totalDistanceKm, elapsedTime, systemState]);
+
   // Active session indicators calculation (Tempo online, KM rodados, Corridas realizadas, Ganhos informados, Custo estimado, Lucro estimado)
   const activeMetrics = useMemo(() => {
     if (!activeSession) return null;
@@ -2074,41 +2125,82 @@ export const JornadaPage: React.FC = () => {
         </div>
       </div>
 
-      {/* Top Indicators / Active Metrics Grid */}
-      {activeSession && activeMetrics && (
-        <div className="grid grid-cols-2 md:grid-cols-6 gap-3">
-          <div className="bg-[#0c0827] border border-purple-950/40 p-3.5 rounded-2xl text-left">
-            <span className="text-[9px] text-slate-500 font-bold block uppercase tracking-wider">Tempo online</span>
-            <span className="text-sm font-extrabold text-white font-mono block mt-1">{activeMetrics.tempoOnline}</span>
+      {/* PAINEL DE CONTROLE - TRÊS NÍVEIS (ROXOU PREMIUM) */}
+      <div className="space-y-4">
+        {/* NÍVEL 1: STATUS E RASTREAMENTO (SEMPRE VISÍVEL) */}
+        <div className="grid grid-cols-1 sm:grid-cols-3 gap-3">
+          <div className="bg-[#0c0827] border border-purple-950/40 p-4 rounded-2xl text-left flex items-center justify-between shadow-lg">
+            <div>
+              <span className="text-[10px] text-purple-300 font-bold block uppercase tracking-wider">⏱️ Tempo Online</span>
+              <span className="text-xl font-extrabold text-white font-mono block mt-1">{metrics.tempoOnline}</span>
+            </div>
+            <Clock className="w-5 h-5 text-purple-400 opacity-60" />
           </div>
-          <div className="bg-[#0c0827] border border-purple-950/40 p-3.5 rounded-2xl text-left">
-            <span className="text-[9px] text-slate-500 font-bold block uppercase tracking-wider">KM rodados</span>
-            <span className="text-sm font-extrabold text-purple-400 font-mono block mt-1">{activeMetrics.kmRodados}</span>
+          <div className="bg-[#0c0827] border border-purple-950/40 p-4 rounded-2xl text-left flex items-center justify-between shadow-lg">
+            <div>
+              <span className="text-[10px] text-purple-300 font-bold block uppercase tracking-wider">🛣️ KM Rodado</span>
+              <span className="text-xl font-extrabold text-purple-400 font-mono block mt-1">{metrics.kmRodados}</span>
+            </div>
+            <Milestone className="w-5 h-5 text-purple-400 opacity-60" />
           </div>
-          <div className="bg-[#0c0827] border border-purple-950/40 p-3.5 rounded-2xl text-left">
-            <span className="text-[9px] text-slate-500 font-bold block uppercase tracking-wider">Corridas</span>
-            <span className="text-sm font-extrabold text-indigo-400 font-mono block mt-1">{activeMetrics.corridasRealizadas}</span>
-          </div>
-          <div className="bg-[#0c0827] border border-purple-950/40 p-3.5 rounded-2xl text-left">
-            <span className="text-[9px] text-slate-500 font-bold block uppercase tracking-wider">Ganhos informados</span>
-            <span className="text-sm font-extrabold text-emerald-400 font-mono block mt-1">
-              {activeMetrics.hasEarnings ? new Intl.NumberFormat('pt-BR', { style: 'currency', currency: 'BRL' }).format(activeMetrics.ganhosVal) : 'R$ 0,00'}
-            </span>
-          </div>
-          <div className="bg-[#0c0827] border border-purple-950/40 p-3.5 rounded-2xl text-left">
-            <span className="text-[9px] text-slate-500 font-bold block uppercase tracking-wider">Custo estimado</span>
-            <span className="text-sm font-extrabold text-rose-400 font-mono block mt-1">
-              {activeMetrics.custoVal > 0 ? new Intl.NumberFormat('pt-BR', { style: 'currency', currency: 'BRL' }).format(activeMetrics.custoVal) : 'R$ 0,00'}
-            </span>
-          </div>
-          <div className="bg-[#0c0827] border border-purple-950/40 p-3.5 rounded-2xl text-left">
-            <span className="text-[9px] text-slate-500 font-bold block uppercase tracking-wider">Lucro estimado</span>
-            <span className={`text-sm font-extrabold font-mono block mt-1 ${activeMetrics.hasEarnings ? (activeMetrics.lucroVal >= 0 ? 'text-emerald-400' : 'text-rose-400') : 'text-slate-500'}`}>
-              {activeMetrics.hasEarnings ? new Intl.NumberFormat('pt-BR', { style: 'currency', currency: 'BRL' }).format(activeMetrics.lucroVal) : '—'}
-            </span>
+          <div className="bg-[#0c0827] border border-purple-950/40 p-4 rounded-2xl text-left flex items-center justify-between shadow-lg">
+            <div>
+              <span className="text-[10px] text-purple-300 font-bold block uppercase tracking-wider">🚦 Status do Sistema</span>
+              <span className={`text-xs font-bold font-mono px-2.5 py-1 rounded-full inline-block mt-2 ${
+                metrics.status === 'STATE_IDLE' ? 'bg-slate-950 border border-slate-800 text-slate-400' :
+                metrics.status === 'STATE_TRACKING' ? 'bg-[#0f0a2e] border border-indigo-500/30 text-indigo-400 animate-pulse' :
+                metrics.status === 'STATE_JOURNEY_ACTIVE' ? 'bg-[#0f0a2e] border border-emerald-500/30 text-emerald-400' :
+                metrics.status === 'STATE_JOURNEY_ENDING' ? 'bg-[#0f0a2e] border border-amber-500/30 text-amber-400' :
+                'bg-[#0f0a2e] border border-purple-500/30 text-purple-400'
+              }`}>
+                {metrics.status === 'STATE_IDLE' ? '💤 STATE_IDLE (Offline)' :
+                 metrics.status === 'STATE_TRACKING' ? '📡 STATE_TRACKING (Ativo)' :
+                 metrics.status === 'STATE_JOURNEY_ACTIVE' ? '🚦 STATE_JOURNEY_ACTIVE' :
+                 metrics.status === 'STATE_JOURNEY_ENDING' ? '🏁 STATE_JOURNEY_ENDING' :
+                 '🔄 STATE_SYNCING (Transmitindo)'}
+              </span>
+            </div>
+            <Signal className="w-5 h-5 text-purple-400 opacity-60 animate-pulse" />
           </div>
         </div>
-      )}
+
+        {/* NÍVEL 2: MÉTRICAS FINANCEIRAS (FINANCEIRO REAL-TIME) */}
+        <div className="grid grid-cols-1 sm:grid-cols-3 gap-3">
+          <div className="bg-[#0c0827] border border-purple-950/40 p-4 rounded-2xl text-left flex items-center justify-between shadow-lg">
+            <div>
+              <span className="text-[10px] text-emerald-400 font-bold block uppercase tracking-wider">💰 Receita Operacional</span>
+              <span className="text-xl font-extrabold text-emerald-400 font-mono block mt-1">
+                {new Intl.NumberFormat('pt-BR', { style: 'currency', currency: 'BRL' }).format(metrics.revenue)}
+              </span>
+              <span className="text-[9px] text-slate-500 font-mono mt-0.5 block">
+                Taxa média: R$ {metrics.kmRate.toFixed(2)}/km
+              </span>
+            </div>
+          </div>
+          <div className="bg-[#0c0827] border border-purple-950/40 p-4 rounded-2xl text-left flex items-center justify-between shadow-lg">
+            <div>
+              <span className="text-[10px] text-rose-400 font-bold block uppercase tracking-wider">⛽ Custo Estimado</span>
+              <span className="text-xl font-extrabold text-rose-400 font-mono block mt-1">
+                {new Intl.NumberFormat('pt-BR', { style: 'currency', currency: 'BRL' }).format(metrics.cost)}
+              </span>
+              <span className="text-[9px] text-slate-500 font-mono mt-0.5 block">
+                Combustível & Desgaste
+              </span>
+            </div>
+          </div>
+          <div className="bg-[#0c0827] border border-purple-950/40 p-4 rounded-2xl text-left flex items-center justify-between shadow-lg">
+            <div>
+              <span className="text-[10px] text-purple-300 font-bold block uppercase tracking-wider">📈 Lucro Líquido</span>
+              <span className={`text-xl font-extrabold font-mono block mt-1 ${metrics.lucro >= 0 ? 'text-emerald-400' : 'text-rose-400'}`}>
+                {new Intl.NumberFormat('pt-BR', { style: 'currency', currency: 'BRL' }).format(metrics.lucro)}
+              </span>
+              <span className="text-[9px] text-slate-500 font-mono mt-0.5 block">
+                Retorno Real do Motorista
+              </span>
+            </div>
+          </div>
+        </div>
+      </div>
 
       {/* Main Layout Grid */}
       <div className="grid grid-cols-1 lg:grid-cols-3 gap-6">
@@ -2868,7 +2960,7 @@ export const JornadaPage: React.FC = () => {
             initial={{ opacity: 0 }}
             animate={{ opacity: 1 }}
             exit={{ opacity: 0 }}
-            className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-[#050310]/85 backdrop-blur-md"
+            className="journey-modal fixed inset-0 z-50 flex items-center justify-center p-4 bg-[#050310]/85 backdrop-blur-md"
           >
             <motion.div 
               initial={{ scale: 0.95, y: 15 }}
@@ -3133,7 +3225,7 @@ export const JornadaPage: React.FC = () => {
                 </div>
               )}
 
-              <div className="p-5 border-t border-purple-950/20 bg-purple-950/10 flex items-center justify-between gap-3 shrink-0">
+              <div className="p-5 border-t border-purple-950/20 bg-purple-950/10 flex items-center justify-between gap-3 shrink-0 modal-actions-container">
                 <button 
                   onClick={() => setShowDebugDataModal(true)}
                   disabled={isSavingCalibration}
@@ -3142,7 +3234,7 @@ export const JornadaPage: React.FC = () => {
                   <Terminal className="w-3.5 h-3.5" /> Ver dados capturados
                 </button>
 
-                <div className="flex items-center gap-2">
+                <div className="flex items-center gap-2 modal-btn-group">
                   <button 
                     onClick={() => setFinishModalOpen(false)}
                     disabled={isSavingCalibration}
@@ -3574,7 +3666,7 @@ export const JornadaPage: React.FC = () => {
             initial={{ opacity: 0 }}
             animate={{ opacity: 1 }}
             exit={{ opacity: 0 }}
-            className="fixed inset-0 z-[9999] flex items-center justify-center p-4 bg-[#050310]/90 backdrop-blur-md"
+            className="journey-modal fixed inset-0 z-[9999] flex items-center justify-center p-4 bg-[#050310]/90 backdrop-blur-md"
           >
             <motion.div 
               initial={{ scale: 0.95, y: 15 }}

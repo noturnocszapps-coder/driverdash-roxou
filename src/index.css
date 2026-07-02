@@ -31,3 +31,32 @@ body {
 ::-webkit-scrollbar-thumb:hover {
   background: #4a287a;
 }
+
+.leaflet-container {
+  z-index: 1 !important;
+}
+
+.journey-modal {
+  z-index: 999999 !important;
+  position: fixed;
+}
+
+@media (max-width: 640px) {
+  .modal-actions-container {
+    flex-direction: column !important;
+    align-items: stretch !important;
+    gap: 12px !important;
+    padding-bottom: calc(1.25rem + env(safe-area-inset-bottom)) !important;
+  }
+  .modal-actions-container .modal-btn-group {
+    flex-direction: column !important;
+    align-items: stretch !important;
+    width: 100% !important;
+    gap: 10px !important;
+  }
+  .modal-actions-container button {
+    width: 100% !important;
+    max-width: 100% !important;
+    justify-content: center !important;
+  }
+}
