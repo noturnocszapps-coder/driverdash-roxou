@@ -15,6 +15,17 @@ export interface OnboardingProgress {
   onboarding_completed: boolean;
   updated_at?: string;
   syncPending?: boolean;
+  rentalAmount?: string;
+  weeklyKmLimit?: string;
+  operatingCosts?: string;
+  ipva?: string;
+  insurance?: string;
+  maintenance?: string;
+  depreciation?: string;
+  kmPerLiter?: string;
+  fuelPrice?: string;
+  kwhPer100km?: string;
+  electricityPrice?: string;
 }
 
 const ONBOARDING_KEY = `${STORAGE_PREFIX}onboarding_v2_progress`;

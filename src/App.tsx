@@ -48,7 +48,7 @@ export default function App() {
           <Route
             path="/debug"
             element={
-              <ProtectedRoute>
+              <ProtectedRoute allowedRole="admin">
                 <AppLayout>
                   <DebugPage />
                 </AppLayout>
@@ -58,7 +58,7 @@ export default function App() {
           <Route
             path="/system-health"
             element={
-              <ProtectedRoute>
+              <ProtectedRoute allowedRole="admin">
                 <AppLayout>
                   <DebugPage />
                 </AppLayout>
