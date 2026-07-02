@@ -149,8 +149,17 @@ export const OnboardingWizard: React.FC<OnboardingWizardProps> = ({ onComplete }
   const percentComplete = Math.round((step / 6) * 100);
 
   return (
-    <div className="fixed inset-0 z-50 bg-[#04010a]/95 backdrop-blur-md flex items-center justify-center p-4 overflow-y-auto">
-      <div className="w-full max-w-xl bg-gradient-to-b from-[#110729] to-[#04010b] border border-purple-500/30 rounded-3xl p-6 sm:p-8 shadow-[0_0_50px_rgba(147,51,234,0.15)] relative overflow-hidden">
+    <div 
+      className="fixed inset-0 z-50 bg-[#04010a]/95 backdrop-blur-md overflow-y-auto flex flex-col items-center justify-start sm:justify-center p-4 sm:p-6"
+      style={{
+        minHeight: '100dvh',
+        paddingTop: 'calc(1rem + env(safe-area-inset-top))',
+        paddingBottom: 'calc(2rem + env(safe-area-inset-bottom))',
+        paddingLeft: 'calc(1rem + env(safe-area-inset-left))',
+        paddingRight: 'calc(1rem + env(safe-area-inset-right))',
+      }}
+    >
+      <div className="w-full max-w-xl my-auto bg-gradient-to-b from-[#110729] to-[#04010b] border border-purple-500/30 rounded-3xl p-6 sm:p-8 shadow-[0_0_50px_rgba(147,51,234,0.15)] relative overflow-hidden">
         {/* Glowing background elements */}
         <div className="absolute top-0 right-0 w-32 h-32 bg-purple-600/10 rounded-full filter blur-2xl pointer-events-none" />
         <div className="absolute bottom-0 left-0 w-32 h-32 bg-indigo-600/10 rounded-full filter blur-2xl pointer-events-none" />
