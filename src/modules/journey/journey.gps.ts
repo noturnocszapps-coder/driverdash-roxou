@@ -2,6 +2,8 @@
  * Geolocation / Watchers Browser Core Interfaces
  * Module: Journey (journey)
  * When to edit: When altering browser geolocation settings, high accuracy requirements, or track intervals.
+ * 
+ * STABLE CORE - NÃO ALTERAR SEM AUTORIZAÇÃO EXPLÍCITA
  */
 
 export interface GPSTrackingCoords {

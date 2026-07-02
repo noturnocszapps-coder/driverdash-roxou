@@ -2,6 +2,8 @@
  * Journey and Telemetry Service Routines
  * Module: Journey (journey)
  * When to edit: When modifying driver session or coordinate point structures or DB schemas.
+ * 
+ * STABLE CORE - NÃO ALTERAR SEM AUTORIZAÇÃO EXPLÍCITA
  */
 
 import { supabase } from '../shared/supabase.helpers';

@@ -56,6 +56,16 @@ export default function App() {
             }
           />
           <Route
+            path="/system-health"
+            element={
+              <ProtectedRoute>
+                <AppLayout>
+                  <DebugPage />
+                </AppLayout>
+              </ProtectedRoute>
+            }
+          />
+          <Route
             path="/jornadas"
             element={
               <ProtectedRoute>

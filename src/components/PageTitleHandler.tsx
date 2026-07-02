@@ -20,7 +20,7 @@ export function PageTitleHandler() {
       title = 'DriverDash Roxou • Histórico de Jornadas';
     } else if (path.startsWith('/jornadas/')) {
       title = 'DriverDash Roxou • Detalhes da Jornada';
-    } else if (path === '/debug') {
+    } else if (path === '/debug' || path === '/system-health') {
       title = 'DriverDash Roxou • Diagnóstico GPS';
     } else if (path === '/status') {
       title = 'DriverDash Roxou • Diagnóstico GPS';

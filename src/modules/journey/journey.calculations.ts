@@ -2,6 +2,8 @@
  * Geospatial and Telemetry Calculations
  * Module: Journey (journey)
  * When to edit: When altering distance formulations, average speed calculations, or duration math.
+ * 
+ * STABLE CORE - NÃO ALTERAR SEM AUTORIZAÇÃO EXPLÍCITA
  */
 
 import { RoutePoint, DriverSession } from './journey.types';

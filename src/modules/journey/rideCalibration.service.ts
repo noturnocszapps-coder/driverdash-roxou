@@ -4,6 +4,8 @@
  * Responsibility: Manages individual ride state, automatic metrics calculations,
  * data quality validations, and persistence logic for both Local and Supabase storage.
  * Designed to be reusable by Android Accessibility Services in the future.
+ * 
+ * STABLE CORE - NÃO ALTERAR SEM AUTORIZAÇÃO EXPLÍCITA
  */
 
 import { supabase } from '../shared/supabase.helpers';

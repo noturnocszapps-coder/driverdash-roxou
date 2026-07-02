@@ -2,6 +2,8 @@
  * Professional GPS Noise Filter and Snap-To-Road Service
  * Module: Journey (journey)
  * Integrates with Google Roads API via secure Express backend proxy.
+ * 
+ * STABLE CORE - NÃO ALTERAR SEM AUTORIZAÇÃO EXPLÍCITA
  */
 
 export interface RawGpsPoint {

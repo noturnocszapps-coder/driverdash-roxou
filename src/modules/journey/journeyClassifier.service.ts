@@ -2,6 +2,8 @@
  * Smart Mileage Classification Engine Service (Phase 6)
  * Module: Journey (journey)
  * Purpose: Automatically classify GPS route points based on manual events and speed rules.
+ * 
+ * STABLE CORE - NÃO ALTERAR SEM AUTORIZAÇÃO EXPLÍCITA
  */
 
 import { supabase } from '../shared/supabase.helpers';

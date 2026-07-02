@@ -3,6 +3,8 @@
  * Module: Journey (journey)
  * Responsibility: Handles robust batch uploads, deduplication, retry queues with backoff,
  *                 and offline synchronization states.
+ * 
+ * STABLE CORE - NÃO ALTERAR SEM AUTORIZAÇÃO EXPLÍCITA
  */
 
 import { STORAGE_PREFIX } from '../shared/constants';

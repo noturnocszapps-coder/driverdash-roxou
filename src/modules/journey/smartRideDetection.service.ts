@@ -2,6 +2,8 @@
  * Smart Ride Detection Engine Service (Phase 6)
  * Module: Journey (journey)
  * Purpose: Automatically detect ride starts and ends based on GPS, speed, stopping patterns, heading changes, and acceleration.
+ * 
+ * STABLE CORE - NÃO ALTERAR SEM AUTORIZAÇÃO EXPLÍCITA
  */
 
 import { supabase } from '../shared/supabase.helpers';

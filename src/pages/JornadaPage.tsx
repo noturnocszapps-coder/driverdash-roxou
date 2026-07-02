@@ -2,6 +2,8 @@
  * Premium Active Journey Tracker Screen
  * Route: /jornada
  * Responsibility: Initiates tracking, displays active ride statistics, and monitors real-time GPS state.
+ * 
+ * STABLE CORE - NÃO ALTERAR SEM AUTORIZAÇÃO EXPLÍCITA
  */
 
 import React, { useState, useEffect, useMemo } from 'react';
@@ -11,7 +13,7 @@ import {
   Play, Square, MapPin, Navigation, Clock, ShieldAlert,
   AlertTriangle, Milestone, Activity, Compass, Flame, Info,
   Bot, Sparkles, ThumbsUp, ThumbsDown, Gauge, TrendingUp, Terminal, Check, X, RefreshCw,
-  ChevronRight, ChevronDown, Signal, Edit, Calendar
+  ChevronRight, ChevronDown, Signal, Edit, Calendar, BarChart3, Car
 } from 'lucide-react';
 import { motion, AnimatePresence } from 'motion/react';
 import { telemetrySyncService } from '../modules/journey/telemetrySync.service';
@@ -36,6 +38,8 @@ import { CalibrationRouteMap } from '../components/CalibrationRouteMap';
 import { filterGpsNoise, snapTrackToRoads } from '../modules/journey/roadMatching.service';
 import { RealTimeTrackerMap } from '../components/RealTimeTrackerMap';
 import { TelemetryDebugModal } from '../components/TelemetryDebugModal';
+import { DriverDetailsModal } from '../components/DriverDetailsModal';
+import { CopilotCard } from '../modules/copilot-intelligence/components/CopilotCard';
 import { leafletManager } from '../modules/maps/leafletManager';
 import { errorTracker } from '../modules/observability/errorTracker';
 
@@ -94,6 +98,8 @@ export const JornadaPage: React.FC = () => {
   const [wakeLockObj, setWakeLockObj] = useState<any | null>(null);
 
   const [isInstructionsOpen, setIsInstructionsOpen] = useState(false);
+  const [isDetailsModalOpen, setIsDetailsModalOpen] = useState(false);
+  const [currentStreetName, setCurrentStreetName] = useState<string>("Buscando localização...");
 
   // Hidden title click developer toggler
   const [clickCount, setClickCount] = useState(0);
@@ -784,6 +790,17 @@ export const JornadaPage: React.FC = () => {
     });
   }, [lastCoord, isRideActive]);
 
+  const handleAcceptRideFromIdle = async () => {
+    try {
+      pendingAcceptRideRef.current = true;
+      setAllowRealTimeMap(true);
+      await startSession();
+      await requestWakeLock();
+    } catch (err) {
+      console.error("[IDLE_ACCEPT] Erro ao aceitar corrida a partir do standby:", err);
+    }
+  };
+
   const handleAcceptRide = async () => {
     if (!activeSession) return;
     try {
@@ -1019,6 +1036,7 @@ export const JornadaPage: React.FC = () => {
     setPickupNeighborhood(activeRide?.pickup_neighborhood || localGeocode.neighborhood);
     setPickupCity(activeRide?.pickup_city || localGeocode.city);
 
+    setAllowRealTimeMap(false);
     setFinishModalOpen(true);
     setIsResolvingGeocode(true);
 
@@ -1380,6 +1398,7 @@ export const JornadaPage: React.FC = () => {
           localStorage.setItem(`driverdash_ride_active_${activeSession.id}`, 'false');
           setIsRideActive(false);
           setFinishModalOpen(false);
+          setAllowRealTimeMap(true);
 
           if (addSmartAlert) {
             addSmartAlert({
@@ -1421,6 +1440,7 @@ export const JornadaPage: React.FC = () => {
       localStorage.setItem(`driverdash_ride_active_${activeSession.id}`, 'false');
       setIsRideActive(false);
       setFinishModalOpen(false);
+      setAllowRealTimeMap(true);
 
       if (addSmartAlert) {
         addSmartAlert({
@@ -1446,12 +1466,24 @@ export const JornadaPage: React.FC = () => {
     setCancelReason("Passageiro");
     setCancelObs("");
     setSaveError(null);
+    setAllowRealTimeMap(false);
     setCancelModalOpen(true);
+  };
+
+  const handleCloseCancelRide = () => {
+    setCancelModalOpen(false);
+    setAllowRealTimeMap(true);
+  };
+
+  const handleCancelFinishRide = () => {
+    setFinishModalOpen(false);
+    setAllowRealTimeMap(true);
   };
 
   const handleConfirmCancelRide = async () => {
     if (!activeSession) return;
     setSaveError(null);
+    setIsSavingCalibration(true);
 
     try {
       localStorage.setItem(`driverdash_ride_manual_override_${activeSession.id}`, 'true');
@@ -1460,11 +1492,6 @@ export const JornadaPage: React.FC = () => {
 
       const endTime = new Date().toISOString();
       const startTime = activeRide?.startTime || new Date().toISOString();
-      const startMs = activeRide?.startLocation?.timestamp || new Date(startTime).getTime();
-      const endMs = Date.now();
-
-      const startKm = activeRide ? activeRide.start_odometer : totalDistanceKm;
-      const endKm = totalDistanceKm;
       const pts = activeRide?.rideTrackPoints || [];
 
       const rawRide: Partial<CalibratedRide> = {
@@ -1491,20 +1518,32 @@ export const JornadaPage: React.FC = () => {
         observations: cancelObs || `Cancelamento: ${cancelReason}`,
 
         rideTrackPoints: pts,
-        start_odometer: startKm,
-        end_odometer: endKm
+        start_odometer: activeRide ? activeRide.start_odometer : totalDistanceKm,
+        end_odometer: totalDistanceKm
       };
 
       const res = await persistCalibratedRide(rawRide);
+      let isOffline = false;
       if (!res.success) {
-        throw new Error(res.error || 'Erro na validação do cancelamento.');
+        if (res.ride?.pending_sync) {
+          isOffline = true;
+          setToast({
+            show: true,
+            message: 'Aviso: Banco remoto offline. Cancelamento salvo localmente.',
+            type: 'error'
+          });
+        } else {
+          throw new Error(res.error || 'Erro na validação do cancelamento.');
+        }
       }
 
-      setToast({
-        show: true,
-        message: 'Corrida salva para calibração da IA.',
-        type: 'success'
-      });
+      if (!isOffline) {
+        setToast({
+          show: true,
+          message: 'Corrida cancelada e salva para calibração da IA.',
+          type: 'success'
+        });
+      }
 
       const updatedLogsStr = localStorage.getItem('ride_logs');
       const updatedLogs = updatedLogsStr ? JSON.parse(updatedLogsStr) : [];
@@ -1513,11 +1552,19 @@ export const JornadaPage: React.FC = () => {
       setActiveRide(null);
       localStorage.removeItem('driverdash_active_ride_calib');
 
-      await finishRide(activeSession.id, lastCoord?.lat || -22.1225, lastCoord?.lng || -51.3883);
+      // Stop GPS tracking since ride has finished
+      window.dispatchEvent(new Event('driverdash_active_ride_change'));
+
+      try {
+        await finishRide(activeSession.id, lastCoord?.lat || -22.1225, lastCoord?.lng || -51.3883);
+      } catch (err) {
+        console.warn('[OFFLINE] Falha ao encerrar evento remoto, continuará offline.');
+      }
 
       localStorage.setItem(`driverdash_ride_active_${activeSession.id}`, 'false');
       setIsRideActive(false);
       setCancelModalOpen(false);
+      setAllowRealTimeMap(true);
 
       if (addSmartAlert) {
         addSmartAlert({
@@ -1532,6 +1579,8 @@ export const JornadaPage: React.FC = () => {
     } catch (err: any) {
       console.error("[CALIBRATION_CANCEL] Erro salvando cancelamento:", err);
       setSaveError(err?.message || 'Falha ao salvar dados de calibração.');
+    } finally {
+      setIsSavingCalibration(false);
     }
   };
 
@@ -1803,6 +1852,32 @@ export const JornadaPage: React.FC = () => {
     return null;
   }, [lastCoord, currentSessionPoints, activeSession]);
 
+  const lastGeocodeFetchTimeRef = React.useRef<number>(0);
+
+  useEffect(() => {
+    if (!lastValidCoord) return;
+    const now = Date.now();
+    // Update every 12 seconds to prevent excessive API calls and follow strict debounce
+    if (now - lastGeocodeFetchTimeRef.current > 12000) {
+      lastGeocodeFetchTimeRef.current = now;
+      fetchAddressForCoordinates(lastValidCoord.lat, lastValidCoord.lng).then((res) => {
+        const street = res.street ? `${res.street}, ${res.neighborhood}` : `${res.neighborhood}, ${res.city}`;
+        setCurrentStreetName(street);
+      }).catch(err => {
+        console.error("Error fetching current street name:", err);
+      });
+    }
+  }, [lastValidCoord]);
+
+  const pendingAcceptRideRef = React.useRef<boolean>(false);
+
+  useEffect(() => {
+    if (activeSession && pendingAcceptRideRef.current) {
+      pendingAcceptRideRef.current = false;
+      handleAcceptRide();
+    }
+  }, [activeSession]);
+
   // Elapsed time tracking logic
   useEffect(() => {
     if (!activeSession) {
@@ -2007,29 +2082,41 @@ export const JornadaPage: React.FC = () => {
 
   const handleConfirmEndJourney = async (forceClose: boolean) => {
     if (!activeSession) return;
+    setIsSyncingBeforeEnd(true);
     
-    // Stop active tracking immediately and clear ride state
-    localStorage.removeItem('driverdash_active_ride_calib');
-    setActiveRide(null);
+    try {
+      // Stop active tracking immediately and clear ride state
+      localStorage.removeItem('driverdash_active_ride_calib');
+      setActiveRide(null);
 
-    // Estimate total minutes
-    const runningTimeMinutes = Math.max(1, Math.round(
-      (new Date().getTime() - new Date(activeSession.start_time).getTime()) / 60000
-    ));
+      // Estimate total minutes
+      const runningTimeMinutes = Math.max(1, Math.round(
+        (new Date().getTime() - new Date(activeSession.start_time).getTime()) / 60000
+      ));
 
-    console.log('[SESSION_END_SAFE]', {
-      sessionId: activeSession.id,
-      totalKm: totalKmToday,
-      durationMinutes: runningTimeMinutes,
-      forced: forceClose,
-      pendingCount: pendingPointsCountBeforeEnd
-    });
+      console.log('[SESSION_END_SAFE]', {
+        sessionId: activeSession.id,
+        totalKm: totalKmToday,
+        durationMinutes: runningTimeMinutes,
+        forced: forceClose,
+        pendingCount: pendingPointsCountBeforeEnd
+      });
 
-    await endSession(activeSession.id, totalKmToday, runningTimeMinutes);
-    releaseWakeLock();
-    
-    setJourneyEndModalOpen(false);
-    setSyncStatusBeforeEnd('idle');
+      await endSession(activeSession.id, totalKmToday, runningTimeMinutes);
+      releaseWakeLock();
+      
+      setJourneyEndModalOpen(false);
+      setSyncStatusBeforeEnd('idle');
+    } catch (err: any) {
+      console.error('[Session End Error]', err);
+      setToast({
+        show: true,
+        message: 'Erro ao encerrar jornada: ' + (err?.message || 'Erro desconhecido'),
+        type: 'error'
+      });
+    } finally {
+      setIsSyncingBeforeEnd(false);
+    }
   };
 
   const handleCancelJourneyEnd = () => {
@@ -2101,27 +2188,32 @@ export const JornadaPage: React.FC = () => {
             onClick={handleTitleClick}
             className="text-2xl font-bold tracking-tight text-white flex items-center gap-2 cursor-pointer select-none active:scale-95 transition-transform"
           >
-            <Navigation className="w-6 h-6 text-purple-400 rotate-45" /> Assistente Inteligente
+            <Navigation className="w-6 h-6 text-purple-400 rotate-45" /> DriverDash Roxou
           </h1>
           <p className="text-xs text-slate-400">
-            Rastreie o seu tempo ativo operacional, distância e tempo parado para otimizar seus custos em tempo real.
+            Painel Minimalista de Direção & Inteligência Financeira
           </p>
         </div>
-        <div className="flex items-center gap-2">
+
+        {/* Top bar indicators */}
+        <div className="flex items-center gap-3">
+          {/* Signal indicator */}
+          <div className="flex items-center gap-1.5 px-3 py-1.5 rounded-xl bg-purple-950/20 border border-purple-900/35 select-none text-[11px] font-mono">
+            <Signal className={`w-3.5 h-3.5 ${gpsSignalQuality.color} ${gpsSignalQuality.label === 'Sem sinal' ? 'animate-pulse font-bold' : ''}`} />
+            <span className="text-slate-300">GPS:</span>
+            <span className={`font-bold ${gpsSignalQuality.color}`}>
+              {gpsSignalQuality.label.toUpperCase()}
+            </span>
+          </div>
+
+          {/* Quick Details button to open our complete reports modal */}
           <button
-            onClick={() => navigate('/jornadas')}
-            className="px-3.5 py-1.5 md:py-2 text-xs font-semibold bg-[#0d0926] border border-purple-950/45 text-purple-300 hover:text-white rounded-xl transition-all cursor-pointer flex items-center gap-1.5 select-none"
+            onClick={() => setIsDetailsModalOpen(true)}
+            className="px-3.5 py-1.5 rounded-xl bg-purple-900/40 hover:bg-purple-900/60 border border-purple-700/40 hover:border-purple-600/50 text-purple-300 hover:text-white font-semibold transition-all select-none cursor-pointer flex items-center gap-1.5 text-xs shadow-[0_2px_10px_rgba(147,51,234,0.1)]"
           >
-            Ver Histórico
+            <BarChart3 className="w-3.5 h-3.5" />
+            <span>Relatórios & IA</span>
           </button>
-          {isAdmin && (
-            <button
-              onClick={() => navigate('/debug')}
-              className="px-3.5 py-1.5 md:py-2 text-xs font-semibold bg-[#0d0926] border border-purple-950/45 text-purple-300 hover:text-white rounded-xl transition-all cursor-pointer flex items-center gap-1.5 select-none"
-            >
-              Diagnóstico GPS
-            </button>
-          )}
         </div>
       </div>
 
@@ -2314,7 +2406,7 @@ export const JornadaPage: React.FC = () => {
                   </div>
 
                   {/* Real-time professional tracker Leaflet map card */}
-                  {allowRealTimeMap && !isMapOpen && !journeyEndModalOpen ? (
+                  {allowRealTimeMap && !isMapOpen && !journeyEndModalOpen && !finishModalOpen && !cancelModalOpen && !editModalOpen ? (
                     <RealTimeTrackerMap 
                       lastCoord={lastValidCoord} 
                       activeRide={activeRide} 
@@ -2551,6 +2643,21 @@ export const JornadaPage: React.FC = () => {
 
         {/* Info & Session History Panel (Right side) */}
         <div className="space-y-6">
+          
+          {/* Inteligência Copiloto do Motorista */}
+          <CopilotCard 
+            currentBairro={pickupNeighborhood || activeRide?.bairroOrigem || ''}
+            currentLat={activeRide?.lastPosition?.lat || lastCoord?.lat}
+            currentLng={activeRide?.lastPosition?.lng || lastCoord?.lng}
+            currentSpeed={lastCoord?.speed ? lastCoord.speed * 3.6 : 0}
+            isJourneyActive={!!activeSession}
+            activeSession={activeSession}
+            totalDistanceKm={totalDistanceKm}
+            elapsedTime={elapsedTime}
+            rideLogs={rideLogs}
+            vehicle={vehicle}
+            vehicleCostSettings={vehicleCostSettings}
+          />
           
           {/* Active Status Alerts warnings */}
           {gpsUi.isError && (
@@ -2960,7 +3067,7 @@ export const JornadaPage: React.FC = () => {
             initial={{ opacity: 0 }}
             animate={{ opacity: 1 }}
             exit={{ opacity: 0 }}
-            className="journey-modal fixed inset-0 z-50 flex items-center justify-center p-4 bg-[#050310]/85 backdrop-blur-md"
+            className="journey-modal fixed inset-0 z-[9999] flex items-center justify-center p-4 bg-[#050310]/85 backdrop-blur-md"
           >
             <motion.div 
               initial={{ scale: 0.95, y: 15 }}
@@ -2978,7 +3085,8 @@ export const JornadaPage: React.FC = () => {
                   </p>
                 </div>
                 <button 
-                  onClick={() => setFinishModalOpen(false)}
+                  type="button"
+                  onClick={handleCancelFinishRide}
                   className="p-1 rounded-lg bg-purple-950/20 hover:bg-purple-950/40 text-purple-400 cursor-pointer select-none"
                 >
                   <X className="w-4 h-4" />
@@ -3227,6 +3335,7 @@ export const JornadaPage: React.FC = () => {
 
               <div className="p-5 border-t border-purple-950/20 bg-purple-950/10 flex items-center justify-between gap-3 shrink-0 modal-actions-container">
                 <button 
+                  type="button"
                   onClick={() => setShowDebugDataModal(true)}
                   disabled={isSavingCalibration}
                   className="px-4 py-2.5 rounded-xl border border-dashed border-purple-600/40 hover:bg-purple-950/25 text-purple-300 font-mono text-xs select-none cursor-pointer transition-all flex items-center gap-1.5 disabled:opacity-50 disabled:cursor-not-allowed"
@@ -3236,13 +3345,15 @@ export const JornadaPage: React.FC = () => {
 
                 <div className="flex items-center gap-2 modal-btn-group">
                   <button 
-                    onClick={() => setFinishModalOpen(false)}
+                    type="button"
+                    onClick={handleCancelFinishRide}
                     disabled={isSavingCalibration}
                     className="px-4 py-2.5 rounded-xl border border-purple-950/45 hover:bg-purple-950/20 text-purple-400 font-semibold select-none cursor-pointer transition-all disabled:opacity-50 disabled:cursor-not-allowed"
                   >
                     Voltar
                   </button>
                   <button 
+                    type="button"
                     onClick={handleConfirmFinishRide}
                     disabled={isSavingCalibration}
                     className="px-5 py-2.5 rounded-xl bg-gradient-to-r from-emerald-600 to-green-600 hover:from-emerald-500 hover:to-green-500 text-white font-bold select-none cursor-pointer transition-all shadow-[0_2px_10px_rgba(16,185,129,0.15)] flex items-center gap-1.5 disabled:opacity-60 disabled:cursor-not-allowed"
@@ -3359,7 +3470,7 @@ export const JornadaPage: React.FC = () => {
             initial={{ opacity: 0 }}
             animate={{ opacity: 1 }}
             exit={{ opacity: 0 }}
-            className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-[#050310]/85 backdrop-blur-md"
+            className="fixed inset-0 z-[9999] flex items-center justify-center p-4 bg-[#050310]/85 backdrop-blur-md"
           >
             <motion.div 
               initial={{ scale: 0.95, y: 15 }}
@@ -3377,8 +3488,10 @@ export const JornadaPage: React.FC = () => {
                   </p>
                 </div>
                 <button 
-                  onClick={() => setCancelModalOpen(false)}
-                  className="p-1 rounded-lg bg-purple-950/20 hover:bg-purple-950/40 text-purple-400 cursor-pointer select-none"
+                  type="button"
+                  onClick={handleCloseCancelRide}
+                  disabled={isSavingCalibration}
+                  className="p-1 rounded-lg bg-purple-950/20 hover:bg-purple-950/40 text-purple-400 cursor-pointer select-none disabled:opacity-50"
                 >
                   <X className="w-4 h-4" />
                 </button>
@@ -3390,7 +3503,8 @@ export const JornadaPage: React.FC = () => {
                   <select 
                     value={cancelReason}
                     onChange={(e) => setCancelReason(e.target.value)}
-                    className="w-full p-2.5 bg-[#050310] rounded-xl border border-purple-950/25 text-[#e1e1e6] focus:border-purple-500 focus:outline-none"
+                    disabled={isSavingCalibration}
+                    className="w-full p-2.5 bg-[#050310] rounded-xl border border-purple-950/25 text-[#e1e1e6] focus:border-purple-500 focus:outline-none disabled:opacity-50"
                   >
                     <option value="Passageiro">Passageiro não apareceu / desistiu</option>
                     <option value="Motorista">Inviável por questões de segurança (Motorista)</option>
@@ -3405,24 +3519,42 @@ export const JornadaPage: React.FC = () => {
                   <textarea 
                     value={cancelObs}
                     onChange={(e) => setCancelObs(e.target.value)}
-                    className="w-full p-2.5 bg-[#050310] rounded-xl border border-purple-950/25 text-[#e1e1e6] focus:border-purple-500 focus:outline-none min-h-[60px] leading-relaxed resize-none"
+                    disabled={isSavingCalibration}
+                    className="w-full p-2.5 bg-[#050310] rounded-xl border border-purple-950/25 text-[#e1e1e6] focus:border-purple-500 focus:outline-none min-h-[60px] leading-relaxed resize-none disabled:opacity-50"
                     placeholder="Descreva o motivo opcional..."
                   />
                 </div>
               </div>
 
+              {saveError && (
+                <div className="mx-5 mb-2 p-3 bg-rose-950/30 border border-rose-900/40 text-rose-400 text-xs rounded-xl font-mono">
+                  ⚠️ Erro ao Cancelar: {saveError}
+                </div>
+              )}
+
               <div className="p-5 border-t border-purple-950/20 bg-purple-950/10 flex items-center justify-end gap-3 shrink-0">
                 <button 
-                  onClick={() => setCancelModalOpen(false)}
-                  className="px-4 py-2.5 rounded-xl border border-purple-950/45 hover:bg-purple-950/20 text-purple-400 font-semibold select-none cursor-pointer transition-all"
+                  type="button"
+                  onClick={handleCloseCancelRide}
+                  disabled={isSavingCalibration}
+                  className="px-4 py-2.5 rounded-xl border border-purple-950/45 hover:bg-purple-950/20 text-purple-400 font-semibold select-none cursor-pointer transition-all disabled:opacity-50"
                 >
                   Voltar
                 </button>
                 <button 
+                  type="button"
                   onClick={handleConfirmCancelRide}
-                  className="px-5 py-2.5 rounded-xl bg-gradient-to-r from-rose-700 to-red-600 hover:from-rose-600 hover:to-red-500 text-white font-bold select-none cursor-pointer transition-all shadow-[0_2px_10px_rgba(225,29,72,0.15)]"
+                  disabled={isSavingCalibration}
+                  className="px-5 py-2.5 rounded-xl bg-gradient-to-r from-rose-700 to-red-600 hover:from-rose-600 hover:to-red-500 text-white font-bold select-none cursor-pointer transition-all shadow-[0_2px_10px_rgba(225,29,72,0.15)] disabled:opacity-50 disabled:cursor-not-allowed flex items-center gap-1.5"
                 >
-                  Confirmar Cancelamento
+                  {isSavingCalibration ? (
+                    <>
+                      <RefreshCw className="w-3.5 h-3.5 animate-spin" />
+                      <span>Salvando...</span>
+                    </>
+                  ) : (
+                    <span>Confirmar Cancelamento</span>
+                  )}
                 </button>
               </div>
             </motion.div>
@@ -3437,7 +3569,7 @@ export const JornadaPage: React.FC = () => {
             initial={{ opacity: 0 }}
             animate={{ opacity: 1 }}
             exit={{ opacity: 0 }}
-            className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-[#050310]/85 backdrop-blur-md"
+            className="fixed inset-0 z-[9999] flex items-center justify-center p-4 bg-[#050310]/85 backdrop-blur-md"
           >
             <motion.div 
               initial={{ scale: 0.95, y: 15 }}
@@ -3455,6 +3587,7 @@ export const JornadaPage: React.FC = () => {
                   </p>
                 </div>
                 <button 
+                  type="button"
                   onClick={() => setEditModalOpen(false)}
                   className="p-1 rounded-lg bg-purple-950/20 hover:bg-purple-950/40 text-purple-400 cursor-pointer select-none"
                 >
@@ -3614,12 +3747,14 @@ export const JornadaPage: React.FC = () => {
 
               <div className="p-5 border-t border-purple-950/20 bg-purple-950/10 flex items-center justify-end gap-3 shrink-0">
                 <button 
+                  type="button"
                   onClick={() => setEditModalOpen(false)}
                   className="px-4 py-2.5 rounded-xl border border-purple-950/45 hover:bg-purple-950/20 text-purple-400 font-semibold select-none cursor-pointer transition-all"
                 >
                   Voltar
                 </button>
                 <button 
+                  type="button"
                   onClick={handleConfirmEditRide}
                   className="px-5 py-2.5 rounded-xl bg-gradient-to-r from-emerald-600 to-green-600 hover:from-emerald-500 hover:to-green-500 text-white font-bold select-none cursor-pointer transition-all shadow-[0_2px_10px_rgba(16,185,129,0.15)]"
                 >
@@ -3677,13 +3812,14 @@ export const JornadaPage: React.FC = () => {
               <div className="p-5 border-b border-purple-950/20 bg-purple-950/10 flex items-center justify-between">
                 <div>
                   <h3 className="text-sm font-bold text-white uppercase font-mono tracking-wider flex items-center gap-2">
-                    🛑 Encerramento Seguro de Jornada
+                    🛑 Encerramento de Jornada
                   </h3>
                   <p className="text-[10px] text-purple-300 mt-0.5">
-                    Validando e transmitindo o buffer de telemetria desta sessão.
+                    Salvando com segurança o progresso de sua jornada.
                   </p>
                 </div>
                 <button 
+                  type="button"
                   onClick={handleCancelJourneyEnd}
                   disabled={isSyncingBeforeEnd}
                   className="p-1 rounded-lg bg-purple-950/20 hover:bg-purple-950/40 text-purple-400 cursor-pointer select-none disabled:opacity-40 disabled:cursor-not-allowed"
@@ -3699,72 +3835,91 @@ export const JornadaPage: React.FC = () => {
                     <>
                       <RefreshCw className="w-8 h-8 text-purple-400 animate-spin" />
                       <div>
-                        <p className="font-bold text-slate-200">Transmitindo coordenadas...</p>
-                        <p className="text-[10px] text-slate-400 font-mono mt-0.5">Sincronizando pontos pendentes do GPS local</p>
+                        <p className="font-bold text-slate-200">Sincronizando dados...</p>
+                        <p className="text-[10px] text-slate-400 mt-0.5">Por favor, aguarde alguns instantes.</p>
                       </div>
                     </>
-                  ) : syncStatusBeforeEnd === 'success' ? (
+                  ) : syncStatusBeforeEnd === 'success' || pendingPointsCountBeforeEnd === 0 ? (
                     <>
                       <div className="h-10 w-10 rounded-full bg-emerald-950/60 border border-emerald-500/30 flex items-center justify-center text-emerald-400">
                         <Check className="w-6 h-6" />
                       </div>
                       <div>
-                        <p className="font-bold text-emerald-400">Todos os dados sincronizados!</p>
-                        <p className="text-[10px] text-slate-400 mt-0.5">Nenhum ponto pendente. Encerramento 100% íntegro e seguro.</p>
+                        <p className="font-bold text-emerald-400">Sincronização concluída!</p>
+                        <p className="text-[10px] text-slate-400 mt-0.5">Seus dados foram salvos com sucesso.</p>
                       </div>
                     </>
                   ) : (
                     <>
                       <AlertTriangle className="w-8 h-8 text-yellow-500 animate-pulse" />
                       <div>
-                        <p className="font-bold text-yellow-500">Dados pendentes encontrados</p>
+                        <p className="font-bold text-yellow-500">Sincronização em andamento</p>
                         <p className="text-[10px] text-slate-400 mt-1">
-                          Ainda existem <span className="font-mono text-white font-bold bg-purple-950 px-1.5 py-0.5 rounded">{pendingPointsCountBeforeEnd}</span> pontos de GPS aguardando sincronização na nuvem.
+                          Estamos salvando seus dados de forma segura.
                         </p>
                       </div>
                     </>
                   )}
                 </div>
 
-                <div className="space-y-2">
-                  <p className="text-slate-400 leading-relaxed text-[11px]">
-                    {syncStatusBeforeEnd === 'success' 
-                      ? 'Todas as posições coletadas para inteligência e telemetria já foram devidamente transmitidas aos servidores seguros.' 
-                      : 'Isso ocorre se você estiver sem internet estável no momento. Você pode tentar re-sincronizar agora ou encerrar mesmo assim (os pontos restantes serão salvos localmente e tentarão subir em segundo plano assim que houver rede).'}
-                  </p>
+                {/* Bloco de Alerta Simplificado */}
+                <div className="p-4 rounded-xl bg-[#050310] border border-purple-950/20 space-y-1.5">
+                  {pendingPointsCountBeforeEnd > 0 && syncStatusBeforeEnd !== 'success' ? (
+                    <>
+                      <p className="font-bold text-yellow-500 text-xs">
+                        {pendingPointsCountBeforeEnd} pontos aguardando sincronização
+                      </p>
+                      <p className="text-[10.5px] text-slate-400 leading-normal">
+                        Esses dados serão enviados quando houver conexão.
+                      </p>
+                    </>
+                  ) : (
+                    <>
+                      <p className="font-bold text-emerald-400 text-xs">
+                        Tudo pronto para encerrar!
+                      </p>
+                      <p className="text-[10.5px] text-slate-400 leading-normal">
+                        Sua jornada foi salva e está pronta para encerramento.
+                      </p>
+                    </>
+                  )}
                 </div>
               </div>
 
-              <div className="p-5 border-t border-purple-950/20 bg-purple-950/10 flex flex-col sm:flex-row items-center justify-end gap-2 shrink-0">
-                <button 
-                  onClick={handleCancelJourneyEnd}
-                  disabled={isSyncingBeforeEnd}
-                  className="w-full sm:w-auto px-4 py-2.5 rounded-xl border border-purple-950/45 hover:bg-purple-950/20 text-purple-400 font-semibold select-none cursor-pointer transition-all disabled:opacity-40 text-center"
-                >
-                  Cancelar
-                </button>
-                
-                {syncStatusBeforeEnd !== 'success' && (
+              {/* Ações (Simplificadas e Hierárquicas) */}
+              <div className="p-5 border-t border-purple-950/20 bg-purple-950/10 flex flex-col gap-2.5 shrink-0">
+                {pendingPointsCountBeforeEnd > 0 && syncStatusBeforeEnd !== 'success' && (
                   <button 
+                    type="button"
                     onClick={handleForceSyncBeforeEnd}
                     disabled={isSyncingBeforeEnd}
-                    className="w-full sm:w-auto px-4 py-2.5 rounded-xl bg-purple-950 hover:bg-purple-900 border border-purple-700 text-purple-300 font-semibold flex items-center justify-center gap-1.5 select-none cursor-pointer transition-all disabled:opacity-45"
+                    className="w-full px-5 py-2.5 rounded-xl bg-gradient-to-r from-blue-600 to-indigo-600 hover:from-blue-500 hover:to-indigo-500 text-white font-bold select-none cursor-pointer transition-all text-center flex items-center justify-center gap-1.5 shadow-[0_2px_10px_rgba(59,130,246,0.15)] disabled:opacity-50 disabled:cursor-not-allowed"
                   >
                     <RefreshCw className={`w-3.5 h-3.5 ${isSyncingBeforeEnd ? 'animate-spin' : ''}`} />
-                    Tentar Novamente
+                    <span>{isSyncingBeforeEnd ? 'Sincronizando...' : 'Tentar Sincronizar'}</span>
                   </button>
                 )}
 
                 <button 
-                  onClick={() => handleConfirmEndJourney(syncStatusBeforeEnd !== 'success')}
+                  type="button"
+                  onClick={() => handleConfirmEndJourney(syncStatusBeforeEnd !== 'success' && pendingPointsCountBeforeEnd > 0)}
                   disabled={isSyncingBeforeEnd}
-                  className={`w-full sm:w-auto px-5 py-2.5 rounded-xl text-white font-bold select-none cursor-pointer transition-all text-center flex items-center justify-center gap-1.5 ${
-                    syncStatusBeforeEnd === 'success'
+                  className={`w-full px-5 py-2.5 rounded-xl text-white font-bold select-none cursor-pointer transition-all text-center flex items-center justify-center gap-1.5 ${
+                    syncStatusBeforeEnd === 'success' || pendingPointsCountBeforeEnd === 0
                       ? 'bg-gradient-to-r from-emerald-600 to-green-600 hover:from-emerald-500 hover:to-green-500 shadow-[0_2px_10px_rgba(16,185,129,0.15)]'
-                      : 'bg-gradient-to-r from-purple-700 to-indigo-600 hover:from-purple-600 hover:to-indigo-500 shadow-[0_2px_10px_rgba(109,40,217,0.15)]'
+                      : 'bg-purple-900/40 hover:bg-purple-900/60 border border-purple-700/50 hover:border-purple-600/60 text-purple-200'
                   }`}
                 >
-                  {syncStatusBeforeEnd === 'success' ? 'Encerrar com Sucesso' : 'Encerrar Mesmo Assim'}
+                  <span>Encerrar com Segurança</span>
+                </button>
+
+                <button 
+                  type="button"
+                  onClick={handleCancelJourneyEnd}
+                  disabled={isSyncingBeforeEnd}
+                  className="w-full px-4 py-2.5 rounded-xl border border-purple-950/45 hover:bg-purple-950/20 text-purple-400 font-semibold select-none cursor-pointer transition-all disabled:opacity-40 text-center"
+                >
+                  Cancelar
                 </button>
               </div>
             </motion.div>

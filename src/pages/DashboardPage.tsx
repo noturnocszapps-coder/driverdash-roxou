@@ -20,6 +20,8 @@ import { useMaintenanceAlerts } from '../modules/maintenance-ai/hooks/useMainten
 import { usePlatformComparator } from '../modules/platform-comparison/hooks/usePlatformComparator';
 
 // New UI Components
+import { OnboardingWizard } from '../components/OnboardingWizard';
+import { driverProfileService } from '../modules/copilot-intelligence/driverProfile.service';
 import { DataSourceBadge } from '../components/DataSourceBadge';
 import { reconstructJourneyFromPoints } from '../modules/journey/journey.calculations';
 import { calculateCostPerKmEstimate } from '../modules/vehicle/vehicle.calculations';
@@ -103,6 +105,14 @@ export const DashboardPage: React.FC = () => {
   const [showAnalytics, setShowAnalytics] = useState<boolean>(false);
   const [isEditingGoal, setIsEditingGoal] = useState<boolean>(false);
   const [tempDailyGoal, setTempDailyGoal] = useState<string>('');
+
+  const profilePrefs = useMemo(() => {
+    return driverProfileService.loadPreferences();
+  }, [profile?.onboarding_completed]);
+
+  const isElectric = useMemo(() => {
+    return !!(vehicle?.fuel_type?.toLowerCase().includes('elétr') || vehicle?.fuel_type?.toLowerCase().includes('elet'));
+  }, [vehicle]);
 
   // Interactive local states for simulators
   const [targetNetInput, setTargetNetInput] = useState<number>(3000); // R$ 3000/month net
@@ -481,6 +491,7 @@ export const DashboardPage: React.FC = () => {
 
   return (
     <div className="space-y-8 font-sans pb-16" id="driver-intelligence-hub">
+      {!hasCompletedSetup && <OnboardingWizard />}
       
       {/* Top Welcome Header - Premium Tesla/Apple Style */}
       <div className="flex flex-col md:flex-row justify-between items-start md:items-center gap-6 border-b border-purple-950/20 pb-6">
@@ -549,14 +560,14 @@ export const DashboardPage: React.FC = () => {
       {activeTab !== 'home' && (
         <div className="flex gap-1 overflow-x-auto whitespace-nowrap pb-2 border-b border-purple-950/10 scrollbar-none select-none" id="advanced-tabs-selector">
           {[
-            { id: 'analytics', label: 'Analytics Completo', icon: TrendingUp },
+            { id: 'analytics', label: profilePrefs?.platforms?.includes('private') ? '⭐ Lucro & Desempenho' : 'Analytics Completo', icon: TrendingUp },
             { id: 'driver-ai', label: 'Driver AI', icon: Sparkles },
             { id: 'score', label: 'DriverScore', icon: Gauge },
             { id: 'goals', label: 'Metas Inteligentes', icon: Award },
             { id: 'pass', label: 'IA do Passe', icon: Percent },
-            { id: 'weekly', label: 'Planejador', icon: Calendar },
+            { id: 'weekly', label: profilePrefs?.platforms?.includes('private') ? '📅 Agenda & Clientes' : 'Planejador', icon: Calendar },
             { id: 'demand', label: 'Mapa de Demanda', icon: Map },
-            { id: 'fuel', label: 'IA Combustível', icon: Fuel },
+            { id: 'fuel', label: isElectric ? '⚡ IA Energia/Recarga' : 'IA Combustível', icon: isElectric ? Battery : Fuel },
             { id: 'maintenance', label: 'Manutenção', icon: Wrench },
             { id: 'compare', label: 'Plataformas', icon: Layers }
           ].map((tab) => {
@@ -1619,7 +1630,7 @@ export const DashboardPage: React.FC = () => {
               </div>
 
               {/* Fuel Flex panel for Ethanol vs Gasoline combustion cars */}
-              {(vehicle?.fuel_type?.toLowerCase().includes('flex') || vehicle?.fuel_type?.toLowerCase().includes('combust') || !vehicle) && (
+              {!isElectric && (
                 <div className="grid grid-cols-1 md:grid-cols-2 gap-8">
                   
                   {/* flex form card */}
@@ -1684,7 +1695,7 @@ export const DashboardPage: React.FC = () => {
               )}
 
               {/* Electric charge planner card */}
-              {(vehicle?.fuel_type?.toLowerCase().includes('elétr') || vehicle?.fuel_type?.toLowerCase().includes('elet') || !vehicle) && (
+              {isElectric && (
                 <div className="p-6 md:p-8 rounded-2xl bg-[#0b0821]/80 border border-purple-950/30 shadow-xl space-y-6">
                   <h4 className="text-xs font-bold font-mono text-purple-400 uppercase tracking-wider border-b border-purple-950/10 pb-3 flex items-center gap-2">
                     <Battery className="w-4.5 h-4.5 text-purple-400" />
