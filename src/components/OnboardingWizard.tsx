@@ -190,15 +190,17 @@ export const OnboardingWizard: React.FC<OnboardingWizardProps> = ({ onComplete }
   }, [user, dbStatus]);
 
   // 4. Validations
-  const isStepValid = () => {
+  const isFormValid = () => {
     if (step === 1) {
       const yearNum = Number(year);
       return (
-        brand.trim() !== '' &&
-        model.trim() !== '' &&
+        year !== '' &&
+        year.length === 4 &&
         !isNaN(yearNum) &&
         yearNum >= 1980 &&
-        yearNum <= 2027
+        yearNum <= 2027 &&
+        brand?.trim().length > 1 &&
+        model?.trim().length > 1
       );
     }
     if (step === 3) {
@@ -231,7 +233,7 @@ export const OnboardingWizard: React.FC<OnboardingWizardProps> = ({ onComplete }
   };
 
   const handleNext = () => {
-    if (!isStepValid()) return;
+    if (!isFormValid()) return;
     if (step < 6) {
       setStep(step + 1);
     } else {
@@ -452,29 +454,61 @@ export const OnboardingWizard: React.FC<OnboardingWizardProps> = ({ onComplete }
                   </div>
 
                   <div className="pt-2">
-                    <label className="block text-[10px] text-slate-400 uppercase tracking-wider mb-2">Marca, modelo e ano (opcional)</label>
+                    <label className="block text-[10px] text-slate-400 uppercase tracking-wider mb-2">Dados Obrigatórios do Veículo</label>
                     <div className="grid grid-cols-3 gap-2">
-                      <input 
-                        type="text" 
-                        placeholder="Marca" 
-                        value={brand} 
-                        onChange={e => setBrand(e.target.value)}
-                        className="bg-[#030107] border border-purple-950/50 rounded-xl p-2.5 text-xs text-white focus:outline-none focus:border-purple-600 w-full"
-                      />
-                      <input 
-                        type="text" 
-                        placeholder="Modelo" 
-                        value={model} 
-                        onChange={e => setModel(e.target.value)}
-                        className="bg-[#030107] border border-purple-950/50 rounded-xl p-2.5 text-xs text-white focus:outline-none focus:border-purple-600 w-full"
-                      />
-                      <input 
-                        type="text" 
-                        placeholder="Ano" 
-                        value={year} 
-                        onChange={e => setYear(e.target.value)}
-                        className="bg-[#030107] border border-purple-950/50 rounded-xl p-2.5 text-xs text-white focus:outline-none focus:border-purple-600 w-full"
-                      />
+                      <div className="space-y-1 text-left">
+                        <input 
+                          type="text" 
+                          placeholder="Marca" 
+                          value={brand} 
+                          onChange={e => setBrand(e.target.value)}
+                          className={`bg-[#030107] border rounded-xl p-2.5 text-xs text-white focus:outline-none focus:border-purple-600 w-full ${
+                            brand && brand.trim().length <= 1
+                              ? 'border-red-500/50 focus:border-red-500'
+                              : 'border-purple-950/50'
+                          }`}
+                        />
+                        {brand && brand.trim().length <= 1 && (
+                          <span className="text-[9px] text-red-400 block px-1">Mínimo 2 letras</span>
+                        )}
+                      </div>
+
+                      <div className="space-y-1 text-left">
+                        <input 
+                          type="text" 
+                          placeholder="Modelo" 
+                          value={model} 
+                          onChange={e => setModel(e.target.value)}
+                          className={`bg-[#030107] border rounded-xl p-2.5 text-xs text-white focus:outline-none focus:border-purple-600 w-full ${
+                            model && model.trim().length <= 1
+                              ? 'border-red-500/50 focus:border-red-500'
+                              : 'border-purple-950/50'
+                          }`}
+                        />
+                        {model && model.trim().length <= 1 && (
+                          <span className="text-[9px] text-red-400 block px-1">Mínimo 2 letras</span>
+                        )}
+                      </div>
+
+                      <div className="space-y-1 text-left">
+                        <input 
+                          type="text" 
+                          placeholder="Ano" 
+                          value={year} 
+                          onChange={e => {
+                            const sanitized = e.target.value.replace(/\D/g, '').slice(0, 4);
+                            setYear(sanitized);
+                          }}
+                          className={`bg-[#030107] border rounded-xl p-2.5 text-xs text-white focus:outline-none focus:border-purple-600 w-full ${
+                            year && (year.length !== 4 || Number(year) < 1980 || Number(year) > 2027)
+                              ? 'border-red-500/50 focus:border-red-500'
+                              : 'border-purple-950/50'
+                          }`}
+                        />
+                        {year && (year.length !== 4 || Number(year) < 1980 || Number(year) > 2027) && (
+                          <span className="text-[9px] text-red-400 block px-1">Ano inválido (1980-2027)</span>
+                        )}
+                      </div>
                     </div>
                   </div>
                 </div>
@@ -677,7 +711,7 @@ export const OnboardingWizard: React.FC<OnboardingWizardProps> = ({ onComplete }
               )}
 
               {/* Validation Warning banner - Scrolls with content */}
-              {!isStepValid() && (
+              {!isFormValid() && (
                 <div className="text-[11px] text-amber-400 bg-amber-950/20 border border-amber-900/30 rounded-xl p-3 flex items-start gap-2.5 select-none">
                   <ShieldAlert className="w-4 h-4 shrink-0 text-amber-500 animate-pulse mt-0.5" />
                   <div className="flex-1 leading-normal">
@@ -711,7 +745,7 @@ export const OnboardingWizard: React.FC<OnboardingWizardProps> = ({ onComplete }
 
           <button
             onClick={handleNext}
-            disabled={!isStepValid()}
+            disabled={!isFormValid()}
             className="px-5 py-2.5 bg-gradient-to-r from-purple-600 to-indigo-500 hover:from-purple-500 hover:to-indigo-400 text-white font-bold rounded-xl text-xs flex items-center gap-2 shadow-[0_0_20px_rgba(147,51,234,0.3)] transition-all cursor-pointer active:scale-95 disabled:opacity-40 disabled:cursor-not-allowed disabled:pointer-events-none disabled:from-purple-950/50 disabled:to-indigo-950/50 disabled:text-slate-500 disabled:shadow-none select-none"
           >
             {step === 6 ? (
