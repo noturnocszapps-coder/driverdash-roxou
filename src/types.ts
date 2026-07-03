@@ -248,6 +248,7 @@ export interface DriverSession {
   total_distance_km?: number;
   total_duration_minutes?: number;
   created_at: string;
+  sync_status?: string;
 }
 
 export interface RoutePoint {

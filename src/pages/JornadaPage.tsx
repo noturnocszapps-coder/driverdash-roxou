@@ -1127,6 +1127,9 @@ export const JornadaPage: React.FC = () => {
     try {
       addAiLog('[CALIBRATION_SAVE] Iniciando salvamento manual - mantendo Modo Automático ativo');
 
+      const fixedRideId = activeRide?.id || 'ride_' + Date.now();
+      console.log('[JOURNEY_SESSION_ID_USED] Usando ID de corrida / sessão fixo:', fixedRideId);
+
       // 1. Validar dados obrigatórios:
       // - valor recebido
       const valRecebido = parseFloat(receivedValue);
@@ -1277,7 +1280,7 @@ export const JornadaPage: React.FC = () => {
       };
 
       const ride_log = {
-        ride_id: activeRide?.id || 'ride_' + Date.now(),
+        ride_id: fixedRideId,
         start_gps,
         end_gps,
         pickup_neighborhood: pickupNeighborhood || activeRide?.pickup_neighborhood || 'Centro',
@@ -1316,7 +1319,7 @@ export const JornadaPage: React.FC = () => {
       };
 
       const rawRide: Partial<CalibratedRide> = {
-        id: activeRide?.id || 'ride_' + Date.now(),
+        id: fixedRideId,
         journey_id: activeSession.id,
         driver_id: profile?.id || 'driver_unknown',
         status: 'finished',
@@ -1387,14 +1390,62 @@ export const JornadaPage: React.FC = () => {
       console.log('[STRUCTURED_LOG] RESULTADO_SALVAMENTO:', res);
       addAiLog(`[RESULTADO_SALVAMENTO] Sucesso: ${res.success}. Pendente de Sincronização: ${!!(res.ride as any)?.pending_sync}`);
 
-      // STRICT PERSISTENCE VERIFICATION (Requirement 1)
-      const verifiedLogsStr = localStorage.getItem('ride_logs');
-      const verifiedLogs = verifiedLogsStr ? JSON.parse(verifiedLogsStr) : [];
-      const isSavedLocal = verifiedLogs.some((l: any) => l.id === rawRide.id);
-      if (!isSavedLocal) {
-        throw new Error('Confirmação de salvamento falhou: O registro não foi encontrado no localStorage após a persistência.');
+      // STRICT PERSISTENCE VERIFICATION with Retry & Fallback (Requirement 1, 2, 4, 5)
+      console.log('[JOURNEY_SAVE_ATTEMPT] Verificando salvamento local do ID:', fixedRideId);
+      let isSavedLocal = false;
+      let verifiedLogs: any[] = [];
+
+      for (let attempt = 1; attempt <= 3; attempt++) {
+        console.log(`[JOURNEY_SAVE_VERIFY_ATTEMPT] Tentativa ${attempt} de 3 para ID ${fixedRideId}...`);
+        const verifiedLogsStr = localStorage.getItem('ride_logs');
+        verifiedLogs = verifiedLogsStr ? JSON.parse(verifiedLogsStr) : [];
+        isSavedLocal = verifiedLogs.some((l: any) => l.id === fixedRideId || l.ride_id === fixedRideId);
+
+        if (isSavedLocal) {
+          console.log('[JOURNEY_SAVE_SUCCESS] Corrida salva com sucesso e confirmada no localStorage!');
+          break;
+        }
+
+        if (attempt < 3) {
+          await new Promise((resolve) => setTimeout(resolve, 100)); // Real sequential delay
+        }
       }
-      console.log('[CALIBRATION_SAVE_SUCCESS] Confirmação local bem-sucedida!');
+
+      if (!isSavedLocal) {
+        console.warn('[JOURNEY_SAVE_VERIFY_FAIL] Falha na confirmação do salvamento para ID:', fixedRideId);
+        console.log('[JOURNEY_SAVE_FALLBACK] Aplicando fallback resiliente: Definindo estado/status como FINALIZED_PENDING_SYNC.');
+        
+        try {
+          // Re-inject/insert the ride data into local storage so that we can proceed safely without blocking
+          const verifiedLogsStr = localStorage.getItem('ride_logs');
+          let currentLogs = verifiedLogsStr ? JSON.parse(verifiedLogsStr) : [];
+          
+          const fallbackRide: any = {
+            ...rawRide,
+            id: fixedRideId,
+            ride_id: fixedRideId,
+            status: 'finished',
+            pending_sync: true,
+            sync_status: 'FINALIZED_PENDING_SYNC',
+            calibratedAt: new Date().toISOString()
+          };
+          
+          const idx = currentLogs.findIndex((r: any) => r.id === fixedRideId || r.ride_id === fixedRideId);
+          if (idx !== -1) {
+            currentLogs[idx] = { ...currentLogs[idx], ...fallbackRide };
+          } else {
+            currentLogs.push(fallbackRide);
+          }
+          
+          localStorage.setItem('ride_logs', JSON.stringify(currentLogs));
+          verifiedLogs = currentLogs;
+          isSavedLocal = true;
+          
+          console.log('[JOURNEY_SAVE_FALLBACK] Salvamento local forçado com sucesso.');
+        } catch (backupErr) {
+          console.error('[JOURNEY_SAVE_FALLBACK_ERROR] Falha de emergência ao gravar fallback:', backupErr);
+        }
+      }
 
       // Add earning to standard finance flow so upper cards update immediately (Requirement 8)
       try {
@@ -1409,7 +1460,7 @@ export const JornadaPage: React.FC = () => {
           online_minutes: Math.ceil(duration / 60),
           waiting_minutes: Math.ceil(idle_time),
           rides_count: 1,
-          notes: `Corrida calibrada salva - ID: ${rawRide.id}`,
+          notes: `Corrida calibrada salva - ID: ${fixedRideId}`,
           entry_mode: 'single_ride' as any,
           shift_period: 'morning' as any
         });
@@ -1534,12 +1585,16 @@ export const JornadaPage: React.FC = () => {
     try {
       addAiLog('[CALIBRATION_CANCEL] Cancelando corrida ativa - mantendo Modo Automático ativo');
 
+      const fixedCancelRideId = activeRide?.id || 'ride_' + Date.now();
+      console.log('[JOURNEY_SESSION_ID_USED] Usando ID de cancelamento fixo:', fixedCancelRideId);
+      console.log('[JOURNEY_SAVE_ATTEMPT] Salvando cancelamento da corrida:', fixedCancelRideId);
+
       const endTime = new Date().toISOString();
       const startTime = activeRide?.startTime || new Date().toISOString();
       const pts = activeRide?.rideTrackPoints || [];
 
       const rawRide: Partial<CalibratedRide> = {
-        id: activeRide?.id || 'ride_' + Date.now(),
+        id: fixedCancelRideId,
         journey_id: activeSession.id,
         driver_id: profile?.id || 'driver_unknown',
         status: 'cancelled',

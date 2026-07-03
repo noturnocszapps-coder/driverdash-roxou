@@ -918,9 +918,6 @@ export const JourneyProvider: React.FC<{ children: React.ReactNode }> = ({ child
       }
     }
 
-    // Call clearAllJourneyState for comprehensive cleanup
-    clearAllJourneyState();
-
     // Save full metrics to localStorage/sessionStorage
     const finalMetrics = {
       total_distance_km: finalDistanceKm,
@@ -930,8 +927,6 @@ export const JourneyProvider: React.FC<{ children: React.ReactNode }> = ({ child
       ended_at: endedAt,
       end_time: endedAt
     };
-    localStorage.setItem(`${STORAGE_PREFIX}journey_metrics_${sessionId}`, JSON.stringify(finalMetrics));
-    sessionStorage.setItem(`${STORAGE_PREFIX}journey_metrics_${sessionId}`, JSON.stringify(finalMetrics));
 
     // Update state & localStorage list
     const updatedSessions = driverSessions.map(s => {
@@ -950,8 +945,87 @@ export const JourneyProvider: React.FC<{ children: React.ReactNode }> = ({ child
       return s;
     });
 
+    const metricsKey = `${STORAGE_PREFIX}journey_metrics_${sessionId}`;
+    const sessionsKey = `${STORAGE_PREFIX}driver_sessions_${userId}`;
+
+    console.log('[JOURNEY_SESSION_ID_USED] Usando ID de sessão:', sessionId);
+    console.log('[JOURNEY_SAVE_ATTEMPT] Salvando métricas e sessões no localStorage para a sessão:', sessionId);
+
+    // Persist to local storage
+    localStorage.setItem(metricsKey, JSON.stringify(finalMetrics));
+    sessionStorage.setItem(metricsKey, JSON.stringify(finalMetrics));
+    localStorage.setItem(sessionsKey, JSON.stringify(updatedSessions));
+
+    // Controlled retry mechanism (maximum 3 attempts) with sequential real delay (Requirement 2)
+    let isSavedLocal = false;
+    for (let attempt = 1; attempt <= 3; attempt++) {
+      console.log(`[JOURNEY_SAVE_VERIFY_ATTEMPT] Verificando gravação no localStorage (Tentativa ${attempt} de 3)...`);
+      try {
+        const savedMetricsStr = localStorage.getItem(metricsKey);
+        const savedSessionsStr = localStorage.getItem(sessionsKey);
+
+        if (savedMetricsStr && savedSessionsStr) {
+          const parsedMetrics = JSON.parse(savedMetricsStr);
+          const parsedSessions = JSON.parse(savedSessionsStr);
+
+          const metricsValid = parsedMetrics && (parsedMetrics.end_time || parsedMetrics.ended_at);
+          const sessionValid = Array.isArray(parsedSessions) && parsedSessions.some(s => s.id === sessionId && s.status === 'completed');
+
+          if (metricsValid && sessionValid) {
+            console.log('[JOURNEY_SAVE_SUCCESS] Gravação de jornada confirmada no localStorage!');
+            isSavedLocal = true;
+            break;
+          }
+        }
+      } catch (e) {
+        console.warn(`[JOURNEY_SAVE_VERIFY_FAIL] Erro ao validar localStorage na tentativa ${attempt}:`, e);
+      }
+
+      if (attempt < 3) {
+        await new Promise(resolve => setTimeout(resolve, 150)); // Sequential delay
+      }
+    }
+
+    // Fallback mandatory (Requirement 4)
+    if (!isSavedLocal) {
+      console.warn('[JOURNEY_SAVE_VERIFY_FAIL] Falha de validação da jornada após 3 tentativas para a sessão:', sessionId);
+      console.log('[JOURNEY_SAVE_FALLBACK] Aplicando fallback resiliente: Definindo estado/status como FINALIZED_PENDING_SYNC.');
+      try {
+        const fallbackMetrics = {
+          ...finalMetrics,
+          sync_status: 'FINALIZED_PENDING_SYNC'
+        };
+        const fallbackSessions = driverSessions.map(s => {
+          if (s.id === sessionId || s.status === 'active') {
+            return {
+              ...s,
+              end_time: endedAt,
+              status: 'completed' as const,
+              total_distance_km: finalDistanceKm,
+              total_distance_meters,
+              stopped_minutes,
+              duration_seconds,
+              total_duration_minutes: finalDurationMinutes,
+              sync_status: 'FINALIZED_PENDING_SYNC'
+            };
+          }
+          return s;
+        });
+
+        localStorage.setItem(metricsKey, JSON.stringify(fallbackMetrics));
+        sessionStorage.setItem(metricsKey, JSON.stringify(fallbackMetrics));
+        localStorage.setItem(sessionsKey, JSON.stringify(fallbackSessions));
+        console.log('[JOURNEY_SAVE_FALLBACK] Fallback gravado com sucesso.');
+      } catch (backupErr) {
+        console.error('[JOURNEY_SAVE_FALLBACK_ERROR] Falha de emergência ao gravar fallback da jornada:', backupErr);
+      }
+    }
+
+    // Call clearAllJourneyState only AFTER the save has been successfully validated/fallback-applied
+    clearAllJourneyState();
+
+    // Now update active memory state
     setDriverSessions(updatedSessions);
-    localStorage.setItem(`${STORAGE_PREFIX}driver_sessions_${userId}`, JSON.stringify(updatedSessions));
 
     if (dbStatus === 'connected') {
       try {
