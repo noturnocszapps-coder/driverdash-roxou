@@ -115,9 +115,17 @@ export async function analyzeTelemetryForRide(
     if (!state.manualEvents.includes('ride_started')) {
       state.manualEvents.push('ride_started');
     }
+    if (!['EN_ROUTE', 'RIDE_ACTIVE', 'STOPPED_AFTER_RIDE'].includes(state.currentAutoState)) {
+      state.currentAutoState = 'RIDE_ACTIVE';
+      state.lastStatusTime = Date.now();
+    }
   } else {
     if (state.manualEvents.includes('ride_started') && !state.manualEvents.includes('ride_finished')) {
       state.manualEvents.push('ride_finished');
+    }
+    if (['RIDE_ACTIVE', 'STOPPED_AFTER_RIDE'].includes(state.currentAutoState)) {
+      state.currentAutoState = 'IDLE';
+      state.lastStatusTime = Date.now();
     }
   }
 

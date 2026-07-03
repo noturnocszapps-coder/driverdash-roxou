@@ -90,7 +90,9 @@ export const JornadaPage: React.FC = () => {
     vehicleCostSettings,
     earnings,
     profile,
-    addEarning
+    addEarning,
+    syncStatus,
+    lastSyncError
   } = useApp();
 
   const [elapsedTime, setElapsedTime] = useState<string>('00:00:00');
@@ -404,6 +406,53 @@ export const JornadaPage: React.FC = () => {
     }
   });
   const [manualOverride, setManualOverride] = useState<boolean>(false);
+  const [controlMode, setControlMode] = useState<'auto_tracking' | 'manual'>('auto_tracking');
+  const journeyMode = activeSession ? 'active' : 'inactive';
+  const manualMode = manualOverride;
+
+  useEffect(() => {
+    if (manualOverride) {
+      setControlMode('manual');
+    } else {
+      setControlMode('auto_tracking');
+    }
+  }, [manualOverride]);
+
+  // Controlled fallback: GPS and Telemetry continuous failure handler
+  useEffect(() => {
+    if (!activeSession) return;
+    
+    let failureTimer: any = null;
+    
+    const isGpsFailing = gpsStatus === 'GPS sem sinal' || gpsStatus === 'GPS erro' || gpsStatus === 'GPS negado' || !!gpsError;
+    const isTelemetryFailing = syncStatus === 'erro' || !!lastSyncError;
+    const isCriticalFailure = isGpsFailing || isTelemetryFailing;
+    
+    if (isCriticalFailure) {
+      // If GPS or telemetry fails continuously for more than 45 seconds, activate manual override as a safe fallback
+      failureTimer = setTimeout(() => {
+        if (!manualOverride) {
+          localStorage.setItem(`driverdash_ride_manual_override_${activeSession.id}`, 'true');
+          setManualOverride(true);
+          addAiLog(`[CRITICAL_FAILURE] Falha crítica de ${isGpsFailing ? 'GPS' : 'Telemetria'} detectada continuamente por mais de 45s. Ativando Modo Manual por segurança.`);
+          if (addSmartAlert) {
+            addSmartAlert({
+              title: 'Modo Manual Ativado 🚨',
+              description: `Falha contínua no sinal de ${isGpsFailing ? 'GPS' : 'sincronização'}. Modo Manual ativado para preservar dados locais.`,
+              type: 'fuel',
+              severity: 'high'
+            });
+          }
+        }
+      }, 45000); // 45 seconds continuous failure
+    }
+    
+    return () => {
+      if (failureTimer) {
+        clearTimeout(failureTimer);
+      }
+    };
+  }, [gpsStatus, gpsError, syncStatus, lastSyncError, activeSession, manualOverride, addSmartAlert]);
 
   // Compute stats for AI calibration dashboard
   const calibrationStats = useMemo(() => {
@@ -805,9 +854,7 @@ export const JornadaPage: React.FC = () => {
   const handleAcceptRide = async () => {
     if (!activeSession) return;
     try {
-      localStorage.setItem(`driverdash_ride_manual_override_${activeSession.id}`, 'true');
-      setManualOverride(true);
-      addAiLog('[RideAI] manual override: Aceitando corrida manualmente');
+      addAiLog('[RideAI] Aceitando corrida manualmente - mantendo Modo Automático ativo');
 
       const lat = lastCoord?.lat || -22.1225;
       const lng = lastCoord?.lng || -51.3883;
@@ -1078,9 +1125,7 @@ export const JornadaPage: React.FC = () => {
     console.log('[CALIBRATION_SAVE_START] Iniciando salvamento de calibração...');
 
     try {
-      localStorage.setItem(`driverdash_ride_manual_override_${activeSession.id}`, 'true');
-      setManualOverride(true);
-      addAiLog('[CALIBRATION_SAVE] Iniciando salvamento manual');
+      addAiLog('[CALIBRATION_SAVE] Iniciando salvamento manual - mantendo Modo Automático ativo');
 
       // 1. Validar dados obrigatórios:
       // - valor recebido
@@ -1487,9 +1532,7 @@ export const JornadaPage: React.FC = () => {
     setIsSavingCalibration(true);
 
     try {
-      localStorage.setItem(`driverdash_ride_manual_override_${activeSession.id}`, 'true');
-      setManualOverride(true);
-      addAiLog('[CALIBRATION_CANCEL] Cancelando corrida ativa');
+      addAiLog('[CALIBRATION_CANCEL] Cancelando corrida ativa - mantendo Modo Automático ativo');
 
       const endTime = new Date().toISOString();
       const startTime = activeRide?.startTime || new Date().toISOString();
@@ -2442,8 +2485,8 @@ export const JornadaPage: React.FC = () => {
                     </motion.div>
                   )}
 
-                  {/* Manual Override Status Banner */}
-                  {manualOverride && (
+                  {/* Manual Override Status Banner - Only shown if there is a real/critical GPS or Telemetry error */}
+                  {manualOverride && (gpsStatus === 'GPS sem sinal' || gpsStatus === 'GPS erro' || gpsStatus === 'GPS negado' || !!gpsError || syncStatus === 'erro' || !!lastSyncError) && (
                     <div className="p-3 bg-[#0c0827] border border-purple-950/20 rounded-2xl flex items-center justify-between text-left gap-2">
                       <div className="flex items-center gap-2">
                         <Sparkles className="w-4 h-4 text-amber-400" />
