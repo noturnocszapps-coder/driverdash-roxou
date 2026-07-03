@@ -129,7 +129,15 @@ export const JourneyProvider: React.FC<{ children: React.ReactNode }> = ({ child
             const listIds = sessions.map(s => s.id);
             const points = await journeyService.fetchRoutePoints(listIds);
             setRoutePoints(points);
-            localStorage.setItem(`${STORAGE_PREFIX}route_points_${user.id}`, JSON.stringify(points));
+            
+            // Only save active session's points to localStorage to prevent QuotaExceededError
+            const activeSession = sessions.find(s => s.status === 'active');
+            if (activeSession) {
+              const activePoints = points.filter(p => p.session_id === activeSession.id);
+              localStorage.setItem(`${STORAGE_PREFIX}route_points_${user.id}`, JSON.stringify(activePoints));
+            } else {
+              localStorage.removeItem(`${STORAGE_PREFIX}route_points_${user.id}`);
+            }
           }
         } catch (e) {
           console.warn('[Sync] Telemetry database fetch failed; fetching from local storage backups:', e);
@@ -660,10 +668,13 @@ export const JourneyProvider: React.FC<{ children: React.ReactNode }> = ({ child
       return 0;
     }
 
-    // 1. Check period from startTimeMs to first point
+    // 1. Check period from startTimeMs to first point (capped at 3 minutes to avoid offline gap issues)
     const firstPointTime = new Date(sortedPoints[0].recorded_at).getTime();
     if (startTimeMs && firstPointTime > startTimeMs) {
-      totalDurationMs += (firstPointTime - startTimeMs);
+      const diff = firstPointTime - startTimeMs;
+      if (diff <= 180000) {
+        totalDurationMs += diff;
+      }
     }
 
     // 2. Sum intervals where speed is < 5 km/h or distance is 0
@@ -675,24 +686,38 @@ export const JourneyProvider: React.FC<{ children: React.ReactNode }> = ({ child
       const t2 = new Date(p2.recorded_at).getTime();
       const dtMs = t2 - t1;
 
-      if (dtMs <= 0) continue;
+      if (dtMs <= 0 || isNaN(dtMs)) continue;
+      if (dtMs > 180000) continue; // Gap larger than 3 minutes -> do not count as stopped time
 
       const dist = calculateHaversineDistanceMeters(p1.latitude, p1.longitude, p2.latitude, p2.longitude);
+      if (isNaN(dist) || dist < 0) continue;
+
       const speedKmh = (dist / (dtMs / 1000)) * 3.6;
+      if (isNaN(speedKmh)) continue;
 
       if (speedKmh < 5 || dist === 0) {
         totalDurationMs += dtMs;
       }
     }
 
-    // 3. Check period from last point to endTimeMs
+    // 3. Check period from last point to endTimeMs (capped at 3 minutes)
     const lastPointTime = new Date(sortedPoints[sortedPoints.length - 1].recorded_at).getTime();
     if (endTimeMs && endTimeMs > lastPointTime) {
-      const lastPoint = sortedPoints[sortedPoints.length - 1];
-      const isGpsPausedOrNoDisplacement = (endTimeMs - lastPointTime > 15000);
-      if (lastPoint.speed_kmh < 5 || isGpsPausedOrNoDisplacement) {
-        totalDurationMs += (endTimeMs - lastPointTime);
+      const diff = endTimeMs - lastPointTime;
+      if (diff <= 180000) {
+        const lastPoint = sortedPoints[sortedPoints.length - 1];
+        if (lastPoint.speed_kmh < 5) {
+          totalDurationMs += diff;
+        }
       }
+    }
+
+    const elapsedMs = (endTimeMs && startTimeMs) ? (endTimeMs - startTimeMs) : 0;
+    if (elapsedMs > 0 && totalDurationMs > elapsedMs) {
+      totalDurationMs = elapsedMs;
+    }
+    if (totalDurationMs < 0 || isNaN(totalDurationMs)) {
+      totalDurationMs = 0;
     }
 
     return Math.floor(totalDurationMs / 60000);
@@ -748,6 +773,10 @@ export const JourneyProvider: React.FC<{ children: React.ReactNode }> = ({ child
       localStorage.removeItem(`last_discard_reason_${activeSessId}`);
       localStorage.removeItem(`last_position_${activeSessId}`);
       localStorage.removeItem(`recovery_checked_${activeSessId}`);
+    }
+
+    if (user?.id) {
+      localStorage.removeItem(`${STORAGE_PREFIX}route_points_${user.id}`);
     }
 
     // MEMÓRIA (AppContext/JourneyProvider):
@@ -870,17 +899,12 @@ export const JourneyProvider: React.FC<{ children: React.ReactNode }> = ({ child
       setFailedPointsCount(0); // Zero out other failed states to prevent old historical additions in UI
     }
 
-    // Save unsynced points to separate cache if there are any
+    // Keep unsynced points of this session in the active sync queue so they can sync later (Requirement 6 & 8)
+    // We DO NOT delete them from unsynced_route_points. We only remove points that are confirmed as synced.
+    // Since savePoints automatically keeps only unsynced points, we just keep the active queue as is.
     const allLocalPoints = telemetrySyncService.getPoints();
     const unsyncedSessionPoints = allLocalPoints.filter(p => p.session_id === sessionId && (p.status === 'pending' || p.status === 'failed'));
-    if (unsyncedSessionPoints.length > 0) {
-      console.log(`[Sync] Keeping ${unsyncedSessionPoints.length} unsynced points in separate cache`);
-      localStorage.setItem(`${STORAGE_PREFIX}finalized_unsynced_points_${sessionId}`, JSON.stringify(unsyncedSessionPoints));
-    }
-
-    // Remove this session's points from active telemetry buffer
-    const remainingOtherPoints = allLocalPoints.filter(p => p.session_id !== sessionId);
-    localStorage.setItem(`${STORAGE_PREFIX}unsynced_route_points`, JSON.stringify(remainingOtherPoints));
+    console.log(`[Sync] Preserving ${unsyncedSessionPoints.length} unsynced points in the active sync queue for background synchronization.`);
 
     let supabaseUpdateResult = "Não conectado";
     if (dbStatus === 'connected') {
@@ -1089,7 +1113,10 @@ export const JourneyProvider: React.FC<{ children: React.ReactNode }> = ({ child
 
     const updatedPoints = [...routePoints, newPoint];
     setRoutePoints(updatedPoints);
-    localStorage.setItem(`${STORAGE_PREFIX}route_points_${userId}`, JSON.stringify(updatedPoints));
+    
+    // Only save active session's points to localStorage to prevent QuotaExceededError
+    const activePoints = updatedPoints.filter(p => p.session_id === pointData.session_id);
+    localStorage.setItem(`${STORAGE_PREFIX}route_points_${userId}`, JSON.stringify(activePoints));
 
     let addedMeters = 0;
     if (lastPosition) {

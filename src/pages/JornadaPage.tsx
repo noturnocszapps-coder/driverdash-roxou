@@ -191,7 +191,7 @@ export const JornadaPage: React.FC = () => {
   const [selectedSpecialEvent, setSelectedSpecialEvent] = useState<string>("Nenhum");
 
   // New Calibration States (Item 1, 6, 9)
-  const [toast, setToast] = useState<{ show: boolean; message: string; type: 'success' | 'error' }>({
+  const [toast, setToast] = useState<{ show: boolean; message: string; type: 'success' | 'error' | 'warning' }>({
     show: false,
     message: '',
     type: 'success'
@@ -1998,13 +1998,16 @@ export const JornadaPage: React.FC = () => {
     const endTimeMs = Date.now();
 
     if (sortedPoints.length === 0) {
-      return Math.max(0, endTimeMs - startTimeMs);
+      return 0; // If no points have been captured, do not assume stopped time
     }
 
-    // 1. Check period from startTimeMs to first point
+    // 1. Check period from startTimeMs to first point (capped at 3 minutes to avoid offline gap issues)
     const firstPointTime = new Date(sortedPoints[0].recorded_at).getTime();
     if (firstPointTime > startTimeMs) {
-      totalDuration += (firstPointTime - startTimeMs);
+      const diff = firstPointTime - startTimeMs;
+      if (diff <= 180000) {
+        totalDuration += diff;
+      }
     }
 
     // 2. Sum intervals where speed is < 5 km/h or distance is 0
@@ -2016,25 +2019,38 @@ export const JornadaPage: React.FC = () => {
       const t2 = new Date(p2.recorded_at).getTime();
       const dtMs = t2 - t1;
 
-      if (dtMs <= 0) continue;
+      if (dtMs <= 0 || isNaN(dtMs)) continue;
+      if (dtMs > 180000) continue; // Gap larger than 3 minutes -> do not count as stopped time
 
       const dist = calculateHaversineDistance(p1.latitude, p1.longitude, p2.latitude, p2.longitude) * 1000; // in meters
+      if (isNaN(dist) || dist < 0) continue;
+
       const speedKmh = (dist / (dtMs / 1000)) * 3.6;
+      if (isNaN(speedKmh)) continue;
 
       if (speedKmh < 5 || dist === 0) {
         totalDuration += dtMs;
       }
     }
 
-    // 3. Check period from last point to endTimeMs
+    // 3. Check period from last point to endTimeMs (capped at 3 minutes)
     const lastPointTime = new Date(sortedPoints[sortedPoints.length - 1].recorded_at).getTime();
     if (endTimeMs > lastPointTime) {
-      const lastPoint = sortedPoints[sortedPoints.length - 1];
-      const isGpsPaused = gpsStatus === 'GPS sem sinal' || gpsStatus === 'GPS erro' || gpsStatus === 'GPS negado' || (endTimeMs - lastPointTime > 15000);
-      
-      if (lastPoint.speed_kmh < 5 || isGpsPaused) {
-        totalDuration += (endTimeMs - lastPointTime);
+      const diff = endTimeMs - lastPointTime;
+      if (diff <= 180000) {
+        const lastPoint = sortedPoints[sortedPoints.length - 1];
+        if (lastPoint.speed_kmh < 5) {
+          totalDuration += diff;
+        }
       }
+    }
+
+    const elapsedMs = endTimeMs - startTimeMs;
+    if (elapsedMs > 0 && totalDuration > elapsedMs) {
+      totalDuration = elapsedMs;
+    }
+    if (totalDuration < 0 || isNaN(totalDuration)) {
+      totalDuration = 0;
     }
 
     return totalDuration;
@@ -4055,18 +4071,50 @@ export const JornadaPage: React.FC = () => {
             initial={{ opacity: 0, y: 50, scale: 0.9 }}
             animate={{ opacity: 1, y: 0, scale: 1 }}
             exit={{ opacity: 0, y: 20, scale: 0.95 }}
-            className="fixed bottom-6 right-6 z-50 p-4 bg-emerald-950 border border-emerald-500/30 text-emerald-300 rounded-2xl flex items-center gap-3 shadow-[0_10px_40px_rgba(16,185,129,0.25)] w-full max-w-sm"
+            className={`fixed bottom-6 right-6 z-50 p-4 rounded-2xl flex items-center gap-3 w-full max-w-sm border ${
+              toast.type === 'error'
+                ? 'bg-red-950 border-red-500/30 text-red-300 shadow-[0_10px_40px_rgba(239,68,68,0.25)]'
+                : toast.type === 'warning'
+                ? 'bg-amber-950 border-amber-500/30 text-amber-300 shadow-[0_10px_40px_rgba(245,158,11,0.25)]'
+                : 'bg-emerald-950 border-emerald-500/30 text-emerald-300 shadow-[0_10px_40px_rgba(16,185,129,0.25)]'
+            }`}
           >
-            <div className="h-8 w-8 rounded-full bg-emerald-900/50 flex items-center justify-center text-emerald-400 shrink-0">
-              <Check className="w-5 h-5" />
+            <div className={`h-8 w-8 rounded-full flex items-center justify-center shrink-0 ${
+              toast.type === 'error'
+                ? 'bg-red-900/50 text-red-400'
+                : toast.type === 'warning'
+                ? 'bg-amber-900/50 text-amber-400'
+                : 'bg-emerald-900/50 text-emerald-400'
+            }`}>
+              {toast.type === 'error' ? (
+                <ShieldAlert className="w-5 h-5" />
+              ) : toast.type === 'warning' ? (
+                <AlertTriangle className="w-5 h-5" />
+              ) : (
+                <Check className="w-5 h-5" />
+              )}
             </div>
             <div className="text-left font-sans text-xs">
-              <p className="font-bold text-white leading-normal">Sucesso</p>
-              <p className="text-[11px] text-emerald-400">{toast.message}</p>
+              <p className="font-bold text-white leading-normal">
+                {toast.type === 'error' ? 'Erro' : toast.type === 'warning' ? 'Aviso' : 'Sucesso'}
+              </p>
+              <p className={`text-[11px] ${
+                toast.type === 'error'
+                  ? 'text-red-400'
+                  : toast.type === 'warning'
+                  ? 'text-amber-400'
+                  : 'text-emerald-400'
+              }`}>{toast.message}</p>
             </div>
             <button
               onClick={() => setToast(prev => ({ ...prev, show: false }))}
-              className="ml-auto p-1 text-emerald-400 hover:text-emerald-200 cursor-pointer select-none"
+              className={`ml-auto p-1 cursor-pointer select-none ${
+                toast.type === 'error'
+                  ? 'text-red-400 hover:text-red-200'
+                  : toast.type === 'warning'
+                  ? 'text-amber-400 hover:text-amber-200'
+                  : 'text-emerald-400 hover:text-emerald-200'
+              }`}
             >
               <X className="w-4 h-4" />
             </button>

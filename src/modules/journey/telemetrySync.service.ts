@@ -601,12 +601,6 @@ class TelemetrySyncService {
         return false;
       }
 
-      // 4. Must not belong to a closed session
-      if (completedSessionIds.has(p.session_id)) {
-        console.log(`[Sync] [BUFFER_CLEANUP] Removing point belonging to completed session: ${p.session_id}`);
-        return false;
-      }
-
       return true;
     });
 
