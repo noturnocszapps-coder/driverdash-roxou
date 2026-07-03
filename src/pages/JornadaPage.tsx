@@ -13,7 +13,7 @@ import {
   Play, Square, MapPin, Navigation, Clock, ShieldAlert,
   AlertTriangle, Milestone, Activity, Compass, Flame, Info,
   Bot, Sparkles, ThumbsUp, ThumbsDown, Gauge, TrendingUp, Terminal, Check, X, RefreshCw,
-  ChevronRight, ChevronDown, Signal, Edit, Calendar, BarChart3, Car
+  ChevronRight, ChevronDown, Signal, Edit, Calendar, BarChart3, Car, DollarSign
 } from 'lucide-react';
 import { motion, AnimatePresence } from 'motion/react';
 import { telemetrySyncService } from '../modules/journey/telemetrySync.service';
@@ -100,6 +100,7 @@ export const JornadaPage: React.FC = () => {
   const [isInstructionsOpen, setIsInstructionsOpen] = useState(false);
   const [isDetailsModalOpen, setIsDetailsModalOpen] = useState(false);
   const [currentStreetName, setCurrentStreetName] = useState<string>("Buscando localização...");
+  const [activeTab, setActiveTab] = useState<'jornada' | 'desempenho' | 'copiloto'>('jornada');
 
   // Hidden title click developer toggler
   const [clickCount, setClickCount] = useState(0);
@@ -2177,6 +2178,14 @@ export const JornadaPage: React.FC = () => {
 
   const gpsUi = getGpsUiState();
 
+  const parseTimeToMinutes = (timeStr: string): number => {
+    if (!timeStr) return 0;
+    const parts = timeStr.split(':').map(Number);
+    if (parts.some(isNaN)) return 0;
+    const [h, m, s] = parts;
+    return (h || 0) * 60 + (m || 0) + (s || 0) / 60;
+  };
+
   return (
     <div className="space-y-6">
       {/* Title Header */}
@@ -2207,7 +2216,7 @@ export const JornadaPage: React.FC = () => {
           {/* Quick Details button to open our complete reports modal */}
           <button
             onClick={() => setIsDetailsModalOpen(true)}
-            className="px-3.5 py-1.5 rounded-xl bg-purple-900/40 hover:bg-purple-900/60 border border-purple-700/40 hover:border-purple-600/50 text-purple-300 hover:text-white font-semibold transition-all select-none cursor-pointer flex items-center gap-1.5 text-xs shadow-[0_2px_10px_rgba(147,51,234,0.1)]"
+            className="px-3.5 py-1.5 rounded-xl bg-purple-900/40 hover:bg-purple-900/60 border border-purple-700/40 hover:border-purple-600/50 text-purple-300 hover:text-white font-semibold transition-all select-none cursor-pointer flex items-center gap-1.5 text-xs shadow-[0_2px_10px_rgba(147,51,234,0.15)]"
           >
             <BarChart3 className="w-3.5 h-3.5" />
             <span>Relatórios & IA</span>
@@ -2215,89 +2224,73 @@ export const JornadaPage: React.FC = () => {
         </div>
       </div>
 
-      {/* PAINEL DE CONTROLE - TRÊS NÍVEIS (ROXOU PREMIUM) */}
-      <div className="space-y-4">
-        {/* NÍVEL 1: STATUS E RASTREAMENTO (SEMPRE VISÍVEL) */}
-        <div className="grid grid-cols-1 sm:grid-cols-3 gap-3">
-          <div className="bg-[#0c0827] border border-purple-950/40 p-4 rounded-2xl text-left flex items-center justify-between shadow-lg">
-            <div>
-              <span className="text-[10px] text-purple-300 font-bold block uppercase tracking-wider">⏱️ Tempo Online</span>
-              <span className="text-xl font-extrabold text-white font-mono block mt-1">{metrics.tempoOnline}</span>
-            </div>
-            <Clock className="w-5 h-5 text-purple-400 opacity-60" />
-          </div>
-          <div className="bg-[#0c0827] border border-purple-950/40 p-4 rounded-2xl text-left flex items-center justify-between shadow-lg">
-            <div>
-              <span className="text-[10px] text-purple-300 font-bold block uppercase tracking-wider">🛣️ KM Rodado</span>
-              <span className="text-xl font-extrabold text-purple-400 font-mono block mt-1">{metrics.kmRodados}</span>
-            </div>
-            <Milestone className="w-5 h-5 text-purple-400 opacity-60" />
-          </div>
-          <div className="bg-[#0c0827] border border-purple-950/40 p-4 rounded-2xl text-left flex items-center justify-between shadow-lg">
-            <div>
-              <span className="text-[10px] text-purple-300 font-bold block uppercase tracking-wider">🚦 Status do Sistema</span>
-              <span className={`text-xs font-bold font-mono px-2.5 py-1 rounded-full inline-block mt-2 ${
-                metrics.status === 'STATE_IDLE' ? 'bg-slate-950 border border-slate-800 text-slate-400' :
-                metrics.status === 'STATE_TRACKING' ? 'bg-[#0f0a2e] border border-indigo-500/30 text-indigo-400 animate-pulse' :
-                metrics.status === 'STATE_JOURNEY_ACTIVE' ? 'bg-[#0f0a2e] border border-emerald-500/30 text-emerald-400' :
-                metrics.status === 'STATE_JOURNEY_ENDING' ? 'bg-[#0f0a2e] border border-amber-500/30 text-amber-400' :
-                'bg-[#0f0a2e] border border-purple-500/30 text-purple-400'
-              }`}>
-                {metrics.status === 'STATE_IDLE' ? '💤 STATE_IDLE (Offline)' :
-                 metrics.status === 'STATE_TRACKING' ? '📡 STATE_TRACKING (Ativo)' :
-                 metrics.status === 'STATE_JOURNEY_ACTIVE' ? '🚦 STATE_JOURNEY_ACTIVE' :
-                 metrics.status === 'STATE_JOURNEY_ENDING' ? '🏁 STATE_JOURNEY_ENDING' :
-                 '🔄 STATE_SYNCING (Transmitindo)'}
-              </span>
-            </div>
-            <Signal className="w-5 h-5 text-purple-400 opacity-60 animate-pulse" />
-          </div>
+      {/* Barra Superior Compacta Fixa */}
+      <div className="bg-[#0c0827] border border-purple-950/40 p-4 rounded-2xl shadow-lg flex flex-col sm:flex-row sm:items-center justify-between gap-3 sticky top-0 z-30 backdrop-blur-md bg-opacity-95">
+        <div className="flex flex-wrap items-center gap-2 text-xs md:text-sm font-semibold text-[#e1e1e6]">
+          <span className="relative flex h-2 w-2">
+            <span className={`animate-ping absolute inline-flex h-full w-full rounded-full opacity-75 ${activeSession ? 'bg-emerald-400' : 'bg-slate-400'}`}></span>
+            <span className={`relative inline-flex rounded-full h-2 w-2 ${activeSession ? 'bg-emerald-500' : 'bg-slate-500'}`}></span>
+          </span>
+          <span className="font-mono text-white">{metrics.tempoOnline} online</span>
+          <span className="text-slate-600 font-bold">·</span>
+          <span className="font-mono text-purple-400">{metrics.kmRodados}</span>
+          <span className="text-slate-600 font-bold">·</span>
+          <span className="font-mono text-amber-400">{lastValidCoord?.speed ? (lastValidCoord.speed * 3.6).toFixed(0) : '0'} km/h</span>
+          <span className="text-slate-600 font-bold">·</span>
+          <span className={`font-mono text-xs font-bold flex items-center gap-1 ${gpsSignalQuality.color}`}>
+            <Signal className="w-3.5 h-3.5" />
+            {gpsSignalQuality.label === 'Sem sinal' ? 'SEM SINAL' : 'GPS OK'}
+          </span>
         </div>
 
-        {/* NÍVEL 2: MÉTRICAS FINANCEIRAS (FINANCEIRO REAL-TIME) */}
-        <div className="grid grid-cols-1 sm:grid-cols-3 gap-3">
-          <div className="bg-[#0c0827] border border-purple-950/40 p-4 rounded-2xl text-left flex items-center justify-between shadow-lg">
-            <div>
-              <span className="text-[10px] text-emerald-400 font-bold block uppercase tracking-wider">💰 Receita Operacional</span>
-              <span className="text-xl font-extrabold text-emerald-400 font-mono block mt-1">
-                {new Intl.NumberFormat('pt-BR', { style: 'currency', currency: 'BRL' }).format(metrics.revenue)}
-              </span>
-              <span className="text-[9px] text-slate-500 font-mono mt-0.5 block">
-                Taxa média: R$ {metrics.kmRate.toFixed(2)}/km
-              </span>
-            </div>
-          </div>
-          <div className="bg-[#0c0827] border border-purple-950/40 p-4 rounded-2xl text-left flex items-center justify-between shadow-lg">
-            <div>
-              <span className="text-[10px] text-rose-400 font-bold block uppercase tracking-wider">⛽ Custo Estimado</span>
-              <span className="text-xl font-extrabold text-rose-400 font-mono block mt-1">
-                {new Intl.NumberFormat('pt-BR', { style: 'currency', currency: 'BRL' }).format(metrics.cost)}
-              </span>
-              <span className="text-[9px] text-slate-500 font-mono mt-0.5 block">
-                Combustível & Desgaste
-              </span>
-            </div>
-          </div>
-          <div className="bg-[#0c0827] border border-purple-950/40 p-4 rounded-2xl text-left flex items-center justify-between shadow-lg">
-            <div>
-              <span className="text-[10px] text-purple-300 font-bold block uppercase tracking-wider">📈 Lucro Líquido</span>
-              <span className={`text-xl font-extrabold font-mono block mt-1 ${metrics.lucro >= 0 ? 'text-emerald-400' : 'text-rose-400'}`}>
-                {new Intl.NumberFormat('pt-BR', { style: 'currency', currency: 'BRL' }).format(metrics.lucro)}
-              </span>
-              <span className="text-[9px] text-slate-500 font-mono mt-0.5 block">
-                Retorno Real do Motorista
-              </span>
-            </div>
-          </div>
+        <div className="text-[10px] text-slate-400 font-mono flex items-center gap-2">
+          <span>Rua:</span>
+          <span className="truncate max-w-[200px] text-purple-300 font-sans font-bold">{currentStreetName || "Buscando localização..."}</span>
         </div>
       </div>
 
-      {/* Main Layout Grid */}
-      <div className="grid grid-cols-1 lg:grid-cols-3 gap-6">
-        
-        {/* Tracker Panel (Left side / Large area) */}
-        <div className="lg:col-span-2 space-y-6">
-          <div className="p-6 md:p-8 rounded-3xl bg-[#0d0926]/90 border border-purple-950/30 shadow-[0_0_40px_rgba(76,29,149,0.1)] relative overflow-hidden flex flex-col items-center justify-center text-center min-h-[380px]">
+      {/* Abas de Navegação Visual */}
+      <div className="grid grid-cols-3 gap-1.5 bg-[#09051d] p-1.5 rounded-2xl border border-purple-950/40">
+        <button
+          onClick={() => setActiveTab('jornada')}
+          className={`py-3 px-2 rounded-xl text-xs md:text-sm font-bold transition-all flex items-center justify-center gap-2 cursor-pointer select-none ${
+            activeTab === 'jornada'
+              ? 'bg-gradient-to-r from-purple-700 to-indigo-700 text-white shadow-md font-extrabold'
+              : 'text-slate-400 hover:text-white hover:bg-purple-950/20'
+          }`}
+        >
+          <Navigation className="w-4 h-4" />
+          <span>JORNADA</span>
+        </button>
+        <button
+          onClick={() => setActiveTab('desempenho')}
+          className={`py-3 px-2 rounded-xl text-xs md:text-sm font-bold transition-all flex items-center justify-center gap-2 cursor-pointer select-none ${
+            activeTab === 'desempenho'
+              ? 'bg-gradient-to-r from-purple-700 to-indigo-700 text-white shadow-md font-extrabold'
+              : 'text-slate-400 hover:text-white hover:bg-purple-950/20'
+          }`}
+        >
+          <DollarSign className="w-4 h-4" />
+          <span>DESEMPENHO</span>
+        </button>
+        <button
+          onClick={() => setActiveTab('copiloto')}
+          className={`py-3 px-2 rounded-xl text-xs md:text-sm font-bold transition-all flex items-center justify-center gap-2 cursor-pointer select-none ${
+            activeTab === 'copiloto'
+              ? 'bg-gradient-to-r from-purple-700 to-indigo-700 text-white shadow-md font-extrabold'
+              : 'text-slate-400 hover:text-white hover:bg-purple-950/20'
+          }`}
+        >
+          <Bot className="w-4 h-4" />
+          <span>COPILOTO</span>
+        </button>
+      </div>
+
+      {/* Tab Area Container */}
+      <div>
+        {activeTab === 'jornada' && (
+          <div className="space-y-6">
+            <div className="p-6 md:p-8 rounded-3xl bg-[#0d0926]/90 border border-purple-950/30 shadow-[0_0_40px_rgba(76,29,149,0.1)] relative overflow-hidden flex flex-col items-center justify-center text-center min-h-[380px]">
             {/* Pulse effect if active */}
             {activeSession && (
               <div className="absolute inset-0 bg-radial-gradient from-purple-500/5 to-transparent pointer-events-none animate-pulse"></div>
@@ -2518,130 +2511,90 @@ export const JornadaPage: React.FC = () => {
                       <X className="w-4 h-4" /> Encerrar Jornada
                     </button>
                   </div>
-
-                  {/* Calibração da Inteligência Operacional */}
-                  <div className="p-5 bg-[#09051d]/60 border border-purple-950/25 rounded-2xl text-left space-y-4">
-                    <div className="flex items-center justify-between">
-                      <h4 className="text-xs font-bold uppercase font-mono tracking-wider text-purple-400 flex items-center gap-2 select-none">
-                        <Bot className="w-4 h-4 text-purple-400" /> Calibração da Inteligência
-                      </h4>
-                      <span className={`px-2 py-0.5 rounded text-[9px] font-bold uppercase font-mono ${
-                        calibrationStats.isCalibrated 
-                          ? 'bg-emerald-950/50 text-emerald-400 border border-emerald-900/45' 
-                          : 'bg-amber-950/50 text-amber-400 border border-amber-900/45 animate-pulse'
-                      }`}>
-                        {calibrationStats.isCalibrated ? '● IA Calibrada' : '● IA Aprendendo...'}
-                      </span>
-                    </div>
-
-                    <p className="text-[11px] text-slate-300 leading-relaxed font-sans">
-                      O modelo preditivo de demanda e oportunidades está sendo calibrado com base na sua rotina real de condução. 
-                      Atualmente, a IA precisa de 100 corridas individuais para atingir calibração ótima de mercado.
-                    </p>
-
-                    <div className="space-y-1.5">
-                      <div className="flex justify-between text-[10px] font-mono select-none">
-                        <span className="text-slate-400">Progresso de Calibração:</span>
-                        <span className="font-bold text-[#e1e1e6]">
-                          {calibrationStats.totalFinished} de 100 corridas necessárias ({calibrationStats.calibrationProgress}%)
-                        </span>
-                      </div>
-                      <div className="h-2 w-full bg-[#050310] rounded-full overflow-hidden border border-purple-950/20">
-                        <div 
-                          className="h-full bg-gradient-to-r from-purple-600 via-indigo-600 to-emerald-500 rounded-full transition-all duration-500"
-                          style={{ width: `${calibrationStats.calibrationProgress}%` }}
-                        ></div>
-                      </div>
-                    </div>
-
-                    <div className="grid grid-cols-2 md:grid-cols-4 gap-3">
-                      <div className="bg-[#050310] p-3 rounded-xl border border-purple-950/10 text-center space-y-0.5">
-                        <span className="text-[8.5px] text-slate-500 block font-mono uppercase select-none">Corridas Aprendidas</span>
-                        <span className="text-sm font-bold font-mono text-emerald-400">{calibrationStats.totalFinished}</span>
-                      </div>
-                      <div className="bg-[#050310] p-3 rounded-xl border border-purple-950/10 text-center space-y-0.5">
-                        <span className="text-[8.5px] text-slate-500 block font-mono uppercase select-none">GPS Coletados</span>
-                        <span className="text-sm font-bold font-mono text-purple-400">{calibrationStats.gpsPointsCount}</span>
-                      </div>
-                      <div className="bg-[#050310] p-3 rounded-xl border border-purple-950/10 text-center space-y-0.5">
-                        <span className="text-[8.5px] text-slate-500 block font-mono uppercase select-none">Horas Dirigidas</span>
-                        <span className="text-sm font-bold font-mono text-[#e1e1e6]">{calibrationStats.totalHoursDriven}h</span>
-                      </div>
-                      <div className="bg-[#050310] p-3 rounded-xl border border-purple-950/10 text-center space-y-0.5 col-span-1">
-                        <span className="text-[8.5px] text-slate-500 block font-mono uppercase select-none">Precisão Atual IA</span>
-                        <span className="text-sm font-bold font-mono text-indigo-400">{calibrationStats.accuracyRate}%</span>
-                      </div>
-                    </div>
-
-                    <div className="bg-[#050310]/50 p-2.5 rounded-xl border border-purple-950/15 text-[10.5px] font-mono flex items-center justify-between text-slate-400">
-                      <span>Nível de Confiança IA:</span>
-                      <span className={`font-bold ${calibrationStats.isCalibrated ? 'text-emerald-400' : 'text-amber-400'}`}>
-                        {calibrationStats.confidenceLevel}
-                      </span>
-                    </div>
-                  </div>
-
-                  {/* AI Real-Time Debug & Logs Panel (Only for admins/debuggers) */}
-                  {isAdmin && (
-                    <div className="p-5 bg-[#050310] border border-purple-950/20 rounded-2xl space-y-3 text-left font-mono text-[11px]">
-                      <div className="flex items-center justify-between border-b border-purple-950/35 pb-2">
-                        <span className="text-purple-400 flex items-center gap-1.5 font-bold uppercase tracking-wider text-[10px]">
-                          <Terminal className="w-4 h-4 animate-pulse" /> [Debug] Diagnóstico Interno
-                        </span>
-                        <span className="text-[9px] text-slate-500">Filtro: [RideAI]</span>
-                      </div>
-
-                      {aiState && (
-                        <div className="grid grid-cols-2 gap-2 text-[10px] text-slate-400 pb-2 border-b border-purple-950/20">
-                          <div>
-                            <p className="text-slate-500 font-bold">Eventos Detectados:</p>
-                            <ul className="list-disc pl-3 mt-1 space-y-0.5">
-                              {aiState.detectedEvents.length === 0 ? (
-                                <li>Aguardando evento...</li>
-                              ) : (
-                                aiState.detectedEvents.map((ev, i) => (
-                                  <li key={i} className="text-emerald-400">{ev}</li>
-                                ))
-                              )}
-                            </ul>
-                          </div>
-                          <div>
-                            <p className="text-slate-500 font-bold font-mono">Eventos Manuais:</p>
-                            <ul className="list-disc pl-3 mt-1 space-y-0.5">
-                              {aiState.manualEvents.length === 0 ? (
-                                <li>Nenhuma ação</li>
-                              ) : (
-                                aiState.manualEvents.map((ev, i) => (
-                                  <li key={i} className="text-purple-400">{ev}</li>
-                                ))
-                              )}
-                            </ul>
-                          </div>
-                        </div>
-                      )}
-
-                      <div className="max-h-[120px] overflow-y-auto space-y-1 pr-1 custom-scrollbar text-[10px]">
-                        {aiLogs.length === 0 ? (
-                          <p className="text-slate-600">Aguardando telemetria inicial do GPS...</p>
-                        ) : (
-                          aiLogs.slice().reverse().map((log, i) => (
-                            <div key={i} className="leading-relaxed border-l-2 border-purple-900 pl-1.5 py-0.5 text-slate-300 text-left">
-                              {log}
-                            </div>
-                          ))
-                        )}
-                      </div>
-                    </div>
-                  )}
                 </motion.div>
               )}
             </AnimatePresence>
           </div>
         </div>
+      )}
 
-        {/* Info & Session History Panel (Right side) */}
+      {/* ABA: DESEMPENHO */}
+      {activeTab === 'desempenho' && (
         <div className="space-y-6">
-          
+          {/* NÍVEL 2: MÉTRICAS FINANCEIRAS (FINANCEIRO REAL-TIME) */}
+          <div className="grid grid-cols-1 sm:grid-cols-3 gap-4">
+            <div className="bg-[#0c0827] border border-purple-950/40 p-5 rounded-2xl text-left flex items-center justify-between shadow-lg">
+              <div>
+                <span className="text-[10px] text-emerald-400 font-bold block uppercase tracking-wider">💰 Receita Operacional</span>
+                <span className="text-xl font-extrabold text-emerald-400 font-mono block mt-1">
+                  {new Intl.NumberFormat('pt-BR', { style: 'currency', currency: 'BRL' }).format(metrics.revenue)}
+                </span>
+                <span className="text-[9px] text-slate-500 font-mono mt-0.5 block">
+                  Taxa média: R$ {metrics.kmRate.toFixed(2)}/km
+                </span>
+              </div>
+            </div>
+            <div className="bg-[#0c0827] border border-purple-950/40 p-5 rounded-2xl text-left flex items-center justify-between shadow-lg">
+              <div>
+                <span className="text-[10px] text-rose-400 font-bold block uppercase tracking-wider">⛽ Custo Estimado</span>
+                <span className="text-xl font-extrabold text-rose-400 font-mono block mt-1">
+                  {new Intl.NumberFormat('pt-BR', { style: 'currency', currency: 'BRL' }).format(metrics.cost)}
+                </span>
+                <span className="text-[9px] text-slate-500 font-mono mt-0.5 block">
+                  Combustível & Desgaste
+                </span>
+              </div>
+            </div>
+            <div className="bg-[#0c0827] border border-purple-950/40 p-5 rounded-2xl text-left flex items-center justify-between shadow-lg">
+              <div>
+                <span className="text-[10px] text-purple-300 font-bold block uppercase tracking-wider">📈 Lucro Líquido</span>
+                <span className={`text-xl font-extrabold font-mono block mt-1 ${metrics.lucro >= 0 ? 'text-emerald-400' : 'text-rose-400'}`}>
+                  {new Intl.NumberFormat('pt-BR', { style: 'currency', currency: 'BRL' }).format(metrics.lucro)}
+                </span>
+                <span className="text-[9px] text-slate-500 font-mono mt-0.5 block">
+                  Retorno Real do Motorista
+                </span>
+              </div>
+            </div>
+          </div>
+
+          {/* Operational Averages Grid */}
+          <div className="grid grid-cols-2 md:grid-cols-4 gap-4">
+            <div className="bg-[#0c0827] border border-purple-950/25 p-4 rounded-xl text-center shadow-md">
+              <span className="text-[9px] text-slate-500 block uppercase font-mono mb-1">Média R$/KM</span>
+              <span className="text-lg font-bold font-mono text-emerald-400">
+                R$ {metrics.kmRate.toFixed(2)}
+              </span>
+            </div>
+            <div className="bg-[#0c0827] border border-purple-950/25 p-4 rounded-xl text-center shadow-md">
+              <span className="text-[9px] text-slate-500 block uppercase font-mono mb-1">Média R$/Hora</span>
+              <span className="text-lg font-bold font-mono text-purple-300">
+                R$ {(() => {
+                  const activeTimeStr = activeMetrics?.tempoOnline ?? metrics.tempoOnline;
+                  const mins = parseTimeToMinutes(activeTimeStr);
+                  return mins > 0 && activeMetrics?.hasEarnings ? (metrics.revenue / (mins / 60)).toFixed(2) : '0.00';
+                })()}
+              </span>
+            </div>
+            <div className="bg-[#0c0827] border border-purple-950/25 p-4 rounded-xl text-center shadow-md">
+              <span className="text-[9px] text-slate-500 block uppercase font-mono mb-1">Corridas Concluídas</span>
+              <span className="text-lg font-bold font-mono text-indigo-400">
+                {rideLogs.filter((r: any) => r.status === 'finished').length}
+              </span>
+            </div>
+            <div className="bg-[#0c0827] border border-purple-950/25 p-4 rounded-xl text-center shadow-md">
+              <span className="text-[9px] text-slate-500 block uppercase font-mono mb-1">Total de Horas</span>
+              <span className="text-lg font-bold font-mono text-amber-500">
+                {(parseTimeToMinutes(activeMetrics?.tempoOnline ?? metrics.tempoOnline) / 60).toFixed(1)}h
+              </span>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* ABA: COPILOTO */}
+      {activeTab === 'copiloto' && (
+        <div className="space-y-6">
           {/* Inteligência Copiloto do Motorista */}
           <CopilotCard 
             currentBairro={pickupNeighborhood || activeRide?.bairroOrigem || ''}
@@ -2656,6 +2609,121 @@ export const JornadaPage: React.FC = () => {
             vehicle={vehicle}
             vehicleCostSettings={vehicleCostSettings}
           />
+
+          {/* Calibração da Inteligência Operacional */}
+          <div className="p-5 bg-[#09051d]/60 border border-purple-950/25 rounded-2xl text-left space-y-4">
+            <div className="flex items-center justify-between">
+              <h4 className="text-xs font-bold uppercase font-mono tracking-wider text-purple-400 flex items-center gap-2 select-none">
+                <Bot className="w-4 h-4 text-purple-400" /> Calibração da Inteligência
+              </h4>
+              <span className={`px-2 py-0.5 rounded text-[9px] font-bold uppercase font-mono ${
+                calibrationStats.isCalibrated 
+                  ? 'bg-emerald-950/50 text-emerald-400 border border-emerald-900/45' 
+                  : 'bg-amber-950/50 text-amber-400 border border-amber-900/45 animate-pulse'
+              }`}>
+                {calibrationStats.isCalibrated ? '● IA Calibrada' : '● IA Aprendendo...'}
+              </span>
+            </div>
+
+            <p className="text-[11px] text-slate-300 leading-relaxed font-sans">
+              O modelo preditivo de demanda e oportunidades está sendo calibrado com base na sua rotina real de condução. 
+              Atualmente, a IA precisa de 100 corridas individuais para atingir calibração ótima de mercado.
+            </p>
+
+            <div className="space-y-1.5">
+              <div className="flex justify-between text-[10px] font-mono select-none">
+                <span className="text-slate-400">Progresso de Calibração:</span>
+                <span className="font-bold text-[#e1e1e6]">
+                  {calibrationStats.totalFinished} de 100 corridas necessárias ({calibrationStats.calibrationProgress}%)
+                </span>
+              </div>
+              <div className="h-2 w-full bg-[#050310] rounded-full overflow-hidden border border-purple-950/20">
+                <div 
+                  className="h-full bg-gradient-to-r from-purple-600 via-indigo-600 to-emerald-500 rounded-full transition-all duration-500"
+                  style={{ width: `${calibrationStats.calibrationProgress}%` }}
+                ></div>
+              </div>
+            </div>
+
+            <div className="grid grid-cols-2 md:grid-cols-4 gap-3">
+              <div className="bg-[#050310] p-3 rounded-xl border border-purple-950/10 text-center space-y-0.5">
+                <span className="text-[8.5px] text-slate-500 block font-mono uppercase select-none">Corridas Aprendidas</span>
+                <span className="text-sm font-bold font-mono text-emerald-400">{calibrationStats.totalFinished}</span>
+              </div>
+              <div className="bg-[#050310] p-3 rounded-xl border border-purple-950/10 text-center space-y-0.5">
+                <span className="text-[8.5px] text-slate-500 block font-mono uppercase select-none">GPS Coletados</span>
+                <span className="text-sm font-bold font-mono text-purple-400">{calibrationStats.gpsPointsCount}</span>
+              </div>
+              <div className="bg-[#050310] p-3 rounded-xl border border-purple-950/10 text-center space-y-0.5">
+                <span className="text-[8.5px] text-slate-500 block font-mono uppercase select-none">Horas Dirigidas</span>
+                <span className="text-sm font-bold font-mono text-[#e1e1e6]">{calibrationStats.totalHoursDriven}h</span>
+              </div>
+              <div className="bg-[#050310] p-3 rounded-xl border border-purple-950/10 text-center space-y-0.5 col-span-1">
+                <span className="text-[8.5px] text-slate-500 block font-mono uppercase select-none">Precisão Atual IA</span>
+                <span className="text-sm font-bold font-mono text-indigo-400">{calibrationStats.accuracyRate}%</span>
+              </div>
+            </div>
+
+            <div className="bg-[#050310]/50 p-2.5 rounded-xl border border-purple-950/15 text-[10.5px] font-mono flex items-center justify-between text-slate-400">
+              <span>Nível de Confiança IA:</span>
+              <span className={`font-bold ${calibrationStats.isCalibrated ? 'text-emerald-400' : 'text-amber-400'}`}>
+                {calibrationStats.confidenceLevel}
+              </span>
+            </div>
+          </div>
+
+          {/* AI Real-Time Debug & Logs Panel (Only for admins/debuggers) */}
+          {isAdmin && (
+            <div className="p-5 bg-[#050310] border border-purple-950/20 rounded-2xl space-y-3 text-left font-mono text-[11px]">
+              <div className="flex items-center justify-between border-b border-purple-950/35 pb-2">
+                <span className="text-purple-400 flex items-center gap-1.5 font-bold uppercase tracking-wider text-[10px]">
+                  <Terminal className="w-4 h-4 animate-pulse" /> [Debug] Diagnóstico Interno
+                </span>
+                <span className="text-[9px] text-slate-500">Filtro: [RideAI]</span>
+              </div>
+
+              {aiState && (
+                <div className="grid grid-cols-2 gap-2 text-[10px] text-slate-400 pb-2 border-b border-purple-950/20">
+                  <div>
+                    <p className="text-slate-500 font-bold">Eventos Detectados:</p>
+                    <ul className="list-disc pl-3 mt-1 space-y-0.5">
+                      {aiState.detectedEvents.length === 0 ? (
+                        <li>Aguardando evento...</li>
+                      ) : (
+                        aiState.detectedEvents.map((ev, i) => (
+                          <li key={i} className="text-emerald-400">{ev}</li>
+                        ))
+                      )}
+                    </ul>
+                  </div>
+                  <div>
+                    <p className="text-slate-500 font-bold font-mono">Eventos Manuais:</p>
+                    <ul className="list-disc pl-3 mt-1 space-y-0.5">
+                      {aiState.manualEvents.length === 0 ? (
+                        <li>Nenhuma ação</li>
+                      ) : (
+                        aiState.manualEvents.map((ev, i) => (
+                          <li key={i} className="text-purple-400">{ev}</li>
+                        ))
+                      )}
+                    </ul>
+                  </div>
+                </div>
+              )}
+
+              <div className="max-h-[120px] overflow-y-auto space-y-1 pr-1 custom-scrollbar text-[10px]">
+                {aiLogs.length === 0 ? (
+                  <p className="text-slate-600">Aguardando telemetria inicial do GPS...</p>
+                ) : (
+                  aiLogs.slice().reverse().map((log, i) => (
+                    <div key={i} className="leading-relaxed border-l-2 border-purple-900 pl-1.5 py-0.5 text-slate-300 text-left">
+                      {log}
+                    </div>
+                  ))
+                )}
+              </div>
+            </div>
+          )}
           
           {/* Active Status Alerts warnings */}
           {gpsUi.isError && (
@@ -2743,7 +2811,11 @@ export const JornadaPage: React.FC = () => {
               )}
             </AnimatePresence>
           </div>
+        </div>
+      )}
 
+      {activeTab === 'desempenho' && (
+        <div className="space-y-6">
           {/* Session logs summary */}
           <div className="p-5 rounded-2xl bg-[#0d0926]/40 border border-purple-950/25 space-y-4 text-left">
             <h3 className="text-xs font-bold uppercase font-mono tracking-wider text-slate-400 flex items-center justify-between select-none">
@@ -2794,7 +2866,11 @@ export const JornadaPage: React.FC = () => {
               </div>
             )}
           </div>
+        </div>
+      )}
 
+      {activeTab === 'copiloto' && (
+        <div className="space-y-6">
           {/* PAINEL DE ANALYTICS DA CALIBRAÇÃO DA IA */}
           <div className="p-5 rounded-2xl bg-[#0d0926]/40 border border-purple-950/25 space-y-4 text-left">
             <h3 className="text-xs font-bold uppercase font-mono tracking-wider text-purple-400 flex items-center justify-between select-none">
@@ -2912,7 +2988,11 @@ export const JornadaPage: React.FC = () => {
               </div>
             )}
           </div>
+        </div>
+      )}
 
+      {activeTab === 'desempenho' && (
+        <div className="space-y-6">
           {/* Histórico de Corridas de Calibração */}
           <div className="p-5 rounded-2xl bg-[#0d0926]/40 border border-purple-950/25 space-y-4 text-left">
             <h3 className="text-xs font-bold uppercase font-mono tracking-wider text-purple-400 flex items-center justify-between select-none">
@@ -3053,8 +3133,8 @@ export const JornadaPage: React.FC = () => {
               </div>
             )}
           </div>
-
         </div>
+      )}
 
       </div>
 

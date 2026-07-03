@@ -65,7 +65,7 @@ export const AppLayout: React.FC<{ children: React.ReactNode }> = ({ children })
         }
       }
 
-      console.log('[ONBOARDING] Reset');
+      console.log('[ONBOARDING_RESET_MANUAL_ONLY] Usuário acionou reinicialização manual do onboarding.');
       
       // Close configurations modal and redirect to dashboard to open wizard
       setIsSettingsOpen(false);

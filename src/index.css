@@ -36,6 +36,19 @@ body {
   z-index: 1 !important;
 }
 
+/* Fix for Leaflet tile border grid lines caused by fractional zoom and scaling */
+.leaflet-tile {
+  outline: 1px solid transparent !important;
+  box-shadow: 0 0 1px transparent !important;
+  -webkit-backface-visibility: hidden;
+  backface-visibility: hidden;
+}
+
+.leaflet-container .leaflet-tile-pane img {
+  outline: 1px solid transparent !important;
+  box-shadow: 0 0 1px transparent !important;
+}
+
 .journey-modal {
   z-index: 999999 !important;
   position: fixed;

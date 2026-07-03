@@ -58,11 +58,39 @@ export const driverProfileService = {
     try {
       const saved = localStorage.getItem(PREFS_KEY);
       if (saved) {
-        return JSON.parse(saved);
+        const parsed = JSON.parse(saved);
+        if (parsed && parsed.objective) {
+          return parsed;
+        }
       }
     } catch (e) {
       console.error('Failed to load profile preferences:', e);
     }
+
+    // Try fallback from onboarding v2 progress
+    try {
+      const onboardingSaved = localStorage.getItem(`${STORAGE_PREFIX}onboarding_v2_progress`);
+      if (onboardingSaved) {
+        const parsed = JSON.parse(onboardingSaved);
+        if (parsed && parsed.objective) {
+          const fallbackPrefs: DriverProfilePreferences = {
+            ownershipType: parsed.ownershipType || 'own',
+            fuelType: parsed.fuelType || 'flex',
+            platforms: parsed.platforms || ['uber', '99'],
+            daysPerWeek: parsed.daysPerWeek || 5,
+            hoursPerDay: parsed.hoursPerDay || 8,
+            objective: parsed.objective || 'max_profit',
+            odometerCurrent: 0
+          };
+          // Save it back to cache
+          localStorage.setItem(PREFS_KEY, JSON.stringify(fallbackPrefs));
+          return fallbackPrefs;
+        }
+      }
+    } catch (e) {
+      console.warn('Failed to recover preferences from onboarding progress fallback:', e);
+    }
+
     // Return standard defaults if none configured yet
     return {
       ownershipType: 'own',

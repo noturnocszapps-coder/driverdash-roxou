@@ -232,6 +232,28 @@ const LegacyAppBridgeProvider: React.FC<{ children: React.ReactNode }> = ({ chil
     auth.setProfileState(updatedProfile);
     localStorage.setItem(`${STORAGE_PREFIX}profile`, JSON.stringify(updatedProfile));
 
+    // Ensure the progress localStorage key is also updated to avoid inconsistent reads
+    const localProgressKey = `${STORAGE_PREFIX}onboarding_v2_progress`;
+    const localProgress = localStorage.getItem(localProgressKey);
+    if (localProgress) {
+      try {
+        const parsed = JSON.parse(localProgress);
+        const updatedProgress = { ...parsed, onboarding_completed: true, current_step: 6 };
+        localStorage.setItem(localProgressKey, JSON.stringify(updatedProgress));
+      } catch (e) {
+        console.warn('Failed to sync complete status to progress:', e);
+      }
+    } else {
+      const completedProgress = {
+        current_step: 6,
+        onboarding_completed: true,
+        updated_at: new Date().toISOString()
+      };
+      localStorage.setItem(localProgressKey, JSON.stringify(completedProgress));
+    }
+
+    console.log('[ONBOARDING_SAVE_COMPLETED] Onboarding sincronizado globalmente e finalizado.');
+
     const updatedUsers = users.map(u => u.id === auth.profile?.id ? { ...u, onboarding_completed: true } : u);
     setUsers(updatedUsers);
     localStorage.setItem(`${STORAGE_PREFIX}users`, JSON.stringify(updatedUsers));

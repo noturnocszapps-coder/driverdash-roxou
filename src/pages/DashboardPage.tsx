@@ -95,7 +95,8 @@ export const DashboardPage: React.FC = () => {
     completeOnboarding,
     driverSessions,
     routePoints,
-    upsertFinancialGoal
+    upsertFinancialGoal,
+    loading
   } = useApp();
 
   const navigate = useNavigate();
@@ -496,7 +497,7 @@ export const DashboardPage: React.FC = () => {
 
   return (
     <div className="space-y-8 font-sans pb-16" id="driver-intelligence-hub">
-      {!hasCompletedSetup && <OnboardingWizard />}
+      {!loading && !hasCompletedSetup && <OnboardingWizard />}
       
       {/* Top Welcome Header - Premium Tesla/Apple Style */}
       <div className="flex flex-col md:flex-row justify-between items-start md:items-center gap-6 border-b border-purple-950/20 pb-6">

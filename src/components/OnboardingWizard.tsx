@@ -69,6 +69,8 @@ export const OnboardingWizard: React.FC<OnboardingWizardProps> = ({ onComplete }
   const [electricityPrice, setElectricityPrice] = useState<string>('0.85');
 
   const isLoadedRef = useRef(false);
+  const finishedRef = useRef(false);
+  const isRecoveringRef = useRef(true);
 
   // 1. Dynamic priority state recovery (Supabase -> localStorage -> defaults)
   useEffect(() => {
@@ -76,9 +78,21 @@ export const OnboardingWizard: React.FC<OnboardingWizardProps> = ({ onComplete }
     
     const loadSavedProgress = async () => {
       setIsLoadingProgress(true);
+      isRecoveringRef.current = true;
       try {
         const progress = await onboardingService.loadProgress(user.id, dbStatus === 'connected');
         
+        // If progress is already completed, trigger completion on React Context and bypass mounting
+        if (progress.onboarding_completed) {
+          console.log('[ONBOARDING_ALREADY_COMPLETED] Onboarding já concluído detectado ao carregar progresso. Sincronizando estado...');
+          finishedRef.current = true;
+          await completeOnboarding();
+          if (onComplete) {
+            onComplete();
+          }
+          return;
+        }
+
         // Recover values gracefully if they are valid
         if (progress.current_step) setStep(progress.current_step);
         if (progress.ownershipType) setOwnership(progress.ownershipType);
@@ -111,7 +125,10 @@ export const OnboardingWizard: React.FC<OnboardingWizardProps> = ({ onComplete }
         console.error('Error recovering onboarding progress:', err);
       } finally {
         setIsLoadingProgress(false);
-        isLoadedRef.current = true;
+        setTimeout(() => {
+          isRecoveringRef.current = false;
+          isLoadedRef.current = true;
+        }, 150);
       }
     };
     
@@ -120,7 +137,7 @@ export const OnboardingWizard: React.FC<OnboardingWizardProps> = ({ onComplete }
 
   // 2. Debounced auto-saving for all fields
   useEffect(() => {
-    if (isLoadingProgress || !user || !isLoadedRef.current) return;
+    if (isLoadingProgress || !user || !isLoadedRef.current || isRecoveringRef.current || finishedRef.current) return;
 
     setSaveStatus('saving');
 
@@ -150,6 +167,10 @@ export const OnboardingWizard: React.FC<OnboardingWizardProps> = ({ onComplete }
     };
 
     const timer = setTimeout(async () => {
+      if (finishedRef.current) {
+        console.log('[ONBOARDING] Skipping debounced auto-save as onboarding is completed');
+        return;
+      }
       const isDbConnected = dbStatus === 'connected';
       
       // Auto-save progress to both LocalStorage and Supabase
@@ -351,6 +372,7 @@ export const OnboardingWizard: React.FC<OnboardingWizardProps> = ({ onComplete }
   const handleFinish = async () => {
     try {
       if (!user) return;
+      finishedRef.current = true; // Set instantly to block any pending auto-saves
 
       // 1. Construct preferences object
       const prefs: DriverProfilePreferences = {
@@ -431,7 +453,7 @@ export const OnboardingWizard: React.FC<OnboardingWizardProps> = ({ onComplete }
       // 6. Set completed status in DB and Context
       await completeOnboarding();
 
-      console.log('[ONBOARDING] Completed');
+      console.log('[ONBOARDING_SAVE_COMPLETED] Onboarding concluído com sucesso!');
 
       if (onComplete) {
         onComplete();

@@ -138,23 +138,44 @@ export const RealTimeTrackerMap: React.FC<RealTimeTrackerMapProps> = ({
         });
       }
 
-      // Custom Blue Neon Dot for driver's current position
+      // Custom Waze-style arrow or Pulsing circle marker for driver's current position
+      const hasHeading = lastCoord.heading !== null && lastCoord.heading !== undefined;
+      const isMoving = lastCoord.speed > 2; // moving faster than 2 km/h
+      
+      const markerHtml = (hasHeading && isMoving)
+        ? `<div class="relative flex items-center justify-center" style="width: 32px; height: 32px;">
+             <!-- Waze-style navigation arrow -->
+             <div style="transform: rotate(${lastCoord.heading}deg); transition: transform 0.3s ease-out; display: flex; align-items: center; justify-content: center; width: 32px; height: 32px;">
+               <svg width="24" height="24" viewBox="0 0 24 24" fill="none" xmlns="http://www.w3.org/2000/svg" style="filter: drop-shadow(0px 2px 5px rgba(0,0,0,0.5));">
+                 <!-- Round background -->
+                 <circle cx="12" cy="12" r="10" fill="#3b82f6" stroke="#ffffff" stroke-width="2"/>
+                 <!-- Arrow pointing UP by default (0 deg) -->
+                 <path d="M12 6L16.5 15L12 13.5L7.5 15L12 6Z" fill="#ffffff" stroke-linejoin="round" stroke-linecap="round"/>
+               </svg>
+             </div>
+           </div>`
+        : `<div class="relative flex items-center justify-center" style="width: 32px; height: 32px;">
+             <!-- Pulsing halo for stopped state -->
+             <div class="absolute w-8 h-8 rounded-full bg-blue-500/30 animate-ping" style="animation-duration: 2.5s;"></div>
+             <div class="absolute w-6 h-6 rounded-full bg-blue-500/20"></div>
+             <!-- Main circular marker -->
+             <div class="w-4 h-4 rounded-full bg-blue-600 border-2 border-white shadow-[0_0_12px_rgba(59,130,246,0.8)] z-10"></div>
+           </div>`;
+
       const blueIcon = L.divIcon({
         className: 'custom-driver-icon-blue',
-        html: `<div class="relative flex items-center justify-center">
-                 <div class="absolute w-6 h-6 rounded-full bg-blue-500/30 animate-ping"></div>
-                 <div class="w-4 h-4 rounded-full bg-blue-500 border-2 border-white shadow-lg shadow-blue-500/50"></div>
-               </div>`,
-        iconSize: [24, 24],
-        iconAnchor: [12, 12]
+        html: markerHtml,
+        iconSize: [32, 32],
+        iconAnchor: [16, 16]
       });
 
       if (markerCurrentRef.current) {
         markerCurrentRef.current.setLatLng(currentPos);
+        markerCurrentRef.current.setIcon(blueIcon);
       } else {
         markerCurrentRef.current = L.marker(currentPos, { icon: blueIcon })
           .addTo(map)
-          .bindPopup('<strong class="text-slate-800">Você está aqui</strong>');
+          .bindPopup('<strong class="text-slate-200">Você está aqui</strong>');
       }
     }
 

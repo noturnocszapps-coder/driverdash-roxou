@@ -40,7 +40,53 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
   const fetchProfileAndData = async (userId: string, email: string) => {
     try {
       setDbStatus('checking');
-      const loadedProfile = await authService.fetchOrCreateProfile(userId, email);
+      let loadedProfile = await authService.fetchOrCreateProfile(userId, email);
+      
+      console.log('[ONBOARDING_BOOT_START] Iniciando checagem de perfil ao autenticar');
+      
+      // Check local sources for onboarding_completed override
+      const localProfileStr = localStorage.getItem(`${STORAGE_PREFIX}profile`);
+      const localProgressStr = localStorage.getItem(`${STORAGE_PREFIX}onboarding_v2_progress`);
+      
+      let isCompletedLocally = false;
+
+      if (localProfileStr) {
+        try {
+          const parsedLocal = JSON.parse(localProfileStr);
+          if (parsedLocal && parsedLocal.id === userId && parsedLocal.onboarding_completed) {
+            isCompletedLocally = true;
+          }
+        } catch (e) {
+          console.warn('Erro ao analisar perfil local:', e);
+        }
+      }
+
+      if (localProgressStr) {
+        try {
+          const parsedProgress = JSON.parse(localProgressStr);
+          if (parsedProgress && parsedProgress.onboarding_completed) {
+            isCompletedLocally = true;
+          }
+        } catch (e) {
+          console.warn('Erro ao analisar progresso local:', e);
+        }
+      }
+
+      // If either local or remote profile is completed, ensure it is completed
+      if (loadedProfile.onboarding_completed || isCompletedLocally) {
+        console.log('[ONBOARDING_ALREADY_COMPLETED] Onboarding já concluído!');
+        if (!loadedProfile.onboarding_completed) {
+          console.log('[ONBOARDING_PROFILE_LOADED_LOCAL] Sincronizando conclusão local com Supabase');
+          await authService.completeOnboarding(userId);
+        }
+        loadedProfile = {
+          ...loadedProfile,
+          onboarding_completed: true
+        };
+      } else {
+        console.log('[ONBOARDING] Usuário novo ou onboarding incompleto.');
+      }
+
       setProfile(loadedProfile);
       localStorage.setItem(`${STORAGE_PREFIX}profile`, JSON.stringify(loadedProfile));
       setDbStatus('connected');
