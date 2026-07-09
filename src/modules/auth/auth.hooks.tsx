@@ -22,7 +22,7 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
 
   // Sync / Load fallback files
   const loadLocalDemoSession = () => {
-    setDbStatus('fallback');
+    setDbStatus(isSupabaseConfigured() ? 'connected' : 'fallback');
     const localUserStr = localStorage.getItem(`${STORAGE_PREFIX}user`);
     const localProfileStr = localStorage.getItem(`${STORAGE_PREFIX}profile`);
     
@@ -153,6 +153,7 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
       } catch (err: any) {
         console.error('Database connection failed on init. Falling back to local demonstration rules:', err);
         loadLocalDemoSession();
+        setDbStatus('fallback');
       } finally {
         setLoading(false);
       }
