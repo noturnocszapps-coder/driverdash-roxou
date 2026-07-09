@@ -520,15 +520,19 @@ export async function persistCalibratedRide(rideData: Partial<CalibratedRide>): 
     // 1. Sync to Supabase (attempt first to detect failure)
     let syncError: any = null;
     try {
+      const dbPayload = {
+        id: fullSavedRide.id,
+        journey_id: fullSavedRide.journey_id || 'session_unknown',
+        driver_id: fullSavedRide.driver_id || 'driver_unknown',
+        payload: { ...fullSavedRide, pending_sync: false },
+        created_at: new Date().toISOString()
+      };
+
+      console.log('[CALIBRATION_PAYLOAD_FIELDS] Campos enviados no payload de gravação:', Object.keys(dbPayload));
+
       const { error } = await supabase
         .from('driver_ride_logs')
-        .upsert({
-          id: fullSavedRide.id,
-          journey_id: fullSavedRide.journey_id || 'session_unknown',
-          driver_id: fullSavedRide.driver_id || 'driver_unknown',
-          payload: { ...fullSavedRide, pending_sync: false },
-          created_at: new Date().toISOString()
-        });
+        .upsert(dbPayload);
       syncError = error;
     } catch (err: any) {
       syncError = err;
@@ -536,6 +540,12 @@ export async function persistCalibratedRide(rideData: Partial<CalibratedRide>): 
 
     if (syncError) {
       const classified = classifyDatabaseError(syncError);
+      if (classified.category === 'validation_error') {
+        console.error('[CALIBRATION_SCHEMA_ERROR] Erro de Schema detectado na tabela driver_ride_logs:', classified.technicalDetails);
+      }
+      
+      console.log('[CALIBRATION_SYNC_PENDING] Sincronização pendente devido à falha de gravação remota:', classified.message);
+
       console.warn('[CALIBRATION_SAVE_ERROR_CLASSIFIED] Categoria real do erro:', classified.category, '-', classified.technicalDetails);
       fullSavedRide.pending_sync = true;
       try {
