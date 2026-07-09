@@ -1,10 +1,27 @@
-/**
- * Smart Ride Detection Engine Service (Phase 6)
- * Module: Journey (journey)
- * Purpose: Automatically detect ride starts and ends based on GPS, speed, stopping patterns, heading changes, and acceleration.
- * 
- * STABLE CORE - NÃO ALTERAR SEM AUTORIZAÇÃO EXPLÍCITA
- */
+// ============================================================================
+// DRIVERDASH ROXOU — STABLE CORE
+//
+// ARQUIVO CRÍTICO PROTEGIDO DURANTE O MODO DE ESTABILIZAÇÃO.
+//
+// NÃO ALTERAR SEM SOLICITAÇÃO EXPLÍCITA.
+//
+// Este módulo participa de operações críticas do sistema:
+// -> Responsável pela máquina de estados de detecção automática de início e fim de corridas (Smart Detection).
+//
+// Mudanças não autorizadas podem causar regressões, inconsistência de dados
+// ou perda de informações da jornada.
+//
+// Antes de qualquer alteração futura:
+// 1. identificar o bug reproduzível;
+// 2. documentar a causa raiz;
+// 3. aplicar a menor correção possível;
+// 4. não realizar refatoração oportunista;
+// 5. executar typecheck;
+// 6. executar build;
+// 7. informar exatamente quais linhas e comportamentos foram alterados.
+//
+// STATUS: PROTEGIDO
+// ============================================================================
 
 import { supabase } from '../shared/supabase.helpers';
 import { RoutePoint, DriverRideEvent } from '../../types';

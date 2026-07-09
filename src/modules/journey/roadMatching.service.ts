@@ -1,10 +1,27 @@
-/**
- * Professional GPS Noise Filter and Snap-To-Road Service
- * Module: Journey (journey)
- * Integrates with Google Roads API via secure Express backend proxy.
- * 
- * STABLE CORE - NÃO ALTERAR SEM AUTORIZAÇÃO EXPLÍCITA
- */
+// ============================================================================
+// DRIVERDASH ROXOU — CORE SENSÍVEL
+//
+// ARQUIVO CRÍTICO PROTEGIDO DURANTE O MODO DE ESTABILIZAÇÃO.
+//
+// NÃO ALTERAR SEM SOLICITAÇÃO EXPLÍCITA.
+//
+// Este módulo participa de operações críticas do sistema:
+// -> Responsável pelo tratamento, correspondência e snap-to-road do trajeto geográfico.
+//
+// Mudanças não autorizadas podem causar regressões, inconsistência de dados
+// ou perda de informações da jornada.
+//
+// Antes de qualquer alteração futura:
+// 1. identificar o bug reproduzível;
+// 2. documentar a causa raiz;
+// 3. aplicar a menor correção possível;
+// 4. não realizar refatoração oportunista;
+// 5. executar typecheck;
+// 6. executar build;
+// 7. informar exatamente quais linhas e comportamentos foram alterados.
+//
+// STATUS: PROTEGIDO
+// ============================================================================
 
 export interface RawGpsPoint {
   lat: number;

@@ -1,12 +1,27 @@
-/**
- * Isolated Ride Calibration Service for AI Training and Quality Control
- * Module: Journey (journey)
- * Responsibility: Manages individual ride state, automatic metrics calculations,
- * data quality validations, and persistence logic for both Local and Supabase storage.
- * Designed to be reusable by Android Accessibility Services in the future.
- * 
- * STABLE CORE - NÃO ALTERAR SEM AUTORIZAÇÃO EXPLÍCITA
- */
+// ============================================================================
+// DRIVERDASH ROXOU — STABLE CORE
+//
+// ARQUIVO CRÍTICO PROTEGIDO DURANTE O MODO DE ESTABILIZAÇÃO.
+//
+// NÃO ALTERAR SEM SOLICITAÇÃO EXPLÍCITA.
+//
+// Este módulo participa de operações críticas do sistema:
+// -> Responsável pela persistência, calibração final, fechamento de corridas e classificação de erros do banco.
+//
+// Mudanças não autorizadas podem causar regressões, inconsistência de dados
+// ou perda de informações da jornada.
+//
+// Antes de qualquer alteração futura:
+// 1. identificar o bug reproduzível;
+// 2. documentar a causa raiz;
+// 3. aplicar a menor correção possível;
+// 4. não realizar refatoração oportunista;
+// 5. executar typecheck;
+// 6. executar build;
+// 7. informar exatamente quais linhas e comportamentos foram alterados.
+//
+// STATUS: PROTEGIDO
+// ============================================================================
 
 import { supabase } from '../shared/supabase.helpers';
 import { calculateDistanceBetweenPoints } from './journey.calculations';
@@ -247,6 +262,175 @@ export function calculateAutomaticMetrics(ride: Partial<CalibratedRide>): Partia
   };
 }
 
+export interface ClassifiedDatabaseError {
+  category: 'no_internet' | 'supabase_unavailable' | 'auth_error' | 'permission_error' | 'validation_error' | 'database_internal_error' | 'timeout' | 'unknown';
+  message: string;
+  technicalDetails: string;
+}
+
+export function classifyDatabaseError(error: any): ClassifiedDatabaseError {
+  if (!error) {
+    return {
+      category: 'unknown',
+      message: 'Erro desconhecido.',
+      technicalDetails: 'Nenhum objeto de erro fornecido.'
+    };
+  }
+
+  const rawMessage = error.message || (typeof error === 'string' ? error : '') || '';
+  const code = error.code || '';
+  const status = error.status || error.statusCode || 0;
+  const details = error.details || '';
+  const hint = error.hint || '';
+
+  const sanitize = (text: string) => {
+    if (!text) return '';
+    return text
+      .replace(/eyJhbGciOi[A-Za-z0-9-_=]+\.[A-Za-z0-9-_=]+\.?[A-Za-z0-9-_.+/=]*/g, '[JWT_TOKEN_HIDDEN]')
+      .replace(/bearer\s+[A-Za-z0-9-_=.]+/gi, 'Bearer [TOKEN_HIDDEN]')
+      .replace(/apikey=?[A-Za-z0-9-_=.]+/gi, 'apikey=[APIKEY_HIDDEN]');
+  };
+
+  const message = sanitize(rawMessage);
+  const cleanDetails = sanitize(details);
+  const cleanHint = sanitize(hint);
+  const lowercaseMsg = message.toLowerCase();
+
+  // 1. Sem conexão real de internet
+  const isNoInternet = 
+    (typeof navigator !== 'undefined' && !navigator.onLine) ||
+    lowercaseMsg.includes('network') ||
+    lowercaseMsg.includes('internet') ||
+    lowercaseMsg.includes('offline') ||
+    lowercaseMsg.includes('dns') ||
+    code === '0' ||
+    code === 'FETCH_ERROR' ||
+    lowercaseMsg.includes('failed to fetch') ||
+    lowercaseMsg.includes('load failed') ||
+    lowercaseMsg.includes('typeerror: failed to fetch');
+
+  if (isNoInternet) {
+    return {
+      category: 'no_internet',
+      message: 'Dispositivo sem conexão de internet ativa.',
+      technicalDetails: `navigator.onLine: ${typeof navigator !== 'undefined' ? navigator.onLine : 'undefined'}, message: ${message}, code: ${code}`
+    };
+  }
+
+  // 2. Timeout
+  const isTimeout =
+    lowercaseMsg.includes('timeout') ||
+    lowercaseMsg.includes('timed out') ||
+    lowercaseMsg.includes('abort') ||
+    status === 408 ||
+    status === 504;
+
+  if (isTimeout) {
+    return {
+      category: 'timeout',
+      message: 'Tempo limite de conexão esgotado (Timeout).',
+      technicalDetails: `status: ${status}, message: ${message}, code: ${code}`
+    };
+  }
+
+  // 3. Supabase indisponível (Network failure / connection refused)
+  const isUnavailable =
+    status === 502 ||
+    status === 503 ||
+    lowercaseMsg.includes('unavailable') ||
+    lowercaseMsg.includes('connection refused') ||
+    lowercaseMsg.includes('cannot connect');
+
+  if (isUnavailable) {
+    return {
+      category: 'supabase_unavailable',
+      message: 'Banco remoto (Supabase) indisponível ou inacessível no momento.',
+      technicalDetails: `status: ${status}, message: ${message}, code: ${code}`
+    };
+  }
+
+  // 4. Erro de autenticação (401)
+  const isAuth =
+    status === 401 ||
+    code === 'PGRST301' ||
+    lowercaseMsg.includes('jwt') ||
+    lowercaseMsg.includes('unauthorized') ||
+    lowercaseMsg.includes('auth') ||
+    lowercaseMsg.includes('invalid ticket') ||
+    lowercaseMsg.includes('token');
+
+  if (isAuth) {
+    return {
+      category: 'auth_error',
+      message: 'Erro de autenticação (Não autorizado).',
+      technicalDetails: `status: ${status}, message: ${message}, code: ${code}`
+    };
+  }
+
+  // 5. Erro de permissão/RLS (403)
+  const isPermission =
+    status === 403 ||
+    code === '42501' ||
+    lowercaseMsg.includes('permission denied') ||
+    lowercaseMsg.includes('insufficient privilege') ||
+    lowercaseMsg.includes('rls') ||
+    lowercaseMsg.includes('policy');
+
+  if (isPermission) {
+    return {
+      category: 'permission_error',
+      message: 'Acesso negado por regras de permissão (RLS).',
+      technicalDetails: `status: ${status}, message: ${message}, code: ${code}, details: ${cleanDetails}`
+    };
+  }
+
+  // 6. Erro de validação de dados / erro de schema (400)
+  const isValidation =
+    status === 400 ||
+    code === '42P01' ||
+    code === '42703' ||
+    code.startsWith('22') ||
+    code.startsWith('23') ||
+    code.startsWith('PGRST2') ||
+    lowercaseMsg.includes('relation') ||
+    lowercaseMsg.includes('column') ||
+    lowercaseMsg.includes('does not exist') ||
+    lowercaseMsg.includes('type mismatch') ||
+    lowercaseMsg.includes('constraint') ||
+    lowercaseMsg.includes('violates') ||
+    lowercaseMsg.includes('bad request');
+
+  if (isValidation) {
+    return {
+      category: 'validation_error',
+      message: 'Erro de validação de dados ou incompatibilidade de estrutura (Schema).',
+      technicalDetails: `status: ${status}, message: ${message}, code: ${code}, details: ${cleanDetails}, hint: ${cleanHint}`
+    };
+  }
+
+  // 7. Erro interno do banco (500)
+  const isDatabaseInternal =
+    status === 500 ||
+    code.startsWith('XX') ||
+    lowercaseMsg.includes('internal server error') ||
+    lowercaseMsg.includes('database error');
+
+  if (isDatabaseInternal) {
+    return {
+      category: 'database_internal_error',
+      message: 'Erro interno no servidor do banco de dados remoto.',
+      technicalDetails: `status: ${status}, message: ${message}, code: ${code}`
+    };
+  }
+
+  // Fallback / Unknown
+  return {
+    category: 'unknown',
+    message: 'Falha não mapeada ao conectar com o banco remoto.',
+    technicalDetails: `status: ${status}, message: ${message}, code: ${code}, details: ${cleanDetails}`
+  };
+}
+
 /**
  * Isolated method to save/update a ride log locally and remotely (Item 1 & 2 & 8)
  * Designed to be universally invoked by any service (including Android automation wrapper).
@@ -255,6 +439,8 @@ export async function persistCalibratedRide(rideData: Partial<CalibratedRide>): 
   success: boolean;
   ride: CalibratedRide;
   error?: string;
+  errorCategory?: 'no_internet' | 'supabase_unavailable' | 'auth_error' | 'permission_error' | 'validation_error' | 'database_internal_error' | 'timeout' | 'unknown';
+  errorDetails?: string;
 }> {
   console.log('[CALIBRATION_SAVE_START] Persistência iniciada para os dados da corrida...');
   try {
@@ -349,7 +535,8 @@ export async function persistCalibratedRide(rideData: Partial<CalibratedRide>): 
     }
 
     if (syncError) {
-      console.warn('[CALIBRATION_SAVE_ERROR] Supabase sync failed. Marking as pending_sync = true:', syncError.message || syncError);
+      const classified = classifyDatabaseError(syncError);
+      console.warn('[CALIBRATION_SAVE_ERROR_CLASSIFIED] Categoria real do erro:', classified.category, '-', classified.technicalDetails);
       fullSavedRide.pending_sync = true;
       try {
         errorTracker.trackSupabaseError('Persistir Corrida Calibrada (Upsert)', syncError);
@@ -374,11 +561,14 @@ export async function persistCalibratedRide(rideData: Partial<CalibratedRide>): 
     localStorage.setItem('ride_logs', JSON.stringify(existingLogs));
 
     if (syncError) {
+      const classified = classifyDatabaseError(syncError);
       console.log('[CALIBRATION_SAVE_OFFLINE] Sincronizado localmente (offline) com sucesso.', ride_log);
       return {
         success: false,
         ride: fullSavedRide,
-        error: `Falha ao salvar no banco remoto (Supabase): ${syncError.message || 'Sem resposta de rede'}. A corrida foi guardada localmente e será sincronizada automaticamente em segundo plano.`
+        error: classified.message,
+        errorCategory: classified.category,
+        errorDetails: classified.technicalDetails
       };
     }
 
@@ -389,10 +579,13 @@ export async function persistCalibratedRide(rideData: Partial<CalibratedRide>): 
     };
   } catch (err: any) {
     console.error('[CALIBRATION_SAVE_ERROR] Falha crítica de persistência:', err);
+    const classified = classifyDatabaseError(err);
     return {
       success: false,
       ride: rideData as CalibratedRide,
-      error: err.message || 'Erro de persistência desconhecido.'
+      error: classified.message,
+      errorCategory: classified.category,
+      errorDetails: classified.technicalDetails
     };
   }
 }

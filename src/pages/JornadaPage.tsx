@@ -1,10 +1,27 @@
-/**
- * Premium Active Journey Tracker Screen
- * Route: /jornada
- * Responsibility: Initiates tracking, displays active ride statistics, and monitors real-time GPS state.
- * 
- * STABLE CORE - NÃO ALTERAR SEM AUTORIZAÇÃO EXPLÍCITA
- */
+// ============================================================================
+// DRIVERDASH ROXOU — ARQUIVO ALTAMENTE SENSÍVEL — UI + ORQUESTRAÇÃO
+//
+// ARQUIVO CRÍTICO PROTEGIDO DURANTE O MODO DE ESTABILIZAÇÃO.
+//
+// NÃO ALTERAR SEM SOLICITAÇÃO EXPLÍCITA.
+//
+// Este arquivo possui alto acoplamento e orquestra a interface de rastreamento de jornada ativa.
+// NÃO refatorar, NÃO dividir em múltiplos hooks e NÃO alterar fluxos de salvamento.
+//
+// Mudanças não autorizadas podem causar regressões, inconsistência de dados
+// ou perda de informações da jornada.
+//
+// Antes de qualquer alteração futura:
+// 1. identificar o bug reproduzível;
+// 2. documentar a causa raiz;
+// 3. aplicar a menor correção possível;
+// 4. não realizar refatoração oportunista;
+// 5. executar typecheck;
+// 6. executar build;
+// 7. informar exatamente quais linhas e comportamentos foram alterados.
+//
+// STATUS: PROTEGIDO
+// ============================================================================
 
 import React, { useState, useEffect, useMemo } from 'react';
 import { useNavigate } from 'react-router-dom';
@@ -1471,9 +1488,38 @@ export const JornadaPage: React.FC = () => {
 
       if (!res.success) {
         if (res.ride?.pending_sync) {
+          let toastMsg = 'Aviso: Banco remoto offline. Corrida salva localmente para re-sync automático.';
+          if (res.errorCategory) {
+            switch (res.errorCategory) {
+              case 'no_internet':
+                toastMsg = 'Aviso: Dispositivo sem conexão de internet. Corrida salva localmente para re-sync automático.';
+                break;
+              case 'supabase_unavailable':
+                toastMsg = 'Aviso: Banco remoto (Supabase) indisponível. Corrida salva localmente para re-sync automático.';
+                break;
+              case 'timeout':
+                toastMsg = 'Aviso: Tempo limite esgotado. Corrida salva localmente para re-sync automático.';
+                break;
+              case 'auth_error':
+                toastMsg = 'Erro de Autenticação (Sessão inválida). Corrida salva localmente. Faça login novamente para sincronizar.';
+                break;
+              case 'permission_error':
+                toastMsg = 'Erro de Permissão (RLS). Corrida salva localmente. Sincronização pendente.';
+                break;
+              case 'validation_error':
+                toastMsg = 'Erro de Schema/Validação de Dados. Corrida salva localmente. Sincronização pendente.';
+                break;
+              case 'database_internal_error':
+                toastMsg = 'Erro Interno do Banco de Dados. Corrida salva localmente para re-sync automático.';
+                break;
+              default:
+                toastMsg = `Falha na sincronização: ${res.error || 'Sem resposta do banco'}. Salva localmente para re-sync automático.`;
+            }
+          }
+
           setToast({
             show: true,
-            message: 'Aviso: Banco remoto offline. Corrida salva localmente para re-sync automático.',
+            message: toastMsg,
             type: 'error'
           });
 
@@ -1498,9 +1544,16 @@ export const JornadaPage: React.FC = () => {
           setAllowRealTimeMap(true);
 
           if (addSmartAlert) {
+            let alertTitle = 'Corrida Salva Localmente (Offline) ⚠️';
+            let alertDesc = `Conexão com Supabase falhou. R$ ${valRecebido.toFixed(2)} guardados localmente. Sincronização pendente.`;
+            if (res.errorCategory && res.errorCategory !== 'no_internet' && res.errorCategory !== 'supabase_unavailable' && res.errorCategory !== 'timeout' && res.errorCategory !== 'unknown') {
+              alertTitle = 'Falha na Sincronização da Corrida ⚠️';
+              alertDesc = `Sincronização com o banco falhou devido a: ${res.error || 'erro no banco'}. R$ ${valRecebido.toFixed(2)} salvos localmente.`;
+            }
+
             addSmartAlert({
-              title: 'Corrida Salva Localmente (Offline) ⚠️',
-              description: `Conexão com Supabase falhou. R$ ${valRecebido.toFixed(2)} guardados localmente. Sincronização pendente.`,
+              title: alertTitle,
+              description: alertDesc,
               type: 'profit',
               severity: 'medium'
             });
@@ -1626,9 +1679,37 @@ export const JornadaPage: React.FC = () => {
       if (!res.success) {
         if (res.ride?.pending_sync) {
           isOffline = true;
+          let toastMsg = 'Aviso: Banco remoto offline. Cancelamento salvo localmente.';
+          if (res.errorCategory) {
+            switch (res.errorCategory) {
+              case 'no_internet':
+                toastMsg = 'Aviso: Dispositivo sem conexão de internet. Cancelamento salvo localmente.';
+                break;
+              case 'supabase_unavailable':
+                toastMsg = 'Aviso: Banco remoto (Supabase) indisponível. Cancelamento salvo localmente.';
+                break;
+              case 'timeout':
+                toastMsg = 'Aviso: Tempo limite esgotado. Cancelamento salvo localmente.';
+                break;
+              case 'auth_error':
+                toastMsg = 'Erro de Autenticação (Sessão inválida). Cancelamento salvo localmente.';
+                break;
+              case 'permission_error':
+                toastMsg = 'Erro de Permissão (RLS). Cancelamento salvo localmente.';
+                break;
+              case 'validation_error':
+                toastMsg = 'Erro de Schema/Validação de Dados. Cancelamento salvo localmente.';
+                break;
+              case 'database_internal_error':
+                toastMsg = 'Erro Interno do Banco de Dados. Cancelamento salvo localmente.';
+                break;
+              default:
+                toastMsg = `Falha na sincronização: ${res.error || 'Sem resposta'}. Cancelamento salvo localmente.`;
+            }
+          }
           setToast({
             show: true,
-            message: 'Aviso: Banco remoto offline. Cancelamento salvo localmente.',
+            message: toastMsg,
             type: 'error'
           });
         } else {
@@ -1770,9 +1851,37 @@ export const JornadaPage: React.FC = () => {
 
       if (!res.success) {
         if (res.ride?.pending_sync) {
+          let toastMsg = 'Aviso: Banco remoto offline. Edição salva localmente para re-sync automático.';
+          if (res.errorCategory) {
+            switch (res.errorCategory) {
+              case 'no_internet':
+                toastMsg = 'Aviso: Dispositivo sem conexão de internet. Edição salva localmente para re-sync automático.';
+                break;
+              case 'supabase_unavailable':
+                toastMsg = 'Aviso: Banco remoto (Supabase) indisponível. Edição salva localmente para re-sync automático.';
+                break;
+              case 'timeout':
+                toastMsg = 'Aviso: Tempo limite esgotado. Edição salva localmente para re-sync automático.';
+                break;
+              case 'auth_error':
+                toastMsg = 'Erro de Autenticação (Sessão inválida). Edição salva localmente para sincronização futura.';
+                break;
+              case 'permission_error':
+                toastMsg = 'Erro de Permissão (RLS). Edição salva localmente para sincronização futura.';
+                break;
+              case 'validation_error':
+                toastMsg = 'Erro de Schema/Validação de Dados. Edição salva localmente para sincronização futura.';
+                break;
+              case 'database_internal_error':
+                toastMsg = 'Erro Interno do Banco de Dados. Edição salva localmente para re-sync automático.';
+                break;
+              default:
+                toastMsg = `Falha na sincronização: ${res.error || 'Sem resposta'}. Edição salva localmente para re-sync automático.`;
+            }
+          }
           setToast({
             show: true,
-            message: 'Aviso: Banco remoto offline. Edição salva localmente para re-sync automático.',
+            message: toastMsg,
             type: 'error'
           });
 

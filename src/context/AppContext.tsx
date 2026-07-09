@@ -1,8 +1,27 @@
-/**
- * App Unified Modular Context Bridge
- * Replaces the monolithic AppContext with isolated hooks and modular services.
- * When to edit: When adding a global state shared between separate modules, or modifying legacy adapters.
- */
+// ============================================================================
+// DRIVERDASH ROXOU — ORQUESTRADOR GLOBAL SENSÍVEL
+//
+// ARQUIVO CRÍTICO PROTEGIDO DURANTE O MODO DE ESTABILIZAÇÃO.
+//
+// NÃO ALTERAR SEM SOLICITAÇÃO EXPLÍCITA.
+//
+// Este módulo participa de operações críticas do sistema:
+// -> Responsável pelo estado global unificado, integração entre módulos e comunicação de estados.
+//
+// Mudanças não autorizadas podem causar regressões, inconsistência de dados
+// ou perda de informações da jornada.
+//
+// Antes de qualquer alteração futura:
+// 1. identificar o bug reproduzível;
+// 2. documentar a causa raiz;
+// 3. aplicar a menor correção possível;
+// 4. não realizar refatoração oportunista;
+// 5. executar typecheck;
+// 6. executar build;
+// 7. informar exatamente quais linhas e comportamentos foram alterados.
+//
+// STATUS: PROTEGIDO
+// ============================================================================
 
 import React, { createContext, useContext, useState, useEffect, useMemo } from 'react';
 import { supabase } from '../modules/shared/supabase.helpers';

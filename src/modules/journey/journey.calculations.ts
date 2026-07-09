@@ -1,10 +1,27 @@
-/**
- * Geospatial and Telemetry Calculations
- * Module: Journey (journey)
- * When to edit: When altering distance formulations, average speed calculations, or duration math.
- * 
- * STABLE CORE - NÃO ALTERAR SEM AUTORIZAÇÃO EXPLÍCITA
- */
+// ============================================================================
+// DRIVERDASH ROXOU — STABLE CORE
+//
+// ARQUIVO CRÍTICO PROTEGIDO DURANTE O MODO DE ESTABILIZAÇÃO.
+//
+// NÃO ALTERAR SEM SOLICITAÇÃO EXPLÍCITA.
+//
+// Este módulo participa de operações críticas do sistema:
+// -> Responsável pelas fórmulas de Haversine, cálculo de distâncias, tempo produtivo e parado.
+//
+// Mudanças não autorizadas podem causar regressões, inconsistência de dados
+// ou perda de informações da jornada.
+//
+// Antes de qualquer alteração futura:
+// 1. identificar o bug reproduzível;
+// 2. documentar a causa raiz;
+// 3. aplicar a menor correção possível;
+// 4. não realizar refatoração oportunista;
+// 5. executar typecheck;
+// 6. executar build;
+// 7. informar exatamente quais linhas e comportamentos foram alterados.
+//
+// STATUS: PROTEGIDO
+// ============================================================================
 
 import { RoutePoint, DriverSession } from './journey.types';
 import { Vehicle, VehicleCostSettings } from '../../types';

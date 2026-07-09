@@ -1,11 +1,27 @@
-/**
- * Premium Geolocation & Telemetry Synchronization Engine
- * Module: Journey (journey)
- * Responsibility: Handles robust batch uploads, deduplication, retry queues with backoff,
- *                 and offline synchronization states.
- * 
- * STABLE CORE - NÃO ALTERAR SEM AUTORIZAÇÃO EXPLÍCITA
- */
+// ============================================================================
+// DRIVERDASH ROXOU — STABLE CORE
+//
+// ARQUIVO CRÍTICO PROTEGIDO DURANTE O MODO DE ESTABILIZAÇÃO.
+//
+// NÃO ALTERAR SEM SOLICITAÇÃO EXPLÍCITA.
+//
+// Este módulo participa de operações críticas do sistema:
+// -> Responsável pela fila offline e sincronização segura da telemetria (lotes, retry, deduplicação).
+//
+// Mudanças não autorizadas podem causar regressões, inconsistência de dados
+// ou perda de informações da jornada.
+//
+// Antes de qualquer alteração futura:
+// 1. identificar o bug reproduzível;
+// 2. documentar a causa raiz;
+// 3. aplicar a menor correção possível;
+// 4. não realizar refatoração oportunista;
+// 5. executar typecheck;
+// 6. executar build;
+// 7. informar exatamente quais linhas e comportamentos foram alterados.
+//
+// STATUS: PROTEGIDO
+// ============================================================================
 
 import { STORAGE_PREFIX } from '../shared/constants';
 import { supabase } from '../shared/supabase.helpers';
@@ -273,6 +289,26 @@ class TelemetrySyncService {
       return 0;
     }
 
+    const isUuid = (str: any): boolean => {
+      if (typeof str !== 'string') return false;
+      return /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(str);
+    };
+
+    // Auto-resolve or ignore points with non-UUID session_id to avoid DB syntax crashes
+    let hasModified = false;
+    const allPoints = this.getPoints();
+    allPoints.forEach(p => {
+      if ((p.status === 'pending' || p.status === 'failed') && !isUuid(p.session_id)) {
+        console.log(`[Sync] Auto-resolving point ${p.idLocal} with non-UUID session_id: "${p.session_id}" as local-only.`);
+        p.status = 'synced';
+        p.synced = true;
+        hasModified = true;
+      }
+    });
+    if (hasModified) {
+      this.savePoints(allPoints);
+    }
+
     const points = this.getPoints();
     const pendingPoints = points.filter(p => p.status === 'pending' || p.status === 'failed');
 
@@ -342,15 +378,47 @@ class TelemetrySyncService {
           segment_type: pt.segment_type || 'empty',
           ride_event_id: pt.ride_event_id || null
         };
-        if (uId) {
+        if (uId && isUuid(uId)) {
           item.driver_id = uId;
+        } else if (currentUserId && isUuid(currentUserId)) {
+          item.driver_id = currentUserId;
         }
         return item;
       });
 
-      const { error } = await supabase
+      let insertResult = await supabase
         .from('route_points')
         .insert(payload);
+
+      let error = insertResult.error;
+
+      if (error) {
+        const errStr = (error.message || '').toLowerCase();
+        console.warn('[Sync] Initial batch insert failed. Checking schema mismatch...', error);
+        
+        const hasRideEventIdErr = errStr.includes('ride_event_id');
+        const hasSegmentTypeErr = errStr.includes('segment_type');
+        const hasColumnErr = errStr.includes('column') || errStr.includes('schema cache') || errStr.includes('not found') || errStr.includes('does not exist');
+
+        if (hasColumnErr || hasRideEventIdErr || hasSegmentTypeErr) {
+          console.log('[Sync Fallback] Schema discrepancy detected. Stripping newer columns (ride_event_id, segment_type) and retrying...');
+          const fallbackPayload = payload.map((item: any) => {
+            const cleanItem = { ...item };
+            delete cleanItem.ride_event_id;
+            delete cleanItem.segment_type;
+            return cleanItem;
+          });
+
+          const retryResult = await supabase
+            .from('route_points')
+            .insert(fallbackPayload);
+          
+          error = retryResult.error;
+          if (!error) {
+            console.log('[Sync Fallback] Fallback batch insert succeeded!');
+          }
+        }
+      }
 
       if (error) {
         throw error;

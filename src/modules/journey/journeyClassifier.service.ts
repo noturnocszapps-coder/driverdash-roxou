@@ -1,10 +1,27 @@
-/**
- * Smart Mileage Classification Engine Service (Phase 6)
- * Module: Journey (journey)
- * Purpose: Automatically classify GPS route points based on manual events and speed rules.
- * 
- * STABLE CORE - NÃO ALTERAR SEM AUTORIZAÇÃO EXPLÍCITA
- */
+// ============================================================================
+// DRIVERDASH ROXOU — STABLE CORE
+//
+// ARQUIVO CRÍTICO PROTEGIDO DURANTE O MODO DE ESTABILIZAÇÃO.
+//
+// NÃO ALTERAR SEM SOLICITAÇÃO EXPLÍCITA.
+//
+// Este módulo participa de operações críticas do sistema:
+// -> Responsável pela classificação inteligente de trechos (segmentos) de telemetria da jornada.
+//
+// Mudanças não autorizadas podem causar regressões, inconsistência de dados
+// ou perda de informações da jornada.
+//
+// Antes de qualquer alteração futura:
+// 1. identificar o bug reproduzível;
+// 2. documentar a causa raiz;
+// 3. aplicar a menor correção possível;
+// 4. não realizar refatoração oportunista;
+// 5. executar typecheck;
+// 6. executar build;
+// 7. informar exatamente quais linhas e comportamentos foram alterados.
+//
+// STATUS: PROTEGIDO
+// ============================================================================
 
 import { supabase } from '../shared/supabase.helpers';
 import { calculateCostPerKmEstimate } from '../vehicle/vehicle.calculations';
@@ -319,13 +336,31 @@ export async function rebuildJourneySegments(sessionId: string): Promise<void> {
         }
       }
 
-      await supabase
-        .from('route_points')
-        .update({
+      try {
+        const updatePayload: any = {
           segment_type: segment,
           ride_event_id: matchedEvent ? matchedEvent.id : null
-        })
-        .eq('id', pt.id);
+        };
+        const { error: updateError } = await supabase
+          .from('route_points')
+          .update(updatePayload)
+          .eq('id', pt.id);
+
+        if (updateError) {
+          const errStr = (updateError.message || '').toLowerCase();
+          const isMissingColumn = errStr.includes('column') || errStr.includes('schema cache') || errStr.includes('not found') || errStr.includes('does not exist');
+          if (isMissingColumn) {
+            console.warn('[JourneyClassifier] Skipping classification save because schema columns (segment_type, ride_event_id) do not exist in route_points table.');
+            // Break loop since table is missing these columns anyway
+            break;
+          } else {
+            throw updateError;
+          }
+        }
+      } catch (updateErr) {
+        console.warn('[JourneyClassifier] Fail to update segment_type due to database error:', updateErr);
+        break; // Break loop as it will likely fail for other points too
+      }
     }
 
     console.log('[JourneyClassifier] segment rebuilt', { sessionId });

@@ -1,8 +1,27 @@
-/**
- * Journey and GPS Watch Provider hook
- * Module: Journey (journey)
- * When to edit: When updating session listeners, logging states, or coordinate bindings.
- */
+// ============================================================================
+// DRIVERDASH ROXOU — ORQUESTRADOR CRÍTICO
+//
+// ARQUIVO CRÍTICO PROTEGIDO DURANTE O MODO DE ESTABILIZAÇÃO.
+//
+// NÃO ALTERAR SEM SOLICITAÇÃO EXPLÍCITA.
+//
+// Este módulo participa de operações críticas do sistema:
+// -> Responsável pelo ciclo completo de vida da jornada, inicialização, encerramento e persistência de sessão.
+//
+// Mudanças não autorizadas podem causar regressões, inconsistência de dados
+// ou perda de informações da jornada.
+//
+// Antes de qualquer alteração futura:
+// 1. identificar o bug reproduzível;
+// 2. documentar a causa raiz;
+// 3. aplicar a menor correção possível;
+// 4. não realizar refatoração oportunista;
+// 5. executar typecheck;
+// 6. executar build;
+// 7. informar exatamente quais linhas e comportamentos foram alterados.
+//
+// STATUS: PROTEGIDO
+// ============================================================================
 
 import React, { createContext, useContext, useState, useEffect, useRef } from 'react';
 import { useAuth } from '../auth/auth.hooks';
