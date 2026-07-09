@@ -226,6 +226,16 @@ export interface Subscription {
   expires_at?: string;
 }
 
+export interface AccessRequest {
+  id: string;
+  user_id: string;
+  name: string;
+  email: string;
+  status: 'pending' | 'approved' | 'rejected';
+  created_at: string;
+  updated_at: string;
+}
+
 export interface Payment {
   id: string;
   user_id: string;

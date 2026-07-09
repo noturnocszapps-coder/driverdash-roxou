@@ -1,7 +1,8 @@
-import React from 'react';
+import React, { useState, useEffect } from 'react';
 import { Navigate } from 'react-router-dom';
 import { useApp } from '../context/AppContext';
-import { Lock, LogOut, Send } from 'lucide-react';
+import { Lock, LogOut, Send, Clock, AlertCircle, RefreshCw } from 'lucide-react';
+import { supabase } from '../modules/shared/supabase.helpers';
 
 interface ProtectedRouteProps {
   children: React.ReactNode;
@@ -9,7 +10,44 @@ interface ProtectedRouteProps {
 }
 
 export const ProtectedRoute: React.FC<ProtectedRouteProps> = ({ children, allowedRole }) => {
-  const { user, profile, loading } = useApp();
+  const { user, profile, loading, submitAccessRequest } = useApp();
+  const [myRequest, setMyRequest] = useState<any>(null);
+  const [submitting, setSubmitting] = useState(false);
+  const [message, setMessage] = useState<string | null>(null);
+
+  // CLOSED BETA RESTRICTION GATE
+  const isBetaAuthorized = 
+    profile?.role === 'admin' || 
+    profile?.beta_tester === true || 
+    (profile?.plan && profile.plan !== 'free');
+
+  useEffect(() => {
+    if (user && !isBetaAuthorized) {
+      const loadMyRequest = async () => {
+        try {
+          const { data, error } = await supabase
+            .from('access_requests')
+            .select('*')
+            .eq('user_id', user.id)
+            .order('created_at', { ascending: false });
+          if (!error && data && data.length > 0) {
+            setMyRequest(data[0]);
+            localStorage.setItem(`roxou_my_access_request_${user.id}`, JSON.stringify(data[0]));
+            return;
+          }
+        } catch (e) {
+          console.warn('Could not load request from Supabase:', e);
+        }
+
+        // Fallback to local storage
+        const stored = localStorage.getItem(`roxou_my_access_request_${user.id}`);
+        if (stored) {
+          setMyRequest(JSON.parse(stored));
+        }
+      };
+      loadMyRequest();
+    }
+  }, [user, isBetaAuthorized]);
 
   if (loading) {
     return (
@@ -70,25 +108,73 @@ export const ProtectedRoute: React.FC<ProtectedRouteProps> = ({ children, allowe
     );
   }
 
-  // CLOSED BETA RESTRICTION GATE
-  const isBetaAuthorized = 
-    profile?.role === 'admin' || 
-    profile?.beta_tester === true || 
-    (profile?.plan && profile.plan !== 'free');
-
   if (!isBetaAuthorized) {
+    const handleRequestAccess = async () => {
+      if (!user || !profile) return;
+      setSubmitting(true);
+      setMessage(null);
+      try {
+        const name = profile.name || user.email?.split('@')[0] || 'Motorista';
+        const email = profile.email || user.email || '';
+        
+        await submitAccessRequest(name, email);
+        
+        const newRequest = {
+          id: Math.random().toString(36).substring(2),
+          user_id: user.id,
+          name,
+          email,
+          status: 'pending',
+          created_at: new Date().toISOString(),
+          updated_at: new Date().toISOString()
+        };
+        
+        setMyRequest(newRequest);
+        localStorage.setItem(`roxou_my_access_request_${user.id}`, JSON.stringify(newRequest));
+        setMessage('Solicitação enviada com sucesso!');
+      } catch (e: any) {
+        console.error(e);
+        setMessage('Falha ao enviar solicitação.');
+      } finally {
+        setSubmitting(false);
+      }
+    };
+
     return (
       <div className="min-h-screen bg-[#070214] flex flex-col items-center justify-center p-4">
         <div className="max-w-md w-full bg-[#0a051d]/90 border border-purple-950/40 rounded-3xl p-8 text-center shadow-[0_10px_35px_rgba(168,85,247,0.07)]">
           <div className="mx-auto w-16 h-16 bg-purple-950/40 border border-purple-800/40 rounded-2xl flex items-center justify-center text-purple-400 mb-6 font-semibold shadow-inner">
-            <Lock className="w-8 h-8" />
+            {myRequest?.status === 'pending' ? (
+              <Clock className="w-8 h-8 animate-pulse text-amber-400" />
+            ) : myRequest?.status === 'rejected' ? (
+              <AlertCircle className="w-8 h-8 text-rose-500" />
+            ) : (
+              <Lock className="w-8 h-8" />
+            )}
           </div>
           
-          <h2 className="text-xl font-bold text-white tracking-wide">Acesso Restrito</h2>
+          <h2 className="text-xl font-bold text-white tracking-wide">
+            {myRequest?.status === 'pending' ? 'Aguardando Homologação' : myRequest?.status === 'rejected' ? 'Acesso Recusado' : 'Acesso Restrito'}
+          </h2>
+          
           <p className="text-xs text-slate-300 mt-3 leading-relaxed">
-            O <span className="text-purple-400 font-semibold uppercase">DriverDash Roxou</span> está em período de adesão exclusiva para motoristas parceiros.
+            {myRequest?.status === 'pending' ? (
+              <span>Sua solicitação de homologação de cadastro está sob análise ativa da moderação. Fique atento, o prazo médio para liberação imediata é de 5 minutos!</span>
+            ) : myRequest?.status === 'rejected' ? (
+              <span>Sua solicitação de acesso não pôde ser aprovada neste momento. Entre em contato com a equipe em <span className="text-purple-400 font-semibold font-mono">noturnocszapps@gmail.com</span> para resolver pendências.</span>
+            ) : (
+              <span>O <span className="text-purple-400 font-semibold uppercase">DriverDash Roxou</span> está em período de adesão exclusiva para motoristas parceiros homologados.</span>
+            )}
           </p>
-          <p className="text-[11px] text-purple-300/60 mt-2 leading-relaxed">
+
+          {myRequest?.status === 'pending' && (
+            <div className="mt-4 p-3 bg-amber-950/20 border border-amber-900/30 rounded-xl flex items-center justify-center gap-2">
+              <RefreshCw className="w-4 h-4 text-amber-500 animate-spin" />
+              <span className="text-[11px] font-semibold text-amber-400 font-mono">Fila de análise prioritária ativa</span>
+            </div>
+          )}
+
+          <p className="text-[11px] text-purple-300/60 mt-4 leading-relaxed">
             Para obter liberação imediata, sua conta precisa ter o acesso homologado ativo ou possuir uma assinatura ativa no sistema.
           </p>
 
@@ -98,18 +184,42 @@ export const ProtectedRoute: React.FC<ProtectedRouteProps> = ({ children, allowe
               <p>ID: <span className="text-slate-300 text-[10px]">{profile?.id}</span></p>
               <p>Plano Atual: <span className="text-purple-300 uppercase font-semibold">{profile?.plan}</span></p>
               <p>Email: <span className="text-slate-300">{profile?.email}</span></p>
+              {myRequest?.status && (
+                <p>Status da Fila: <span className={`uppercase font-bold ${myRequest.status === 'pending' ? 'text-amber-400' : 'text-rose-500'}`}>{myRequest.status}</span></p>
+              )}
             </div>
           </div>
 
+          {message && (
+            <div className="mt-4 p-3 rounded-xl bg-purple-950/30 text-purple-300 border border-purple-900/40 text-center font-semibold text-[11px]">
+              {message}
+            </div>
+          )}
+
           <div className="grid grid-cols-2 gap-3 mt-8">
-            <button
-              onClick={() => {
-                window.location.href = `mailto:noturnocszapps@gmail.com?subject=Solicitação de Acesso - DriverDash Roxou&body=Olá,%0D%0A%0D%0AGostaria de solicitar liberação de acesso para o DriverDash Roxou.%0D%0A%0D%0AEmail da Conta: ${profile?.email}%0D%0AID: ${profile?.id}`;
-              }}
-              className="bg-purple-700 hover:bg-purple-600 active:scale-95 text-white text-xs font-bold py-3 px-4 rounded-xl transition-all cursor-pointer flex items-center justify-center gap-1.5 shadow-md shadow-purple-900/30"
-            >
-              <Send className="w-4 h-4" /> Solicitar acesso
-            </button>
+            {!myRequest ? (
+              <button
+                onClick={handleRequestAccess}
+                disabled={submitting}
+                className="bg-purple-700 hover:bg-purple-600 active:scale-95 disabled:opacity-50 disabled:pointer-events-none text-white text-xs font-bold py-3 px-4 rounded-xl transition-all cursor-pointer flex items-center justify-center gap-1.5 shadow-md shadow-purple-900/30"
+              >
+                {submitting ? (
+                  <RefreshCw className="w-4 h-4 animate-spin" />
+                ) : (
+                  <Send className="w-4 h-4" />
+                )}
+                {submitting ? 'Processando...' : 'Solicitar acesso'}
+              </button>
+            ) : (
+              <button
+                onClick={() => {
+                  window.location.reload();
+                }}
+                className="bg-amber-600 hover:bg-amber-500 active:scale-95 text-white text-xs font-bold py-3 px-4 rounded-xl transition-all cursor-pointer flex items-center justify-center gap-1.5 shadow-md"
+              >
+                <RefreshCw className="w-4 h-4" /> Atualizar Status
+              </button>
+            )}
             <button
               onClick={() => {
                 localStorage.clear();

@@ -711,3 +711,35 @@ BEGIN
 END;
 $$ LANGUAGE plpgsql SECURITY DEFINER;
 
+
+-- 13. Access Requests Table
+CREATE TABLE IF NOT EXISTS public.access_requests (
+    id UUID DEFAULT gen_random_uuid() PRIMARY KEY,
+    user_id UUID REFERENCES auth.users ON DELETE CASCADE NOT NULL,
+    name TEXT NOT NULL,
+    email TEXT NOT NULL,
+    status TEXT CHECK (status IN ('pending', 'approved', 'rejected')) DEFAULT 'pending'::TEXT NOT NULL,
+    created_at TIMESTAMP WITH TIME ZONE DEFAULT TIMEZONE('utc'::TEXT, NOW()) NOT NULL,
+    updated_at TIMESTAMP WITH TIME ZONE DEFAULT TIMEZONE('utc'::TEXT, NOW()) NOT NULL
+);
+
+-- Index for Access Requests
+CREATE INDEX IF NOT EXISTS idx_access_requests_user ON public.access_requests (user_id);
+
+-- Enable RLS
+ALTER TABLE public.access_requests ENABLE ROW LEVEL SECURITY;
+
+-- Policies for Access Requests
+CREATE POLICY "Drivers can insert their own access requests"
+    ON public.access_requests FOR INSERT
+    WITH CHECK (auth.uid() = user_id);
+
+CREATE POLICY "Drivers can view their own access requests"
+    ON public.access_requests FOR SELECT
+    USING (auth.uid() = user_id);
+
+CREATE POLICY "Admins can do everything on access requests"
+    ON public.access_requests FOR ALL
+    USING (public.is_admin());
+
+

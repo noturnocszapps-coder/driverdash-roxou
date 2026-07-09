@@ -26,7 +26,7 @@
 import React, { createContext, useContext, useState, useEffect, useMemo } from 'react';
 import { supabase } from '../modules/shared/supabase.helpers';
 import { STORAGE_PREFIX } from '../modules/shared/constants';
-import { Profile, UserRole, UserPlan, Vehicle, Earning, Expense, DailyClosing, WeeklyClosing, AdminPeakRule, PassengerReport, FinancialGoal, VehicleCostSettings, SmartAlert, Subscription, Payment, DriverSession, RoutePoint, DriverCustomCost, UberPassSettings } from '../types';
+import { Profile, UserRole, UserPlan, Vehicle, Earning, Expense, DailyClosing, WeeklyClosing, AdminPeakRule, PassengerReport, FinancialGoal, VehicleCostSettings, SmartAlert, Subscription, Payment, DriverSession, RoutePoint, DriverCustomCost, UberPassSettings, AccessRequest } from '../types';
 
 import { AuthProvider, useAuth } from '../modules/auth/auth.hooks';
 import { FinanceProvider, useFinance } from '../modules/finance/finance.hooks';
@@ -63,6 +63,7 @@ interface AppContextType {
   users: Profile[];
   subscriptions: Subscription[];
   payments: Payment[];
+  accessRequests: AccessRequest[];
   
   loading: boolean;
   dbStatus: 'connected' | 'fallback' | 'checking';
@@ -137,6 +138,10 @@ interface AppContextType {
   approvePayment: (paymentId: string) => Promise<void>;
   rejectPayment: (paymentId: string) => Promise<void>;
   
+  submitAccessRequest: (name: string, email: string) => Promise<void>;
+  updateAccessRequestStatus: (id: string, status: 'approved' | 'rejected') => Promise<void>;
+  fetchAccessRequests: () => Promise<void>;
+  
   // Computed financial stats
   metrics: {
     totalRevenue: number;
@@ -196,6 +201,127 @@ const LegacyAppBridgeProvider: React.FC<{ children: React.ReactNode }> = ({ chil
 
   const [users, setUsers] = useState<Profile[]>([]);
   const [errorMessage] = useState<string | null>(null);
+
+  const [accessRequests, setAccessRequests] = useState<AccessRequest[]>([]);
+
+  const fetchAccessRequests = async () => {
+    if (auth.dbStatus === 'connected' && auth.profile?.role === 'admin') {
+      try {
+        const { data, error } = await supabase
+          .from('access_requests')
+          .select('*')
+          .order('created_at', { ascending: false });
+        if (error) throw error;
+        if (data) {
+          setAccessRequests(data);
+          localStorage.setItem(`${STORAGE_PREFIX}access_requests`, JSON.stringify(data));
+        }
+      } catch (e: any) {
+        console.warn('Failed to fetch access requests from Supabase:', e.message);
+        const stored = localStorage.getItem(`${STORAGE_PREFIX}access_requests`);
+        setAccessRequests(stored ? JSON.parse(stored) : []);
+      }
+    } else {
+      const stored = localStorage.getItem(`${STORAGE_PREFIX}access_requests`);
+      setAccessRequests(stored ? JSON.parse(stored) : []);
+    }
+  };
+
+  const submitAccessRequest = async (name: string, email: string) => {
+    if (!auth.user) return;
+    const userId = auth.user.id;
+    const newRequest: AccessRequest = {
+      id: crypto.randomUUID ? crypto.randomUUID() : Math.random().toString(36).substring(2),
+      user_id: userId,
+      name,
+      email,
+      status: 'pending',
+      created_at: new Date().toISOString(),
+      updated_at: new Date().toISOString()
+    };
+
+    if (auth.dbStatus === 'connected') {
+      try {
+        const { error } = await supabase
+          .from('access_requests')
+          .insert([newRequest]);
+        if (error) throw error;
+      } catch (e: any) {
+        console.warn('Supabase error submitting access request, falling back locally:', e.message);
+      }
+    }
+
+    // Save locally for driver
+    const currentMy = localStorage.getItem(`${STORAGE_PREFIX}my_access_requests_${userId}`);
+    const listMy = currentMy ? JSON.parse(currentMy) : [];
+    const updatedMy = [newRequest, ...listMy.filter((r: any) => r.id !== newRequest.id)];
+    localStorage.setItem(`${STORAGE_PREFIX}my_access_requests_${userId}`, JSON.stringify(updatedMy));
+
+    // Save locally for admin view (to see it immediately if mock/offline)
+    const currentAdmin = localStorage.getItem(`${STORAGE_PREFIX}access_requests`);
+    const listAdmin = currentAdmin ? JSON.parse(currentAdmin) : [];
+    const updatedAdmin = [newRequest, ...listAdmin.filter((r: any) => r.id !== newRequest.id)];
+    localStorage.setItem(`${STORAGE_PREFIX}access_requests`, JSON.stringify(updatedAdmin));
+    setAccessRequests(updatedAdmin);
+  };
+
+  const updateAccessRequestStatus = async (id: string, status: 'approved' | 'rejected') => {
+    const targetReq = accessRequests.find(r => r.id === id);
+    if (!targetReq) return;
+
+    if (auth.dbStatus === 'connected') {
+      try {
+        const { error } = await supabase
+          .from('access_requests')
+          .update({ status, updated_at: new Date().toISOString() })
+          .eq('id', id);
+        if (error) throw error;
+
+        if (status === 'approved') {
+          const { error: profileError } = await supabase
+            .from('profiles')
+            .update({ beta_tester: true })
+            .eq('id', targetReq.user_id);
+          if (profileError) throw profileError;
+        }
+      } catch (e: any) {
+        console.error('Supabase error updating access request status:', e.message);
+      }
+    }
+
+    const updatedAdmin = accessRequests.map(r => 
+      r.id === id ? { ...r, status, updated_at: new Date().toISOString() } : r
+    );
+    setAccessRequests(updatedAdmin);
+    localStorage.setItem(`${STORAGE_PREFIX}access_requests`, JSON.stringify(updatedAdmin));
+
+    if (status === 'approved') {
+      const updatedUsers = users.map(u => u.id === targetReq.user_id ? { ...u, beta_tester: true } : u);
+      setUsers(updatedUsers);
+      localStorage.setItem(`${STORAGE_PREFIX}users`, JSON.stringify(updatedUsers));
+      
+      if (auth.profile && auth.profile.id === targetReq.user_id) {
+        const updatedProfile = { ...auth.profile, beta_tester: true };
+        auth.setProfileState(updatedProfile);
+        localStorage.setItem(`${STORAGE_PREFIX}profile`, JSON.stringify(updatedProfile));
+      }
+    }
+
+    const currentMy = localStorage.getItem(`${STORAGE_PREFIX}my_access_requests_${targetReq.user_id}`);
+    if (currentMy) {
+      const listMy = JSON.parse(currentMy);
+      const updatedMy = listMy.map((r: any) => 
+        r.id === id ? { ...r, status, updated_at: new Date().toISOString() } : r
+      );
+      localStorage.setItem(`${STORAGE_PREFIX}my_access_requests_${targetReq.user_id}`, JSON.stringify(updatedMy));
+    }
+  };
+
+  useEffect(() => {
+    if (auth.user && auth.profile?.role === 'admin') {
+      fetchAccessRequests();
+    }
+  }, [auth.user, auth.dbStatus, auth.profile?.role]);
 
   // Sync users (System Profiles) for administration panel
   useEffect(() => {
@@ -394,6 +520,7 @@ const LegacyAppBridgeProvider: React.FC<{ children: React.ReactNode }> = ({ chil
         users,
         subscriptions: subscriptions.subscriptions,
         payments: subscriptions.payments,
+        accessRequests,
 
         loading: auth.loading,
         dbStatus: auth.dbStatus,
@@ -466,6 +593,9 @@ const LegacyAppBridgeProvider: React.FC<{ children: React.ReactNode }> = ({ chil
         requestUpgrade: subscriptions.requestUpgrade,
         approvePayment: subscriptions.approvePayment,
         rejectPayment: subscriptions.rejectPayment,
+        submitAccessRequest,
+        updateAccessRequestStatus,
+        fetchAccessRequests,
 
         metrics: finance.metrics,
 

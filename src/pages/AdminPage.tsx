@@ -18,13 +18,13 @@ export const AdminPage: React.FC = () => {
   const { 
     peakRules, addPeakRule, togglePeakRule, 
     passengerReports, dbStatus, earnings, expenses,
-    users, subscriptions, payments,
+    users, subscriptions, payments, accessRequests,
     updateUserPlan, updateSubscriptionStatus, toggleUserRole, toggleBlockUser, toggleBetaTester,
-    approvePayment, rejectPayment, vehicle, vehicleCostSettings, user
+    approvePayment, rejectPayment, vehicle, vehicleCostSettings, user, updateAccessRequestStatus, fetchAccessRequests
   } = useApp();
 
   // Selected Admin Menu
-  const [activeTab, setActiveTab] = useState<'dashboard' | 'users' | 'subscriptions' | 'occurrences' | 'intelligence' | 'configs' | 'observability' | 'ride_offers'>('dashboard');
+  const [activeTab, setActiveTab] = useState<'dashboard' | 'users' | 'subscriptions' | 'occurrences' | 'intelligence' | 'configs' | 'observability' | 'ride_offers' | 'access_requests'>('dashboard');
 
   // State for Ride Offers (future Android Accessibility simulation and viewing)
   const [allOffers, setAllOffers] = useState<RideOffer[]>([]);
@@ -378,6 +378,14 @@ export const AdminPage: React.FC = () => {
           }`}
         >
           <Smartphone className="w-3.5 h-3.5" /> Ofertas Capturadas
+        </button>
+        <button
+          onClick={() => setActiveTab('access_requests')}
+          className={`px-4 py-2 rounded-xl font-medium transition-all cursor-pointer flex items-center gap-1.5 ${
+            activeTab === 'access_requests' ? 'bg-amber-950/40 text-amber-300 border border-amber-900/20' : 'text-slate-400 hover:text-slate-200'
+          }`}
+        >
+          <Clock className="w-3.5 h-3.5" /> Solicitações ({accessRequests.length})
         </button>
 
       </div>
@@ -2190,6 +2198,136 @@ export const AdminPage: React.FC = () => {
                       </div>
                     );
                   })}
+                </div>
+              )}
+            </div>
+          </motion.div>
+        )}
+
+        {/* TAB: SOLICITAÇÕES DE ACESSO */}
+        {activeTab === 'access_requests' && (
+          <motion.div
+            key="admin-access-requests-view"
+            initial={{ opacity: 0, y: 10 }}
+            animate={{ opacity: 1, y: 0 }}
+            exit={{ opacity: 0, y: -10 }}
+            className="space-y-4"
+          >
+            {/* KPI Cards */}
+            <div className="grid grid-cols-1 md:grid-cols-4 gap-4">
+              <div className="p-4 bg-[#0a051d] border border-purple-950/20 rounded-2xl flex flex-col justify-between">
+                <span className="text-[10px] font-semibold text-slate-400 uppercase tracking-wider font-mono">Total de Solicitações</span>
+                <span className="text-2xl font-bold text-white mt-1">{accessRequests.length}</span>
+              </div>
+              <div className="p-4 bg-amber-950/10 border border-amber-900/20 rounded-2xl flex flex-col justify-between">
+                <span className="text-[10px] font-semibold text-amber-400 uppercase tracking-wider font-mono">Pendentes</span>
+                <span className="text-2xl font-bold text-amber-400 mt-1">
+                  {accessRequests.filter(r => r.status === 'pending').length}
+                </span>
+              </div>
+              <div className="p-4 bg-emerald-950/10 border border-emerald-900/20 rounded-2xl flex flex-col justify-between">
+                <span className="text-[10px] font-semibold text-emerald-400 uppercase tracking-wider font-mono">Aprovados</span>
+                <span className="text-2xl font-bold text-emerald-400 mt-1">
+                  {accessRequests.filter(r => r.status === 'approved').length}
+                </span>
+              </div>
+              <div className="p-4 bg-rose-950/10 border border-rose-900/20 rounded-2xl flex flex-col justify-between">
+                <span className="text-[10px] font-semibold text-rose-400 uppercase tracking-wider font-mono">Recusados</span>
+                <span className="text-2xl font-bold text-rose-400 mt-1">
+                  {accessRequests.filter(r => r.status === 'rejected').length}
+                </span>
+              </div>
+            </div>
+
+            {/* List block */}
+            <div className="p-5 bg-[#0a051d] border border-purple-950/30 rounded-2xl space-y-4">
+              <div className="flex items-center justify-between border-b border-purple-955/20 pb-3">
+                <div className="flex items-center gap-2">
+                  <Clock className="w-4 h-4 text-amber-400" />
+                  <span className="text-xs font-semibold uppercase tracking-wider font-mono text-purple-300">Solicitações de Acesso Beta</span>
+                </div>
+                <button
+                  onClick={fetchAccessRequests}
+                  className="p-1.5 hover:bg-purple-950/40 text-purple-400 hover:text-purple-300 rounded-lg transition-colors cursor-pointer"
+                  title="Atualizar lista"
+                >
+                  <RefreshCw className="w-3.5 h-3.5" />
+                </button>
+              </div>
+
+              {accessRequests.length === 0 ? (
+                <div className="py-12 text-center space-y-2">
+                  <UserCheck className="w-8 h-8 text-purple-500/40 mx-auto" />
+                  <h4 className="text-sm font-semibold text-slate-300">Nenhuma solicitação encontrada</h4>
+                  <p className="text-xs text-slate-500 max-w-sm mx-auto">
+                    Atualmente não há nenhuma solicitação de acesso cadastrada no banco de dados.
+                  </p>
+                </div>
+              ) : (
+                <div className="overflow-x-auto">
+                  <table className="w-full text-left border-collapse text-xs">
+                    <thead>
+                      <tr className="border-b border-purple-950/20 text-slate-400 font-mono text-[10px] uppercase">
+                        <th className="py-3 px-4">Nome do Motorista</th>
+                        <th className="py-3 px-4">Email</th>
+                        <th className="py-3 px-4">Data de Envio</th>
+                        <th className="py-3 px-4">Status</th>
+                        <th className="py-3 px-4 text-right">Ações</th>
+                      </tr>
+                    </thead>
+                    <tbody className="divide-y divide-purple-950/10">
+                      {accessRequests.map((req) => (
+                        <tr key={req.id} className="hover:bg-purple-950/5 transition-colors">
+                          <td className="py-3.5 px-4 font-medium text-slate-200">{req.name}</td>
+                          <td className="py-3.5 px-4 text-slate-300 font-mono text-[11px]">{req.email}</td>
+                          <td className="py-3.5 px-4 text-slate-400 font-mono text-[11px]">
+                            {new Date(req.created_at).toLocaleString('pt-BR')}
+                          </td>
+                          <td className="py-3.5 px-4">
+                            <span className={`inline-flex items-center gap-1 px-2 py-0.5 rounded-full font-mono text-[9px] uppercase font-bold ${
+                              req.status === 'approved' 
+                                ? 'bg-emerald-500/10 text-emerald-400 border border-emerald-500/25' 
+                                : req.status === 'rejected'
+                                ? 'bg-rose-500/10 text-rose-400 border border-rose-500/25'
+                                : 'bg-amber-500/10 text-amber-400 border border-amber-500/25 animate-pulse'
+                            }`}>
+                              {req.status === 'approved' ? 'Aprovado' : req.status === 'rejected' ? 'Rejeitado' : 'Pendente'}
+                            </span>
+                          </td>
+                          <td className="py-3.5 px-4 text-right">
+                            {req.status === 'pending' ? (
+                              <div className="flex items-center justify-end gap-1.5">
+                                <button
+                                  onClick={async () => {
+                                    if (confirm(`Deseja aprovar o acesso de ${req.name}?`)) {
+                                      await updateAccessRequestStatus(req.id, 'approved');
+                                    }
+                                  }}
+                                  className="p-1 px-2.5 bg-emerald-500/10 hover:bg-emerald-500/20 text-emerald-400 border border-emerald-500/20 rounded-lg font-mono text-[10px] font-bold transition-all cursor-pointer flex items-center gap-1"
+                                >
+                                  <Check className="w-3 h-3" /> Aprovar
+                                </button>
+                                <button
+                                  onClick={async () => {
+                                    if (confirm(`Deseja recusar o acesso de ${req.name}?`)) {
+                                      await updateAccessRequestStatus(req.id, 'rejected');
+                                    }
+                                  }}
+                                  className="p-1 px-2.5 bg-rose-500/10 hover:bg-rose-500/20 text-rose-400 border border-rose-500/20 rounded-lg font-mono text-[10px] font-bold transition-all cursor-pointer flex items-center gap-1"
+                                >
+                                  <X className="w-3 h-3" /> Recusar
+                                </button>
+                              </div>
+                            ) : (
+                              <span className="text-[10px] font-mono text-slate-500 uppercase italic">
+                                Processado
+                              </span>
+                            )}
+                          </td>
+                        </tr>
+                      ))}
+                    </tbody>
+                  </table>
                 </div>
               )}
             </div>
