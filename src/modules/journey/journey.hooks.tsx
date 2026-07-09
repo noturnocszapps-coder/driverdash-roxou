@@ -1124,41 +1124,61 @@ export const JourneyProvider: React.FC<{ children: React.ReactNode }> = ({ child
         console.log(`[GPS_POINT_REJECTED] session_id: ${pointData.session_id}, motivo: ${reason}`);
         return;
       }
+    }
 
-      // 4. Filtrar saltos impossíveis: velocidade superior a 180 km/h entre duas leituras consecutivas
-      const timeDiffSec = (currTime - lastPosition.timestamp) / 1000;
-      if (timeDiffSec > 0.5) {
-        const calculatedSpeedKmh = (distMeters / timeDiffSec) * 3.6;
-        if (calculatedSpeedKmh > 180) {
-          setDiscardedPointsCount(prev => {
-            const updated = prev + 1;
-            sessionStorage.setItem(`discarded_points_${pointData.session_id}`, updated.toString());
-            return updated;
-          });
-          const reason = `Salto impossível: ${calculatedSpeedKmh.toFixed(1)} km/h`;
-          setLastDiscardReason(reason);
-          sessionStorage.setItem(`last_discard_reason_${pointData.session_id}`, reason);
-          console.log(`[GPS_POINT_REJECTED] session_id: ${pointData.session_id}, motivo: ${reason}`);
-          return;
-        }
+    // 4. Camada de Validação para Métricas de Telemetria (Anomalia de GPS)
+    let addedMeters = 0;
+    let isAnomaly = false;
+    let isSpikeJump = false;
+
+    // Calcular velocidade entre o último ponto e o ponto atual
+    const timeDiffSec = lastPosition ? (currTime - lastPosition.timestamp) / 1000 : 0;
+    const calculatedSpeedKmh = (lastPosition && timeDiffSec > 0.5) ? (distMeters / timeDiffSec) * 3.6 : 0;
+
+    // Regra 1: Detectar velocidade impossível > 160 km/h
+    if (calculatedSpeedKmh > 160 || (pointData.speed_kmh !== undefined && pointData.speed_kmh > 160)) {
+      isAnomaly = true;
+      addedMeters = 0;
+      console.log("[GPS_FILTER] Spike removido por velocidade incompatível");
+    } else {
+      addedMeters = distMeters;
+    }
+
+    // Regra 2: Detectar salto brusco (velocidade anterior < 80, próximo > 150, atual retorna ao normal)
+    const sessionPoints = routePoints.filter(p => p.session_id === pointData.session_id);
+    if (!isAnomaly && sessionPoints.length >= 2) {
+      const P_prev1 = sessionPoints[sessionPoints.length - 1];
+      const P_prev2 = sessionPoints[sessionPoints.length - 2];
+
+      const prev1_speed = P_prev1.speed_kmh || 0;
+      const prev2_speed = P_prev2.speed_kmh || 0;
+      const curr_speed = pointData.speed_kmh || 0;
+
+      // Velocidade calculada do P_prev1 em relação a P_prev2
+      const prevTimeDiffSec = (new Date(P_prev1.recorded_at).getTime() - new Date(P_prev2.recorded_at).getTime()) / 1000;
+      const prevDistMeters = calculateHaversineDistanceMeters(P_prev2.latitude, P_prev2.longitude, P_prev1.latitude, P_prev1.longitude);
+      const prevCalculatedSpeedKmh = prevTimeDiffSec > 0.5 ? (prevDistMeters / prevTimeDiffSec) * 3.6 : 0;
+
+      // Velocidade direta do P_prev2 ao ponto atual
+      const directTimeDiffSec = (currTime - new Date(P_prev2.recorded_at).getTime()) / 1000;
+      const directDistance = calculateHaversineDistanceMeters(P_prev2.latitude, P_prev2.longitude, pointData.latitude, pointData.longitude);
+      const directCalculatedSpeedKmh = directTimeDiffSec > 0.5 ? (directDistance / directTimeDiffSec) * 3.6 : 0;
+
+      const isPrev2Normal = prev2_speed < 80;
+      const isPrev1High = prev1_speed > 150 || prevCalculatedSpeedKmh > 150;
+      const isCurrentNormal = curr_speed < 80 || calculatedSpeedKmh < 80 || directCalculatedSpeedKmh < 80;
+
+      if (isPrev2Normal && isPrev1High && isCurrentNormal) {
+        isSpikeJump = true;
+        const spikePointDistance = P_prev1.distance_meters || prevDistMeters;
+        // Subtrai a distância contaminada e adiciona o caminho direto real
+        addedMeters = directDistance - spikePointDistance;
+        distMeters = directDistance; // Ajusta distMeters do ponto atual
+        console.log("[GPS_FILTER] Spike removido por velocidade incompatível");
       }
     }
 
-    // 5. Validar se a velocidade fornecida no ponto supera 180 km/h
-    if (pointData.speed_kmh !== undefined && pointData.speed_kmh > 180) {
-      setDiscardedPointsCount(prev => {
-        const updated = prev + 1;
-        sessionStorage.setItem(`discarded_points_${pointData.session_id}`, updated.toString());
-        return updated;
-      });
-      const reason = `Velocidade excessiva: ${pointData.speed_kmh.toFixed(1)} km/h`;
-      setLastDiscardReason(reason);
-      sessionStorage.setItem(`last_discard_reason_${pointData.session_id}`, reason);
-      console.log(`[GPS_POINT_REJECTED] session_id: ${pointData.session_id}, motivo: ${reason}`);
-      return;
-    }
-
-    // 6. Limite de buffer local: no máximo 1000 pontos por sessão (Requirement 2)
+    // 5. Limite de buffer local: no máximo 1000 pontos por sessão (Requirement 2)
     const allLocalPoints = telemetrySyncService.getPoints();
     const sessionPointsCount = allLocalPoints.filter(p => p.session_id === pointData.session_id).length;
     if (sessionPointsCount >= 1000) {
@@ -1187,6 +1207,7 @@ export const JourneyProvider: React.FC<{ children: React.ReactNode }> = ({ child
       heading: pointData.heading !== undefined ? pointData.heading : null,
       altitude: pointData.altitude !== undefined ? pointData.altitude : null,
       distance_meters: distMeters,
+      segment_type: (isAnomaly || isSpikeJump ? 'GPS_ANOMALY' : undefined) as any,
       recorded_at: recordedAt
     };
 
@@ -1201,8 +1222,9 @@ export const JourneyProvider: React.FC<{ children: React.ReactNode }> = ({ child
       heading: pointData.heading !== undefined ? pointData.heading : null,
       altitude: pointData.altitude !== undefined ? pointData.altitude : null,
       distance_meters: distMeters,
+      segment_type: (isAnomaly || isSpikeJump ? 'GPS_ANOMALY' : undefined) as any,
       recorded_at: recordedAt
-    });
+    } as any);
 
     const updatedPoints = [...routePoints, newPoint];
     setRoutePoints(updatedPoints);
@@ -1211,9 +1233,7 @@ export const JourneyProvider: React.FC<{ children: React.ReactNode }> = ({ child
     const activePoints = updatedPoints.filter(p => p.session_id === pointData.session_id);
     localStorage.setItem(`${STORAGE_PREFIX}route_points_${userId}`, JSON.stringify(activePoints));
 
-    let addedMeters = 0;
     if (lastPosition) {
-      addedMeters = distMeters;
       setLastAddedDistanceMeters(addedMeters);
       console.log("[DistanceEngine] point accepted");
     } else {
@@ -1231,13 +1251,12 @@ export const JourneyProvider: React.FC<{ children: React.ReactNode }> = ({ child
     sessionStorage.setItem(`last_position_${pointData.session_id}`, JSON.stringify(newPosition));
 
     // Executar cálculo de distância de forma assíncrona/em tempo real independente de velocidade
-    if (addedMeters > 0) {
+    if (addedMeters !== 0) {
       setTotalDistanceMeters(prev => {
-        const updatedMeters = prev + addedMeters;
+        const updatedMeters = Math.max(0, prev + addedMeters);
         const updatedKm = Number((updatedMeters / 1000).toFixed(2));
         sessionStorage.setItem(`total_distance_${pointData.session_id}`, updatedMeters.toString());
-        console.log("[DistanceEngine] Total updated");
-        console.log("[DistanceEngine] Distance updated");
+        console.log("[DistanceEngine] Total updated", updatedMeters);
         console.log("[KM_UPDATED]", { addedMeters, totalDistanceKm: updatedKm });
 
         // Real-time update to active session in driverSessions list
@@ -1258,6 +1277,17 @@ export const JourneyProvider: React.FC<{ children: React.ReactNode }> = ({ child
         return updatedMeters;
       });
     }
+
+    // Atualiza coordenada em tempo real filtrada
+    setLastCoord({
+      lat: pointData.latitude,
+      lng: pointData.longitude,
+      accuracy: pointData.accuracy ?? 0,
+      speed: isAnomaly || isSpikeJump ? 0 : (pointData.speed_kmh || 0),
+      heading: pointData.heading !== undefined ? pointData.heading : null,
+      altitude: pointData.altitude !== undefined ? pointData.altitude : null,
+      timestamp: currTime
+    });
 
     // Idle Engine - lógica de tempo parado totalmente isolada e apenas de leitura
     let currentSpeedKmh = 0;

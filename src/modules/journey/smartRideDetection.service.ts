@@ -35,9 +35,9 @@ const AI_FEEDBACK_KEY = 'driverdash_ride_ai_feedback';
 
 export interface AIDetectionState {
   sessionId: string;
-  currentAutoState: 'IDLE' | 'STOPPED_BEFORE_RIDE' | 'EN_ROUTE' | 'RIDE_ACTIVE' | 'STOPPED_AFTER_RIDE' | 'COOLDOWN';
+  currentAutoState: 'IDLE' | 'STOPPED_BEFORE_RIDE' | 'EN_ROUTE' | 'RIDE_ACTIVE' | 'STOPPED_AFTER_RIDE' | 'COOLDOWN' | 'WAITING_TELEMETRY' | 'COLLECTING_TELEMETRY';
   lastStatusTime: number;
-  confidenceScore: number;
+  confidenceScore: number | null;
   reason: string;
   detectedEvents: string[];
   manualEvents: string[];
@@ -146,11 +146,27 @@ export async function analyzeTelemetryForRide(
     }
   }
 
+  // 1. Check if we have sufficient telemetry points for classification
   if (points.length < 3) {
-    state.confidenceScore = 0;
-    state.reason = 'Aguardando mais pontos de telemetria GPS para calibrar a IA...';
+    state.currentAutoState = 'WAITING_TELEMETRY';
+    state.confidenceScore = null;
+    state.reason = 'Aguardando dados suficientes para análise';
     localStorage.setItem(`${AI_STATE_KEY_PREFIX}${sessionId}`, JSON.stringify(state));
     return state;
+  }
+
+  if (points.length <= 10) {
+    state.currentAutoState = 'COLLECTING_TELEMETRY';
+    state.confidenceScore = null;
+    state.reason = 'Aguardando dados suficientes para análise';
+    localStorage.setItem(`${AI_STATE_KEY_PREFIX}${sessionId}`, JSON.stringify(state));
+    return state;
+  }
+
+  // If we have more than 10 points and we were waiting/collecting telemetry, reset to IDLE to start classification
+  if (['WAITING_TELEMETRY', 'COLLECTING_TELEMETRY'].includes(state.currentAutoState)) {
+    state.currentAutoState = 'IDLE';
+    state.lastStatusTime = Date.now();
   }
 
   // Sort points chronologically

@@ -637,7 +637,10 @@ export const JornadaPage: React.FC = () => {
         );
 
         setAiState(result);
-        addAiLog(`[RideAI] ride confidence: ${result.confidenceScore}% | State: ${result.currentAutoState}`);
+        const confidenceText = result.confidenceScore === null || result.confidenceScore === undefined
+          ? 'Aguardando dados suficientes para análise'
+          : `${result.confidenceScore}%`;
+        addAiLog(`[RideAI] ride confidence: ${confidenceText} | State: ${result.currentAutoState}`);
 
         // Update active ride status
         const hasActiveEvent = activeEvent !== null || activeRide !== null;
@@ -2911,7 +2914,9 @@ export const JornadaPage: React.FC = () => {
                     <p className="text-slate-500 font-bold">Eventos Detectados:</p>
                     <ul className="list-disc pl-3 mt-1 space-y-0.5">
                       {aiState.detectedEvents.length === 0 ? (
-                        <li>Aguardando evento...</li>
+                        aiState.manualEvents.length > 0 ? null : (
+                          <li>Aguardando evento...</li>
+                        )
                       ) : (
                         aiState.detectedEvents.map((ev, i) => (
                           <li key={i} className="text-emerald-400">{ev}</li>
