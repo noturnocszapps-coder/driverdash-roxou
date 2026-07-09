@@ -465,6 +465,17 @@ export const OnboardingWizard: React.FC<OnboardingWizardProps> = ({ onComplete }
 
   const percentComplete = Math.round((step / 6) * 100);
 
+  if (isLoadingProgress) {
+    return (
+      <div className="fixed inset-0 z-50 bg-[#04010a]/95 backdrop-blur-md flex flex-col items-center justify-center overflow-hidden">
+        <div className="w-12 h-12 rounded-full border-4 border-purple-500 border-t-transparent animate-spin"></div>
+        <p className="text-sm text-slate-400 font-mono animate-pulse uppercase tracking-wider mt-4">
+          Carregando progresso salvo...
+        </p>
+      </div>
+    );
+  }
+
   return (
     <div 
       className="fixed inset-0 z-50 bg-[#04010a]/95 backdrop-blur-md flex flex-col items-center justify-start md:justify-center overflow-hidden"

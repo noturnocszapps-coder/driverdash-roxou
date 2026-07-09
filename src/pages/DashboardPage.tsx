@@ -495,6 +495,41 @@ export const DashboardPage: React.FC = () => {
     return `${val.toLocaleString('pt-BR', { maximumFractionDigits: 1 })} km`;
   };
 
+  if (loading || !profile) {
+    return (
+      <div className="space-y-8 font-sans pb-16 animate-pulse" id="driver-intelligence-hub-skeleton">
+        {/* Top Welcome Header - Skeleton */}
+        <div className="flex flex-col md:flex-row justify-between items-start md:items-center gap-6 border-b border-purple-950/20 pb-6">
+          <div className="space-y-2 w-full max-w-lg">
+            <div className="h-3 bg-purple-900/30 rounded w-1/3"></div>
+            <div className="h-8 bg-purple-900/30 rounded w-2/3"></div>
+            <div className="h-4 bg-purple-900/20 rounded w-full"></div>
+          </div>
+          <div className="h-10 bg-purple-900/30 rounded w-32 shrink-0"></div>
+        </div>
+
+        {/* Tabs - Skeleton */}
+        <div className="flex gap-4 border-b border-purple-950/20 pb-2">
+          <div className="h-6 bg-purple-900/20 rounded w-24"></div>
+          <div className="h-6 bg-purple-900/20 rounded w-32"></div>
+        </div>
+
+        {/* Content - Skeleton Grid */}
+        <div className="grid grid-cols-1 md:grid-cols-3 gap-6">
+          <div className="h-48 bg-[#0b0821]/60 border border-purple-900/20 rounded-3xl p-6 col-span-2">
+            <div className="h-6 bg-purple-900/30 rounded w-1/4 mb-4"></div>
+            <div className="h-4 bg-purple-900/20 rounded w-full mb-2"></div>
+            <div className="h-4 bg-purple-900/20 rounded w-5/6"></div>
+          </div>
+          <div className="h-48 bg-[#0b0821]/60 border border-purple-900/20 rounded-3xl p-6">
+            <div className="h-6 bg-purple-900/30 rounded w-1/2 mb-4"></div>
+            <div className="h-12 bg-purple-900/40 rounded w-full mb-2"></div>
+          </div>
+        </div>
+      </div>
+    );
+  }
+
   return (
     <div className="space-y-8 font-sans pb-16" id="driver-intelligence-hub">
       {!loading && !hasCompletedSetup && <OnboardingWizard />}

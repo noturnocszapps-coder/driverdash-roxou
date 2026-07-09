@@ -64,6 +64,14 @@ export const onboardingService = {
    */
   mergeWithExisting(existing: OnboardingProgress | null, incoming: OnboardingProgress): OnboardingProgress {
     if (!existing) return incoming;
+
+    // Protection against empty/null/undefined or uninitialized incoming resets
+    if (existing.onboarding_completed && !incoming.onboarding_completed) {
+      console.warn('[ONBOARDING_BLOCK_EMPTY_RESET] Proteção ativada: Impedindo que carregamento inicial ou falha temporária de rede limpe as configurações concluídas.');
+      const merged = { ...existing };
+      return merged;
+    }
+
     const merged = { ...existing, ...incoming };
     
     // Safety guards: Never overwrite valid data with empty/falsy values
@@ -73,12 +81,12 @@ export const onboardingService = {
     if (!incoming.brand && existing.brand) merged.brand = existing.brand;
     if (!incoming.model && existing.model) merged.model = existing.model;
     if (!incoming.year && existing.year) merged.year = existing.year;
-    
-    if (existing.onboarding_completed && !incoming.onboarding_completed) {
-      if (incoming.current_step !== 1) {
-        merged.onboarding_completed = true;
-      }
+    if (!incoming.ownershipType && existing.ownershipType) merged.ownershipType = existing.ownershipType;
+    if (!incoming.fuelType && existing.fuelType) merged.fuelType = existing.fuelType;
+    if ((!incoming.platforms || incoming.platforms.length === 0) && existing.platforms && existing.platforms.length > 0) {
+      merged.platforms = existing.platforms;
     }
+
     return merged;
   },
 
@@ -87,11 +95,11 @@ export const onboardingService = {
    */
   async saveProgress(userId: string, progress: OnboardingProgress, dbConnected: boolean): Promise<boolean> {
     try {
-      console.log('[ONBOARDING_BOOT_START] Iniciando salvamento de progresso');
+      console.log('[ONBOARDING_CHECK_START] Iniciando salvamento de progresso');
 
       // Safety guard: do not allow saving if payload is empty/invalid
       if (!progress || (!progress.objective && !progress.brand && progress.current_step !== 1)) {
-        console.warn('[ONBOARDING_EMPTY_PAYLOAD_BLOCKED] Tentativa de salvar payload vazio ou incompleto bloqueada.');
+        console.warn('[ONBOARDING_BLOCK_EMPTY_RESET] Tentativa de salvar payload vazio ou incompleto bloqueada.');
         return false;
       }
 
@@ -129,9 +137,10 @@ export const onboardingService = {
 
           let finalProgress = updatedProgress;
           if (currentProfile) {
-            if (currentProfile.onboarding_completed && !updatedProgress.onboarding_completed && updatedProgress.current_step !== 1) {
-              console.warn('[ONBOARDING] Salvaguarda ativada: Perfil no banco já concluído, preservando onboarding_completed.');
+            if (currentProfile.onboarding_completed && !updatedProgress.onboarding_completed) {
+              console.warn('[ONBOARDING_BLOCK_EMPTY_RESET] Banco possui onboarding_completed como TRUE. Bloqueando reset falso.');
               finalProgress.onboarding_completed = true;
+              finalProgress.current_step = 6;
             }
             if (currentProfile.onboarding_progress) {
               finalProgress = this.mergeWithExisting(currentProfile.onboarding_progress as OnboardingProgress, finalProgress);
@@ -180,7 +189,7 @@ export const onboardingService = {
    * 3. defaults
    */
   async loadProgress(userId: string, dbConnected: boolean): Promise<OnboardingProgress> {
-    console.log('[ONBOARDING_BOOT_START] Carregando progresso do onboarding...');
+    console.log('[ONBOARDING_CHECK_START] Iniciando carregamento de progresso de onboarding...');
     let remoteProgress: OnboardingProgress | null = null;
 
     // 1. Try Supabase first
@@ -193,9 +202,10 @@ export const onboardingService = {
           .maybeSingle();
 
         if (!error && data) {
+          console.log('[ONBOARDING_PROFILE_FOUND] Perfil do usuário carregado com sucesso do Supabase.');
+          
           if (data.onboarding_completed) {
-            console.log('[ONBOARDING_ALREADY_COMPLETED] Onboarding já concluído no Supabase!');
-            console.log('[ONBOARDING_PROFILE_LOADED_SUPABASE] Carregado do Supabase.');
+            console.log('[ONBOARDING_ALREADY_COMPLETED] Onboarding verificado como concluído no Supabase!');
             const progressObj = (data.onboarding_progress as OnboardingProgress) || { ...ONBOARDING_DEFAULTS };
             progressObj.onboarding_completed = true;
             progressObj.current_step = 6;
@@ -205,7 +215,7 @@ export const onboardingService = {
 
           if (data.onboarding_progress) {
             remoteProgress = data.onboarding_progress as OnboardingProgress;
-            console.log('[ONBOARDING_PROFILE_LOADED_SUPABASE] Progresso parcial carregado do Supabase.');
+            console.log('[ONBOARDING_PROFILE_FOUND] Progresso parcial recuperado do Supabase.');
             
             // Sync back to local storage to keep aligned
             localStorage.setItem(ONBOARDING_KEY, JSON.stringify(remoteProgress));
@@ -217,7 +227,7 @@ export const onboardingService = {
       }
     }
 
-    // 2. Fallback to localStorage
+    // 2. Fallback to localStorage (Cache local seguro)
     try {
       const local = localStorage.getItem(ONBOARDING_KEY);
       if (local) {
@@ -225,12 +235,9 @@ export const onboardingService = {
         
         // Ensure we never overwrite valid data with empty/corrupted data
         if (parsed && typeof parsed.current_step === 'number') {
-          console.log('[ONBOARDING_PROFILE_LOADED_LOCAL] Progresso recuperado do LocalStorage.');
+          console.log('[ONBOARDING_PROFILE_FOUND] Progresso recuperado com sucesso do cache local (LocalStorage).');
           if (parsed.onboarding_completed) {
-            console.log('[ONBOARDING_ALREADY_COMPLETED] Onboarding já estava marcado como concluído localmente!');
-          }
-          if (parsed.current_step > 1) {
-            console.log('[ONBOARDING] Recuperação do passo:', parsed.current_step);
+            console.log('[ONBOARDING_ALREADY_COMPLETED] Onboarding verificado como concluído no cache local!');
           }
           return parsed;
         }
@@ -240,7 +247,7 @@ export const onboardingService = {
     }
 
     // 3. Fallback to defaults
-    console.log('[ONBOARDING_PROFILE_LOADED_LOCAL] Usando valores padrão.');
+    console.log('[ONBOARDING_SHOW_WIZARD] Nenhum progresso prévio encontrado no Supabase ou LocalStorage. O Wizard será exibido.');
     return { ...ONBOARDING_DEFAULTS };
   },
 
